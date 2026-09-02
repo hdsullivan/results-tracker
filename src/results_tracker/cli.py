@@ -625,9 +625,9 @@ def export_visual(
     dataset: Optional[str] = typer.Option(None, "--dataset", "-d"),
     seed: Optional[int] = typer.Option(None, "--seed"),
     instance: Optional[str] = typer.Option(None, "--instance"),
-    image: str = typer.Option("reconstruction.png", "--image", help="File name inside each run's artifacts_dir."),
-    reference: Optional[str] = typer.Option(None, "--reference", help="Ground-truth file name (in a run dir) or absolute path."),
-    measurement: Optional[str] = typer.Option(None, "--measurement", help="Degraded input file name or path."),
+    image: Optional[str] = typer.Option(None, "--image", help="Reconstruction file name inside each run's artifacts_dir (default: guessed)."),
+    reference: Optional[str] = typer.Option(None, "--reference", help="Ground-truth file name (in a run dir) or path (default: guessed)."),
+    measurement: Optional[str] = typer.Option(None, "--measurement", help="Degraded input file name or path (default: guessed)."),
     kernel: Optional[str] = typer.Option(None, "--kernel", help="Kernel/PSF thumbnail shown on the Measurement panel."),
     method: list[str] = typer.Option([], "--method", "-m", help="Methods in display order (default: baselines first)."),
     metric: list[str] = typer.Option(["psnr", "ssim"], "--metric", help="Metrics stamped on each panel."),
@@ -642,57 +642,65 @@ def export_visual(
     db: Optional[Path] = DbOpt,
 ):
     """Qualitative comparison in the lab's IEEE style: GT | Measurement | baselines | proposed (+ zoom / error)."""
-    from . import aggregate as agg
     from .export.figures import figure_tex
-    from .export.visual import build_panels, build_rows, reconstruction_figure, save_visual
+    from .export.visual import make_visual, save_visual
 
     recs, defs = _load_experiment(experiment, project, db)
-    pool = agg.completed(recs)
-    if dataset is not None:
-        pool = [r for r in pool if r.get("dataset") == dataset]
-    if instance is not None and rows != "instance":
-        pool = [r for r in pool if r.get("instance") == instance]
-    if seed is not None and rows != "seed":
-        pool = [r for r in pool if r.get("seed") == seed]
-    chosen = agg.select_runs(pool, methods=method or None)
-    if not chosen:
-        console.print("[red]no completed runs match[/]")
-        raise typer.Exit(code=1)
-    shown = [r for r in pool if r.get("artifacts_dir")] if rows else chosen
-    for label, why in agg.omitted_methods(recs, shown, dataset=dataset).items():
-        err_console.print(f"[yellow]not shown:[/] {label} — {why}", soft_wrap=True)
-    if rows:
-        # reference block from any run directory; method panels come from build_rows
-        aux, ref_panel, problems = build_panels(shown[:1], image, defs, reference=reference, measurement=measurement, kernel=kernel)
-        problems = [pr for pr in problems if pr.startswith(("reference", "measurement", "kernel"))]
-        row_specs, probs = build_rows(pool, rows, image, defs, metrics=metric, methods=method or None, reference=reference)
-        problems += probs
-        panel_arg = row_specs
-    else:
-        aux, ref_panel, problems = build_panels(chosen, image, defs, metrics=metric, reference=reference,
-                                                measurement=measurement, kernel=kernel)
-        panel_arg = [p for p in aux if p.kind == "method"]
-    meas_panel = next((p for p in aux if p.kind == "measurement"), None)
-    ker_panel = next((p for p in aux if p.kind == "kernel"), None)
-    for pr in problems:
-        err_console.print(f"[yellow]{pr}[/]", soft_wrap=True)
-    if not panel_arg:
-        raise typer.Exit(code=1)
     box = tuple(int(v) for v in crop.split(",")) if crop else None
     if box is not None and len(box) != 4:
         raise typer.BadParameter("--crop expects x,y,w,h")
     cx, cy = (float(v) for v in zoom_center.split(","))
-    fig, spec = reconstruction_figure(panel_arg, reference=ref_panel, measurement=meas_panel, kernel=ker_panel,
-                                      mode=mode, zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=(cx, cy),
-                                      crop_box=box, width=_width(width))
-    spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image = experiment, dataset, instance, seed, image
-    for pth in save_visual(fig, out, spec):
+    try:
+        vr = make_visual(recs, defs, experiment=experiment, dataset=dataset, seed=seed, instance=instance, image=image,
+                         reference=reference, measurement=measurement, kernel=kernel, methods=method or None, metrics=metric,
+                         mode=mode, zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=(cx, cy), crop_box=box, rows=rows,
+                         width=_width(width))
+    except ValueError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+    for label, why in vr.omitted.items():
+        err_console.print(f"[yellow]not shown:[/] {label} — {why}", soft_wrap=True)
+    for pr in vr.problems:
+        err_console.print(f"[yellow]{pr}[/]", soft_wrap=True)
+    for pth in save_visual(vr.fig, out, vr.spec):
         console.print(f"[green]wrote[/] {pth}")
-    typer.echo("caption material: " + spec.caption_stub())
+    typer.echo("caption material: " + vr.spec.caption_stub())
     if tex:
         t = out.with_suffix(".tex")
-        t.write_text(figure_tex(out.name, caption=spec.caption_stub(), label=f"fig:{out.stem}", width=_width(width)))
+        t.write_text(figure_tex(out.name, caption=vr.spec.caption_stub(), label=f"fig:{out.stem}", width=_width(width)))
         console.print(f"[green]wrote[/] {t}")
+
+
+@export_app.command("bundle")
+def export_bundle(
+    project: str = typer.Option(..., "--project", "-p"),
+    out: Path = typer.Option(Path("paper_bundle.zip"), "--out", "-o"),
+    width: str = typer.Option("single", "--width", help="Figure width for quantitative plots: single | double"),
+    no_visual: bool = typer.Option(False, "--no-visual", help="Skip qualitative image figures."),
+    db: Optional[Path] = DbOpt,
+):
+    """Every table, figure, CSV, the preamble and a provenance manifest for a project, in one zip."""
+    from .export.bundle import build_bundle
+
+    engine = get_engine(db)
+    exps = list_experiments(project, engine=engine)
+    if not exps:
+        console.print(f"[red]no experiments in project {project!r}[/]")
+        raise typer.Exit(code=1)
+    defs = {k: {"unit": m.unit, "higher_is_better": m.higher_is_better, "fmt": m.fmt}
+            for k, m in get_metric_defs(engine=engine).items()}
+    experiments = {}
+    for e in exps:
+        recs = run_records(get_runs(experiment=e.name, project=project, engine=engine), engine=engine)
+        experiments[e.name] = (e.type.value, recs)
+    data, manifest = build_bundle(experiments, defs, project=project, source=resolve_db_path(db), width=width, visual=not no_visual)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+    t = Table("file", "kind", "experiment", "runs", "note")
+    for m in manifest:
+        t.add_row(m["file"] or "—", m["kind"], m["experiment"], str(m["runs"]), m.get("note", ""))
+    console.print(t)
+    console.print(f"[green]wrote[/] {out}  ({len(data) // 1024} KB, {sum(1 for m in manifest if m['file'])} files)")
 
 
 @export_app.command("preamble")

@@ -7,10 +7,11 @@ them in a Streamlit GUI, export booktabs LaTeX tables and IEEE-sized matplotlib 
 
 ```bash
 source .venv/bin/activate            # or use .venv/bin/<tool> directly
-pytest -q                            # 89 tests, ~5 s
+pytest -q                            # 93 tests, ~8 s
 results-tracker demo --db demo.db --reset --artifacts demo_artifacts
 results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back to a free port)
 results-tracker export table -e main-comparison --db demo.db
+results-tracker export bundle -p demo-paper -o /tmp/bundle.zip --db demo.db   # all paper assets at once
 python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Chrome + websocket-client
 ```
 
@@ -21,7 +22,7 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 - `aggregate.py` — pure-Python stats over record dicts: comparison/pivot tables, sweeps, ablations
   (config diff vs base), grid audit. No ORM, no pandas. Ranking always uses unrounded means.
 - `importer.py` — CSV / JSON bulk import with a one-time column mapping and duplicate skipping.
-- `export/latex.py`, `export/figures.py`, `export/visual.py`, `export/csv.py` — paper exports
+- `export/latex.py`, `export/figures.py`, `export/visual.py`, `export/csv.py`, `export/bundle.py` — paper exports
   (tables, quantitative figures, qualitative image grids, CSV). `figures.py` also holds `figure_tex` / `ieee_preamble`.
   `visual.py` ports `adaptivePnP/.../utils/deblur_figures.py` (zoom inset, metric stamp, error colour bar, GT block).
 - `ui/` — Streamlit pages; `ui/common.py` holds cached loaders and sidebar selectors; `ui/charts.py` (Plotly)

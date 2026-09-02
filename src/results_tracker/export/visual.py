@@ -529,3 +529,86 @@ def save_visual(fig: Figure, path: Union[str, Path], spec: VisualSpec, dpi: int 
     side.write_text(json.dumps(asdict(spec), indent=2, default=str))
     out.append(side)
     return out
+
+
+# --------------------------------------------------------------------------- one-call builder
+
+@dataclass
+class VisualResult:
+    fig: Figure
+    spec: VisualSpec
+    problems: list[str]
+    omitted: dict[Any, str]
+
+
+def make_visual(
+    records: Sequence[Mapping[str, Any]],
+    defs: Mapping[str, Mapping[str, Any]],
+    *,
+    experiment: Optional[str] = None,
+    dataset: Optional[Any] = None,
+    seed: Optional[Any] = None,
+    instance: Optional[Any] = None,
+    image: Optional[str] = None,
+    reference: Optional[str] = None,
+    measurement: Optional[str] = None,
+    kernel: Optional[str] = None,
+    methods: Optional[Sequence[Any]] = None,
+    metrics: Sequence[str] = ("psnr", "ssim"),
+    mode: str = "image",
+    zoom: bool = False,
+    zoom_fraction: float = ZOOM_FRACTION,
+    zoom_center: tuple[float, float] = ZOOM_CENTER,
+    crop_box: Optional[Box] = None,
+    rows: Optional[str] = None,
+    width: Union[str, float] = "double",
+    auto_roles: bool = True,
+) -> VisualResult:
+    """Everything from records to a finished lab-style figure. File roles are guessed from the artifact
+    folders when not given (`auto_roles`). Raises ValueError when nothing can be drawn."""
+    from .. import aggregate as agg
+
+    pool = agg.completed(records)
+    if dataset is not None:
+        pool = [r for r in pool if r.get("dataset") == dataset]
+    if instance is not None and rows != "instance":
+        pool = [r for r in pool if r.get("instance") == instance]
+    if seed is not None and rows != "seed":
+        pool = [r for r in pool if r.get("seed") == seed]
+    with_art = [r for r in pool if r.get("artifacts_dir")]
+    if not with_art:
+        raise ValueError("no completed runs with an artifacts_dir match")
+    if auto_roles and (image is None or (reference is None and measurement is None)):
+        roles = guess_roles(list_image_files(r["artifacts_dir"] for r in with_art))
+        image = image or roles["reconstruction"]
+        reference = reference if reference is not None else roles["reference"]
+        measurement = measurement if measurement is not None else roles["measurement"]
+        kernel = kernel if kernel is not None else roles["kernel"]
+    if image is None:
+        raise ValueError("no image files found in the artifact folders")
+    if mode == "error" and reference is None:
+        raise ValueError("error mode needs a reference (ground truth) image")
+
+    # only runs with artifacts can be drawn; methods without them are reported as omitted, not as errors
+    chosen = agg.select_runs(with_art, methods=methods)
+    shown = with_art if rows else chosen
+    omitted = agg.omitted_methods(records, shown, dataset=dataset)
+    if rows:
+        aux, ref_panel, problems = build_panels(shown[:1], image, defs, reference=reference, measurement=measurement, kernel=kernel)
+        problems = [pr for pr in problems if pr.startswith(("reference", "measurement", "kernel"))]
+        row_specs, probs = build_rows(pool, rows, image, defs, metrics=metrics, methods=methods, reference=reference)
+        problems += probs
+        panel_arg: Any = row_specs
+    else:
+        aux, ref_panel, problems = build_panels(chosen, image, defs, metrics=metrics, reference=reference,
+                                                measurement=measurement, kernel=kernel)
+        panel_arg = [p for p in aux if p.kind == "method"]
+    meas_panel = next((p for p in aux if p.kind == "measurement"), None)
+    ker_panel = next((p for p in aux if p.kind == "kernel"), None)
+    if not panel_arg or (rows and not any(r.panels for r in panel_arg)):
+        raise ValueError("no method panels could be built: " + "; ".join(problems))
+    fig, spec = reconstruction_figure(panel_arg, reference=ref_panel, measurement=meas_panel, kernel=ker_panel, mode=mode,
+                                      zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=zoom_center, crop_box=crop_box,
+                                      width=width)
+    spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image = experiment, dataset, instance, seed, image
+    return VisualResult(fig, spec, problems, omitted)

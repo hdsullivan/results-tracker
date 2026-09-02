@@ -163,3 +163,22 @@ def test_visual_page(demo_db):
     # grayscale + labels toggles re-render
     [cb for cb in at.checkbox if cb.label == "Grayscale preview"][0].check().run()
     assert not at.exception
+
+
+def test_export_page_visual_and_bundle(demo_db):
+    at = _run("export")
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    at.sidebar.radio[0].set_value("Visual comparison figure").run()
+    assert not at.exception and not at.error
+    body = "\n".join(str(t.value) for t in at.markdown) + "\n".join(str(t.value) for t in at.text)
+    assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in body
+    assert any("DPIR" in w.value for w in at.warning)
+    at.sidebar.radio[0].set_value("Runs (CSV)").run()
+    assert any('class="ieee-paper"' in m.value for m in at.markdown)  # CSV preview in the paper look
+    at.sidebar.radio[0].set_value("Paper bundle (zip)").run()
+    assert not at.exception
+    at.button[0].click().run()
+    assert not at.exception and not at.error
+    md = "\n".join(m.value for m in at.markdown)
+    assert "Contents of the paper bundle" in md and "comparison-table" in md and "visual-figure" in md

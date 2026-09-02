@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
+
 import streamlit as st
 
 from .. import aggregate as agg
+from ..export.bundle import build_bundle
 from ..export.csv import runs_csv
+from ..export.visual import ZOOM_FRACTION, guess_roles, list_image_files, make_visual
 from ..export.figures import ablation_figure, comparison_figure, figure_bytes, figure_tex, ieee_preamble, sweep_figure, to_grayscale_png
 from typing import Optional
 
 from ..export.latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
-from .common import db_path, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db
-from .tables import ablation_html, comparison_html, sweep_html
+from .common import db_path, hib_map, load_catalog, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .tables import ablation_html, comparison_html, generic_html, sweep_html
 
 KINDS = ["Comparison table (LaTeX)", "Ablation table (LaTeX)", "Sweep table (LaTeX)",
-         "Sweep figure", "Ablation figure", "Comparison figure", "Runs (CSV)"]
+         "Sweep figure", "Ablation figure", "Comparison figure", "Visual comparison figure",
+         "Runs (CSV)", "Paper bundle (zip)"]
 PREFERRED = {"comparison": 0, "ablation": 1, "sweep": 3}
 
 
@@ -202,8 +208,78 @@ def render() -> None:
                                 caption=cap or None, row_labels=agg.method_labels(recs) if row_key == "method" else None)
         _figure_block(fig, f"{stem}-{metric}", width)
 
+    elif kind == "Visual comparison figure":
+        with_art = [r for r in recs if r.get("artifacts_dir")]
+        if not with_art:
+            st.info("No runs in this experiment have an `artifacts_dir`.")
+            return
+        c1, c2, c3, c4 = st.columns(4)
+        datasets = list(dict.fromkeys(r["dataset"] for r in with_art if r.get("dataset") is not None))
+        dataset = c1.selectbox("Dataset", datasets) if datasets else None
+        pool = [r for r in with_art if dataset is None or r.get("dataset") == dataset]
+        seeds = sorted({r["seed"] for r in pool if r.get("seed") is not None})
+        row_opts = ["— none —"] + (["seed"] if len(seeds) > 1 else []) + [f"config.{k}" for k in agg.varying_config_keys(pool)]
+        rows_by = c2.selectbox("Rows", row_opts)
+        rows_by = None if rows_by == "— none —" else rows_by
+        seed = c3.selectbox("Seed", seeds) if seeds and rows_by != "seed" else None
+        vmode = c4.radio("Mode", ["Reconstruction", "Error maps"], horizontal=True)
+        files = list_image_files(r["artifacts_dir"] for r in pool)
+        roles = guess_roles(files)
+        with st.expander("Files and zoom", expanded=False):
+            f1, f2, f3 = st.columns(3)
+            none = "— none —"
+            image = f1.selectbox("Reconstruction", files, index=files.index(roles["reconstruction"]) if roles["reconstruction"] in files else 0)
+            reference = f2.selectbox("Ground truth", [none] + files, index=([none] + files).index(roles["reference"]) if roles["reference"] else 0)
+            measurement = f3.selectbox("Measurement", [none] + files, index=([none] + files).index(roles["measurement"]) if roles["measurement"] else 0)
+            z1, z2, z3 = st.columns(3)
+            zoom = z1.checkbox("Zoom inset", value=True, disabled=vmode == "Error maps")
+            zf = z2.slider("Box side fraction", 0.1, 0.6, ZOOM_FRACTION, 0.05)
+            zc = z3.slider("Box centre (x = y)", 0.0, 1.0, 0.5, 0.05)
+        try:
+            vr = make_visual(recs, defs, experiment=experiment, dataset=dataset, seed=seed, image=image,
+                             reference=None if reference == none else reference, measurement=None if measurement == none else measurement,
+                             mode="error" if vmode == "Error maps" else "image", zoom=zoom, zoom_fraction=zf, zoom_center=(zc, zc),
+                             rows=rows_by, width="double", auto_roles=False)
+        except ValueError as e:
+            st.error(str(e))
+            return
+        for label, why in vr.omitted.items():
+            st.warning(f"Not shown: {label} — {why}.")
+        for pr in vr.problems:
+            st.warning(pr)
+        vstem = f"{stem}-{dataset or 'all'}" + ("-error" if vmode == "Error maps" else "-visual")
+        _figure_block(vr.fig, vstem, "double")
+        st.write(vr.spec.caption_stub())
+        st.download_button("Download provenance JSON", json.dumps(asdict(vr.spec), indent=2, default=str),
+                           file_name=f"{vstem}.json", mime="application/json")
+
     elif kind == "Runs (CSV)":
         text = runs_csv(recs_all)
         st.caption(f"{len(recs_all)} runs (including failed), config keys and metrics as columns.")
-        st.code("\n".join(text.splitlines()[:8]) + ("\n..." if len(recs_all) > 7 else ""), language="text")
+        lines = text.splitlines()
+        header = lines[0].split(",")
+        body = [ln.split(",") for ln in lines[1:9]]
+        st.markdown(generic_html(header, body, caption=f"First {len(body)} of {len(recs_all)} rows of the runs CSV.", left_cols=3),
+                    unsafe_allow_html=True)
         st.download_button("Download CSV", text, file_name=f"{stem}-runs.csv", mime="text/csv")
+
+    elif kind == "Paper bundle (zip)":
+        cat = load_catalog()
+        exps = [e for e in cat["experiments"] if e["project"] == project]
+        c1, c2 = st.columns(2)
+        width = c1.selectbox("Quantitative figure width", ["single", "double"])
+        with_visual = c2.checkbox("Include qualitative image figures", value=True)
+        st.caption(f"Regenerates every table, figure and CSV for **{project}** ({len(exps)} experiments) from the database, "
+                   "with the preamble and a provenance manifest. Nothing is typed by hand.")
+        if st.button("Build bundle", type="primary"):
+            experiments = {e["experiment"]: (e["type"], load_records(project, e["experiment"])) for e in exps}
+            with st.spinner("Rendering tables and figures…"):
+                data, manifest = build_bundle(experiments, defs, project=project, source=db_path(), width=width, visual=with_visual)
+            st.session_state["bundle"] = (data, manifest)
+        if "bundle" in st.session_state:
+            data, manifest = st.session_state["bundle"]
+            rows_m = [[m["file"] or "—", m["kind"], m["experiment"], m["runs"], m.get("note", "")] for m in manifest]
+            st.markdown(generic_html(["File", "Kind", "Experiment", "Runs", "Note"], rows_m,
+                                     caption=f"Contents of the paper bundle for {project}: {sum(1 for m in manifest if m['file'])} files, "
+                                             f"{len(data) // 1024} KB.", left_cols=3), unsafe_allow_html=True)
+            st.download_button("Download paper bundle (zip)", data, file_name=f"{project}-paper-bundle.zip", mime="application/zip")

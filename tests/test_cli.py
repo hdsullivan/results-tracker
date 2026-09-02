@@ -141,3 +141,20 @@ def test_export_visual_cli(tmp_path):
     assert r.exit_code == 0 and (tmp_path / "s.tex").read_text().startswith("\\begin{figure}[!t]")
     r = runner.invoke(app, ["export", "preamble"])
     assert r.exit_code == 0 and "booktabs" in r.output
+
+
+def test_export_bundle_cli(tmp_path):
+    db = str(tmp_path / "r.db")
+    assert runner.invoke(app, ["demo", "--db", db, "--artifacts", str(tmp_path / "art")]).exit_code == 0
+    out = tmp_path / "b.zip"
+    r = runner.invoke(app, ["export", "bundle", "-p", "demo-paper", "-o", str(out), "--db", db])
+    assert r.exit_code == 0, r.output
+    assert out.exists() and out.stat().st_size > 10_000
+    assert "wrote" in r.output and "20 files" in r.output
+    r = runner.invoke(app, ["export", "bundle", "-p", "nope", "--db", db])
+    assert r.exit_code == 1
+    # visual with guessed roles (no --image/--reference given)
+    r = runner.invoke(app, ["export", "visual", "-e", "main-comparison", "-d", "Set12", "--seed", "0", "--zoom",
+                            "-o", str(tmp_path / "v.png"), "--db", db])
+    assert r.exit_code == 0, r.output
+    assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in r.output

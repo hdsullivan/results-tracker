@@ -34,7 +34,7 @@ non-trivial:
 | ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts. |
 | ![](docs/screenshots/visual.png) | **Visual** — qualitative comparison: reference, measurement, baselines, proposed. One crop box, one display range and one error-map scale for every method; metrics under each panel; provenance JSON with every source path. |
 | ![](docs/screenshots/run.png) | **Run detail** — config, metrics, config diff against any run, and the run's artifacts rendered as a lab-style figure strip (ground truth, measurement, this run stamped with its metrics, optionally the compared run), with zoom inset or error-map mode and PDF download. |
-| ![](docs/screenshots/export.png) | **Export** — booktabs LaTeX with a provenance comment, ready to paste; the comparison export first audits the grid (7/8 cells present, 1 missing); figures download as vector PDF. |
+| ![](docs/screenshots/export.png) | **Export** — booktabs LaTeX with a compiled-look preview and provenance comment; figures and qualitative grids as vector PDF with `figure` snippets; the comparison export audits the grid first (7/8 cells present, 1 missing); and a one-click paper bundle that regenerates every asset for the project into one zip with a manifest. |
 
 Screenshots are regenerated with `python scripts/screenshot.py` (needs Chrome).
 
@@ -82,10 +82,12 @@ Pages:
   run; the run's `artifacts_dir` rendered as a lab-style figure strip (ground
   truth, measurement, this run and optionally the compared run, zoom inset or
   error map) plus the remaining images and a log tail.
-- **Export** — LaTeX tables (comparison, ablation, sweep) and IEEE figures
-  (sweep lines, ablation deltas, grouped comparison bars) with preview and
-  download. The comparison export audits the grid first and lists missing or
-  failed method × dataset cells.
+- **Export** — LaTeX tables (comparison, ablation, sweep) with a compiled-look
+  preview, IEEE figures (sweep lines, ablation deltas, grouped comparison bars,
+  qualitative image grids) with grayscale check and `figure` snippets, the runs
+  CSV, and a one-click **paper bundle**: every table, figure, CSV, the preamble
+  and a provenance manifest for the whole project in one zip. The comparison
+  export audits the grid first and lists missing or failed method × dataset cells.
 
 ## Paper exports
 
@@ -109,6 +111,10 @@ results-tracker export visual -e main-comparison -d Set12 --seed 0 \
 
 results-tracker export runs-csv -e main-comparison -o all_runs.csv
 results-tracker export preamble            # the \usepackage lines the outputs need
+
+# everything for the paper in one go: tables/, figures/ (+ .tex snippets, provenance .json),
+# runs/ CSVs, preamble.tex and MANIFEST.json, regenerated from the database
+results-tracker export bundle -p demo-paper -o paper_bundle.zip
 ```
 
 ![Visual comparison export](docs/screenshots/visual_figure.png)

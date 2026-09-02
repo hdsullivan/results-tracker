@@ -43,10 +43,11 @@ and `results-tracker ui --db demo.db` already open on the Overview page.
    full model, so the ✓/✗ matrix and the deltas are computed, not labelled.
    "Removing the adaptive step costs 0.9 dB" is read straight off the chart.
 
-5. **Export** (50 s). Open Export. The audit says 7/8 cells present, 1 missing.
-   Copy the LaTeX. Switch to Ablation figure, download the PDF. Say: *this table
-   compiled under IEEEtran two minutes after the last run finished, with a
-   provenance comment naming the database and run count.*
+5. **Export** (50 s). Open Export. The audit says 7/8 cells present, 1 missing;
+   the preview above the LaTeX already looks like the compiled table. Switch to
+   Paper bundle, click Build: every table, figure, image grid and CSV for the
+   paper lands in one zip with a manifest. Say: *this is the whole results
+   section, regenerated from the database in one click, nothing typed by hand.*
 
 6. **Visual** (30 s). Open Visual. Ground truth, measurement, three methods in
    the lab's figure layout; the same yellow zoom box magnified on every panel;
