@@ -146,7 +146,7 @@ def render() -> None:
             ylabel = c2.text_input("y label", value=f"{metric} ({unit})" if unit else metric)
             width = c3.selectbox("Width", ["single", "double"])
             c1, c2, c3 = st.columns(3)
-            band = c1.checkbox("Shaded ± std band", value=True)
+            band = c1.checkbox("Shaded ± std band", value=False, help="Default: error bars with caps.")
             emph = c2.multiselect("Emphasize", [" / ".join(map(str, g)) for g in series if g], default=[])
             height = c3.number_input("Height (in)", min_value=1.0, max_value=6.0, value=2.2, step=0.1)
             best = {g: agg.best_sweep_value(s, hib.get(metric, True)) for g, s in series.items()}
@@ -181,7 +181,8 @@ def render() -> None:
         width = c2.selectbox("Width", ["single", "double"])
         pt = agg.pivot_table(recs, row_key, None if col_key == "none" else col_key, metrics=[metric], higher_is_better=hib)
         emph = c3.multiselect("Emphasize", [str(r) for r in pt.rows], default=[])
-        fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, emphasize=emph,
+        zero = st.checkbox("y axis from 0", value=False, help="Default is data-tight; say which in the caption.")
+        fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, emphasize=emph, zero_based=zero,
                                 row_labels=agg.method_labels(recs) if row_key == "method" else None)
         _figure_block(fig, f"{stem}-{metric}", width)
 

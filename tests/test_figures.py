@@ -86,3 +86,31 @@ def test_saved_png_is_not_clipped(tmp_path):
     img = Image.open(p)
     # tight bbox grows the canvas beyond the nominal 3.5 in x 100 dpi = 350 px when labels stick out
     assert img.width > 350
+
+
+def test_comparison_figure_skips_missing_cells_and_tight_ylim():
+    recs = [{"method": m, "dataset": d, "seed": 0, "config": {}, "metrics": {"psnr": v}, "status": "completed"}
+            for m, d, v in [("A", "D1", 30.0), ("A", "D2", 31.0), ("B", "D1", 28.0)]]  # B missing on D2
+    pt = agg.pivot_table(recs, "method", "dataset", metrics=["psnr"])
+    fig = comparison_figure(pt, "psnr")
+    ax = fig.axes[0]
+    bars = [p for p in ax.patches if p.get_width() > 0.1]
+    assert len(bars) == 3  # not 4: the missing cell has no bar (and no zero-height bar)
+    lo, hi = ax.get_ylim()
+    assert lo > 20 and hi > 31  # data-tight, not from 0
+    fig0 = comparison_figure(pt, "psnr", zero_based=True)
+    assert fig0.axes[0].get_ylim()[0] == 0
+    fig1 = comparison_figure(pt, "psnr", ylim=(25, 35))
+    assert fig1.axes[0].get_ylim() == (25, 35)
+
+
+def test_ieee_axes_style():
+    series = {(): [(1, stat(1.0)), (2, stat(2.0)), (3, stat(1.5))]}
+    fig = sweep_figure(series, "k", "psnr", log_x=False)
+    ax = fig.axes[0]
+    assert all(ax.spines[s].get_visible() for s in ("top", "right", "bottom", "left"))
+    assert not any(l.get_visible() for l in ax.get_xgridlines())
+    assert ax.yaxis.get_ticks_position() == "default"  # ticks on both sides (left + right) in IEEE style
+    assert ax.xaxis.get_ticks_position() == "default"
+    data_line = ax.containers[0].lines[0]  # errorbar container: (data line, caplines, barlines)
+    assert data_line.get_markerfacecolor() == "white"

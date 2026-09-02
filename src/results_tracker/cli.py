@@ -531,7 +531,7 @@ def export_sweep_fig(
     ylabel: Optional[str] = typer.Option(None, "--ylabel", help="e.g. 'PSNR (dB)'"),
     width: str = WidthOpt,
     height: Optional[float] = typer.Option(None, "--height", help="inches"),
-    no_band: bool = typer.Option(False, "--no-band", help="Error bars instead of a shaded band."),
+    band: bool = typer.Option(False, "--band", help="Shaded ± std band instead of error bars with caps."),
     emphasize: list[str] = typer.Option([], "--emphasize", help="Group label(s) drawn thicker, e.g. Ours"),
     png: bool = PngOpt,
     tex: bool = TexOpt,
@@ -547,7 +547,7 @@ def export_sweep_fig(
     best = {g: agg.best_sweep_value(s, hib) for g, s in series.items()}
     unit = defs.get(metric, {}).get("unit", "")
     fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
-                       band=not no_band, best_by_group=best, width=_width(width), height=height, emphasize=emphasize)
+                       band=band, best_by_group=best, width=_width(width), height=height, emphasize=emphasize)
     _save_fig(fig, out, png, tex, width)
 
 
@@ -588,11 +588,13 @@ def export_comparison_fig(
     width: str = WidthOpt,
     height: Optional[float] = typer.Option(None, "--height"),
     emphasize: list[str] = typer.Option([], "--emphasize"),
+    zero_based: bool = typer.Option(False, "--zero-based", help="Start the y axis at 0 (default: data-tight)."),
+    ylim: Optional[str] = typer.Option(None, "--ylim", help="lo,hi y-axis limits"),
     png: bool = PngOpt,
     tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
 ):
-    """Grouped bars: x = column key, one bar per row entity, error bar = std."""
+    """Grouped bars: x = column key, one bar per row entity, error bar = std. Missing cells stay empty."""
     from . import aggregate as agg
     from .export.figures import comparison_figure
 
@@ -600,8 +602,9 @@ def export_comparison_fig(
     pt = agg.pivot_table(recs, rows, None if cols == "none" else cols, metrics=[metric],
                          higher_is_better={k: v["higher_is_better"] for k, v in defs.items()})
     unit = defs.get(metric, {}).get("unit", "")
+    lim = tuple(float(v) for v in ylim.split(",")) if ylim else None
     fig = comparison_figure(pt, metric, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
-                            width=_width(width), height=height, emphasize=emphasize,
+                            width=_width(width), height=height, emphasize=emphasize, zero_based=zero_based, ylim=lim,
                             row_labels=agg.method_labels(recs) if rows == "method" else None)
     _save_fig(fig, out, png, tex, width)
 

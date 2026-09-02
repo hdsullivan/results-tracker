@@ -121,10 +121,16 @@ supplies the small-caps caption above the table, so the output inherits the
 class's look. Method row labels come from `define_method(name, label="TV~\\cite{rudin}")`.
 
 Figures: 3.5 in single or 7.16 in double column; Times New Roman (falls back to
-STIX) at 8 pt with 7 pt ticks; TrueType fonts embedded (`pdf.fonttype 42`); a
-fixed colour + line style + marker per method and hatched bars, so identities
-survive grayscale; a grayscale preview toggle in the GUI; `--tex` writes the
-`figure`/`figure*` environment with `\columnwidth` or `\textwidth`.
+STIX) at 8 pt with 7 pt ticks; TrueType fonts embedded (`pdf.fonttype 42`);
+closed black axes box with inward major and minor ticks on all four sides; no
+grid; framed square-cornered legend; thin lines with small white-faced markers
+and the best sweep value as a filled marker; ± std as capped error bars by
+default (`--band` for a shaded band); Okabe-Ito colours with a fixed line style
+and marker per method; bar charts use a white-to-black fill ramp with black
+edges and light hatching, a one-row legend above the axes, data-tight y limits
+(`--zero-based` or `--ylim lo,hi` to override) and *no* bar for a missing cell;
+a grayscale preview toggle in the GUI; `--tex` writes the `figure`/`figure*`
+environment with `\columnwidth` or `\textwidth`.
 
 Visual comparisons (via the lab's reconstruction-figure checklist): panel order
 reference → measurement → baselines → proposed; identical crop, display range,

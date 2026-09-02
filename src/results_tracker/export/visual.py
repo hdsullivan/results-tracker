@@ -265,6 +265,7 @@ def reconstruction_figure(
                 axc.imshow(crop(p.image, crop_box), cmap=cmap if p.image.ndim == 2 else None, vmin=vmin, vmax=vmax,
                            interpolation="nearest")
                 axc.set_xticks([]); axc.set_yticks([])
+                axc.tick_params(which="both", length=0)
                 for s in axc.spines.values():
                     s.set_edgecolor(box_color); s.set_linewidth(0.8)
             if use_err:

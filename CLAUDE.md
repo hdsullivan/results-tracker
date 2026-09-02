@@ -7,7 +7,7 @@ them in a Streamlit GUI, export booktabs LaTeX tables and IEEE-sized matplotlib 
 
 ```bash
 source .venv/bin/activate            # or use .venv/bin/<tool> directly
-pytest -q                            # 74 tests, ~4 s
+pytest -q                            # 76 tests, ~5 s
 results-tracker demo --db demo.db --reset --artifacts demo_artifacts
 results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back to a free port)
 results-tracker export table -e main-comparison --db demo.db
@@ -33,6 +33,8 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 - Metric direction lives in the `Metric` table; guessed from the name on first log, override with
   `results-tracker metric define`.
 - Streamlit widgets: use `width="stretch"` (not the deprecated `use_container_width`).
-- Categorical colours are the fixed dataviz palette in `ui/charts.py` / `export/figures.py`; never cycle.
+- Categorical colours: the GUI (`ui/charts.py`) uses the bright dataviz palette; print exports
+  (`export/figures.py`) use Okabe-Ito with grayscale/hatched bars and the classic IEEE axes style in `IEEE_RC`.
+  Assign hues in fixed first-seen order; never cycle by rank.
 - UI tests use `AppTest.from_string("from results_tracker.ui import X; X.render()")`.
 - A long-running `streamlit run` does not reload edited *imported* modules reliably; restart it.
