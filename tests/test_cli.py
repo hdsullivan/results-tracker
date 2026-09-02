@@ -114,3 +114,24 @@ def test_demo_is_idempotent_and_reset(tmp_path):
     assert "missing: method=DPIR, dataset=CBSD68" in r.output
     r = runner.invoke(app, ["sweep", "-e", "lambda-sweep", "--param", "lambda", "--metric", "psnr", "--db", db])
     assert r.exit_code == 0 and "│ 2 │" in r.output  # lambda=1.0 has n=2
+
+
+def test_export_visual_cli(tmp_path):
+    db = str(tmp_path / "r.db")
+    art = tmp_path / "art"
+    assert runner.invoke(app, ["demo", "--db", db, "--artifacts", str(art)]).exit_code == 0
+    out = tmp_path / "vis.png"
+    r = runner.invoke(app, ["export", "visual", "-e", "main-comparison", "-d", "Set12", "--seed", "0",
+                            "--reference", "ground_truth.png", "--measurement", "measurement.png",
+                            "--crop", "30,30,32,32", "--error-maps", "--tex", "-o", str(out), "--db", db])
+    assert r.exit_code == 0, r.output
+    assert out.exists() and out.with_suffix(".json").exists() and out.with_suffix(".tex").exists()
+    assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in r.output
+    assert "figure*" in out.with_suffix(".tex").read_text()
+    # DPIR (reported, no artifacts) is named as omitted, not silently dropped
+    assert "not shown:" in r.output and "DPIR" in r.output and "no artifacts_dir" in r.output
+    r = runner.invoke(app, ["export", "sweep-fig", "-e", "lambda-sweep", "--param", "lambda", "--metric", "psnr",
+                            "--tex", "-o", str(tmp_path / "s.pdf"), "--db", db])
+    assert r.exit_code == 0 and (tmp_path / "s.tex").read_text().startswith("\\begin{figure}[!t]")
+    r = runner.invoke(app, ["export", "preamble"])
+    assert r.exit_code == 0 and "booktabs" in r.output

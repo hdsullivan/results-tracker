@@ -11,7 +11,7 @@ from results_tracker.demo import seed_demo  # noqa: E402
 @pytest.fixture
 def demo_db(tmp_path, monkeypatch):
     db = tmp_path / "demo.db"
-    seed_demo(db=db)
+    seed_demo(db=db, artifacts_dir=str(tmp_path / "art"))
     monkeypatch.setenv("RESULTS_TRACKER_DB", str(db))
     st.cache_data.clear()
     st.cache_resource.clear()
@@ -126,3 +126,17 @@ def test_export_page_comparison_audit(demo_db):
     assert "DPIR" in "\n".join(c.value for c in at.code)
     code = "\n".join(c.value for c in at.code)
     assert "\\multicolumn{3}{c}{Set12}" in code and "TV [1]" in code
+
+
+def test_visual_page(demo_db):
+    at = _run("visual")
+    assert not at.error
+    caption = "\n".join(c.value for c in at.caption)
+    assert "shared display range" in caption
+    body = "\n".join(m.value for m in at.markdown) + "\n".join(str(t.value) for t in at.text)
+    assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in body
+    # DPIR has no artifacts -> warned, not crashed
+    assert any("DPIR" in w.value for w in at.warning)
+    # grayscale + labels toggles re-render
+    [cb for cb in at.checkbox if cb.label == "Grayscale preview"][0].check().run()
+    assert not at.exception

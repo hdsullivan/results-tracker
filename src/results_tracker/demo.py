@@ -33,32 +33,50 @@ def demo_exists(db=None, engine=None) -> bool:
         return s.exec(select(Project).where(Project.name == PROJECT)).first() is not None
 
 
+def _scene(dataset: str, seed: int, n: int = 96):
+    """Deterministic 'ground truth': smooth background, a bright square, a thin line and a small dot."""
+    import numpy as np
+
+    rng = np.random.default_rng(hash((dataset, seed)) % (2**32))
+    yy, xx = np.mgrid[0:n, 0:n] / n
+    gt = 0.5 + 0.3 * np.sin(2 * np.pi * (xx * 1.3 + 0.2 * rng.random())) * np.cos(2 * np.pi * (yy * 0.9 + 0.1 * rng.random()))
+    gt[n // 3:2 * n // 3, n // 3:2 * n // 3] += 0.25          # square (edge recovery)
+    gt[int(0.8 * n), int(0.1 * n):int(0.9 * n)] = 1.0          # thin line
+    gt[int(0.2 * n):int(0.2 * n) + 3, int(0.75 * n):int(0.75 * n) + 3] = 0.0  # small dark defect
+    return np.clip(gt, 0, 1), rng
+
+
 def _write_artifacts(root: Path, method: str, dataset: str, seed: int, psnr: float, rng: random.Random) -> str:
-    """Tiny deterministic 'reconstruction' and 'error map' PNGs plus a log. Needs Pillow (matplotlib dep)."""
+    """Reconstruction / error map / measurement / ground truth PNGs plus a log, all from one shared scene.
+
+    The measurement and ground truth are identical across methods for a given (dataset, seed), so the
+    Visual page can show a fair comparison with a shared error scale. Needs numpy + Pillow.
+    """
     d = root / "main-comparison" / f"{method}_{dataset}_seed{seed}"
     d.mkdir(parents=True, exist_ok=True)
     try:
-        from PIL import Image, ImageDraw
+        import numpy as np
+        from PIL import Image
     except ImportError:  # pragma: no cover
         (d / "log.txt").write_text(f"{method} on {dataset}, seed {seed}\nfinal psnr {psnr:.2f}\n")
         return str(d)
-    n = 96
-    noise = 6.0 - (psnr - 27.0) * 0.9  # better psnr -> less texture noise
-    img = Image.new("L", (n, n))
-    px = img.load()
-    for y in range(n):
-        for x in range(n):
-            base = 128 + 90 * math.sin(x / 9.0) * math.cos(y / 13.0)
-            px[x, y] = int(max(0, min(255, base + rng.gauss(0, noise))))
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([n // 3, n // 3, 2 * n // 3, 2 * n // 3], outline=255)
-    img.save(d / "reconstruction.png")
-    err = Image.new("L", (n, n))
-    ep = err.load()
-    for y in range(n):
-        for x in range(n):
-            ep[x, y] = int(max(0, min(255, abs(rng.gauss(0, noise * 6)))))
-    err.save(d / "error_map.png")
+
+    def save(arr, name):
+        Image.fromarray((np.clip(arr, 0, 1) * 255).round().astype("uint8")).save(d / name)
+
+    gt, nrng = _scene(dataset, seed)
+    meas = gt + nrng.normal(0, 0.12, gt.shape)
+    sigma = 10 ** (-psnr / 20)  # noise level implied by the logged psnr (data range 1)
+    mrng = np.random.default_rng(hash((method, dataset, seed)) % (2**32))
+    recon = gt + mrng.normal(0, sigma, gt.shape)
+    if method == "TV":  # oversmoothing: blur the edges a little
+        k = np.array([1, 2, 1]) / 4
+        recon = np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 0, recon)
+        recon = np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 1, recon)
+    save(gt, "ground_truth.png")
+    save(meas, "measurement.png")
+    save(recon, "reconstruction.png")
+    save(np.abs(recon - gt) / 0.3, "error_map.png")
     lines = [f"method={method} dataset={dataset} seed={seed}", "iter  psnr"]
     for it in range(0, 51, 10):
         lines.append(f"{it:4d}  {psnr - (50 - it) * 0.05:.2f}")

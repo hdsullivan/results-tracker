@@ -6,7 +6,7 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..export.csv import runs_csv
-from ..export.figures import ablation_figure, comparison_figure, figure_bytes, sweep_figure
+from ..export.figures import ablation_figure, comparison_figure, figure_bytes, figure_tex, ieee_preamble, sweep_figure, to_grayscale_png
 from ..export.latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
 from .common import db_path, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db
 
@@ -18,16 +18,24 @@ PREFERRED = {"comparison": 0, "ablation": 1, "sweep": 3}
 def _latex_block(tex: str, filename: str) -> None:
     st.code(tex, language="latex")
     st.download_button("Download .tex", tex, file_name=filename, mime="text/x-tex")
-    st.caption("Needs `\\usepackage{booktabs}`; ablation tables also use `\\checkmark` from amssymb.")
+    with st.expander("Preamble packages"):
+        st.code(ieee_preamble(), language="latex")
+        st.caption("IEEEtran sets caption style (small caps above tables) and column widths; the generated code only "
+                   "uses booktabs rules, so it inherits the class's look.")
 
 
-def _figure_block(fig, stem: str) -> None:
+def _figure_block(fig, stem: str, width: str = "single") -> None:
     png = figure_bytes(fig, "png", dpi=200)
     w, h = fig.get_size_inches()
-    st.image(png, caption=f"{w:.2f} × {h:.2f} in at 200 dpi preview; the PDF is vector.")
+    gray = st.checkbox("Grayscale preview", value=False, key=f"gray_{stem}",
+                       help="IEEE readers may print in black and white; line styles, markers and hatching must carry the identity.")
+    st.image(to_grayscale_png(png) if gray else png, caption=f"{w:.2f} × {h:.2f} in at 200 dpi preview; the PDF is vector.")
     c1, c2 = st.columns(2)
     c1.download_button("Download PDF (vector)", figure_bytes(fig, "pdf"), file_name=f"{stem}.pdf", mime="application/pdf")
     c2.download_button("Download PNG (300 dpi)", figure_bytes(fig, "png", dpi=300), file_name=f"{stem}.png", mime="image/png")
+    with st.expander("LaTeX figure snippet"):
+        st.code(figure_tex(f"figures/{stem}.pdf", caption="TODO: what is plotted, aggregation unit, uncertainty, n.",
+                           label=f"fig:{stem}", width=width), language="latex")
 
 
 def _common_table_opts():
@@ -144,7 +152,7 @@ def render() -> None:
             best = {g: agg.best_sweep_value(s, hib.get(metric, True)) for g, s in series.items()}
             fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel, band=band, best_by_group=best,
                                width=width, height=height, emphasize=emph)
-            _figure_block(fig, f"{stem}-{param}-{metric}")
+            _figure_block(fig, f"{stem}-{param}-{metric}", width)
 
     elif kind == "Ablation figure":
         c1, c2, c3 = st.columns(3)
@@ -159,7 +167,7 @@ def render() -> None:
         d = defs.get(metric, {})
         fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
                               xlabel=xlabel, width=width)
-        _figure_block(fig, f"{stem}-ablation-{metric}")
+        _figure_block(fig, f"{stem}-ablation-{metric}", width)
 
     elif kind == "Comparison figure":
         c1, c2, c3 = st.columns(3)
@@ -175,7 +183,7 @@ def render() -> None:
         emph = c3.multiselect("Emphasize", [str(r) for r in pt.rows], default=[])
         fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, emphasize=emph,
                                 row_labels=agg.method_labels(recs) if row_key == "method" else None)
-        _figure_block(fig, f"{stem}-{metric}")
+        _figure_block(fig, f"{stem}-{metric}", width)
 
     elif kind == "Runs (CSV)":
         text = runs_csv(recs_all)

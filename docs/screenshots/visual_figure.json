@@ -1,0 +1,47 @@
+{
+  "experiment": "main-comparison",
+  "dataset": "Set12",
+  "instance": null,
+  "seed": 0,
+  "image": "reconstruction.png",
+  "reference": "demo_artifacts/main-comparison/TV_Set12_seed0/ground_truth.png",
+  "measurement": "measurement.png",
+  "crop_box": [
+    30,
+    30,
+    32,
+    32
+  ],
+  "display_range": [
+    0.0,
+    1.0
+  ],
+  "error_vmax": 0.33303922414779663,
+  "panels": [
+    {
+      "title": "Reference",
+      "path": "demo_artifacts/main-comparison/TV_Set12_seed0/ground_truth.png",
+      "kind": "reference"
+    },
+    {
+      "title": "Measurement",
+      "path": "demo_artifacts/main-comparison/TV_Set12_seed0/measurement.png",
+      "kind": "measurement"
+    },
+    {
+      "title": "TV [1]",
+      "path": "demo_artifacts/main-comparison/TV_Set12_seed0/reconstruction.png",
+      "kind": "method"
+    },
+    {
+      "title": "PnP-BM3D [2]",
+      "path": "demo_artifacts/main-comparison/PnP-BM3D_Set12_seed0/reconstruction.png",
+      "kind": "method"
+    },
+    {
+      "title": "Ours",
+      "path": "demo_artifacts/main-comparison/Ours_Set12_seed0/reconstruction.png",
+      "kind": "method"
+    }
+  ]
+}

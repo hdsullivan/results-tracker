@@ -78,6 +78,49 @@ def method_labels(records: Iterable[Record]) -> dict[Any, str]:
     return out
 
 
+def select_runs(
+    records: Iterable[Record],
+    dataset: Optional[Any] = None,
+    seed: Optional[Any] = None,
+    instance: Optional[Any] = None,
+    methods: Optional[Sequence[Any]] = None,
+) -> list[Record]:
+    """One completed run per method for a visual comparison: baselines first, proposed last,
+    or in the order of `methods` when given. The first matching run per method wins."""
+    recs = completed(records)
+    if dataset is not None:
+        recs = [r for r in recs if r.get("dataset") == dataset]
+    if seed is not None:
+        recs = [r for r in recs if r.get("seed") == seed]
+    if instance is not None:
+        recs = [r for r in recs if r.get("instance") == instance]
+    by_method: dict[Any, Record] = {}
+    for r in recs:
+        by_method.setdefault(r.get("method"), r)
+    if methods:
+        return [by_method[m] for m in methods if m in by_method]
+    ordered = sorted(by_method.values(), key=lambda r: (not r.get("method_is_baseline", False)))
+    return ordered
+
+
+def omitted_methods(records: Iterable[Record], chosen: Sequence[Record], dataset: Optional[Any] = None) -> dict[Any, str]:
+    """Methods that exist in the experiment (for this dataset) but are not in the visual comparison, with why.
+    Surfacing these keeps a qualitative figure honest about who was left out."""
+    recs = completed(records)
+    if dataset is not None:
+        recs = [r for r in recs if r.get("dataset") == dataset]
+    shown = {r.get("method") for r in chosen}
+    out: dict[Any, str] = {}
+    for m in {r.get("method") for r in recs} - shown:
+        runs = [r for r in recs if r.get("method") == m]
+        label = runs[0].get("method_label") or str(m)
+        if not any(r.get("artifacts_dir") for r in runs):
+            out[label] = "no artifacts_dir (e.g. numbers reported from a paper)"
+        else:
+            out[label] = "no completed run for the selected seed / instance"
+    return out
+
+
 def completed(records: Iterable[Record]) -> list[Record]:
     return [r for r in records if r.get("status", "completed") == "completed"]
 

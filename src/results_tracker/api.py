@@ -272,6 +272,7 @@ def run_records(runs: Iterable[Run], db=None, engine=None) -> list[dict[str, Any
                 "experiment_type": e.type.value if e else None,
                 "method": m.name if m else None,
                 "method_label": (m.label or m.name) if m else None,
+                "method_is_baseline": bool(m.is_baseline) if m else False,
                 "dataset": d.name if d else None,
                 "instance": r.instance,
                 "seed": r.seed,

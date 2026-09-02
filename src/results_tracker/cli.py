@@ -398,11 +398,15 @@ def _env(env: str) -> Optional[str]:
     return None if env in ("none", "tabular") else env
 
 
-def _save_fig(fig, out: Path, png: bool) -> None:
-    from .export.figures import save_figure
+def _save_fig(fig, out: Path, png: bool, tex: bool = False, width: str = "single", label: Optional[str] = None) -> None:
+    from .export.figures import figure_tex, save_figure
 
     for pth in save_figure(fig, out, also_png=png):
         console.print(f"[green]wrote[/] {pth}")
+    if tex:
+        t = out.with_suffix(".tex")
+        t.write_text(figure_tex(out.name, caption="TODO", label=label or f"fig:{out.stem}", width=_width(width)))
+        console.print(f"[green]wrote[/] {t}  (figure environment; edit the caption)")
 
 
 ExpOpt = typer.Option(..., "--experiment", "-e")
@@ -413,6 +417,7 @@ StdOpt = typer.Option("pm", "--std", help="pm | small | none")
 FontOpt = typer.Option(None, "--font", help="e.g. small, footnotesize")
 WidthOpt = typer.Option("single", "--width", help="single (3.5 in) | double (7.16 in) | inches")
 PngOpt = typer.Option(False, "--png", help="Also write a 300-dpi PNG next to the PDF.")
+TexOpt = typer.Option(False, "--tex", help="Also write a figure/figure* environment snippet next to the file.")
 
 
 def _width(w: str):
@@ -529,6 +534,7 @@ def export_sweep_fig(
     no_band: bool = typer.Option(False, "--no-band", help="Error bars instead of a shaded band."),
     emphasize: list[str] = typer.Option([], "--emphasize", help="Group label(s) drawn thicker, e.g. Ours"),
     png: bool = PngOpt,
+    tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Metric vs swept parameter (IEEE single/double column, PDF)."""
@@ -542,7 +548,7 @@ def export_sweep_fig(
     unit = defs.get(metric, {}).get("unit", "")
     fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
                        band=not no_band, best_by_group=best, width=_width(width), height=height, emphasize=emphasize)
-    _save_fig(fig, out, png)
+    _save_fig(fig, out, png, tex, width)
 
 
 @export_app.command("ablation-fig")
@@ -555,6 +561,7 @@ def export_ablation_fig(
     width: str = WidthOpt,
     height: Optional[float] = typer.Option(None, "--height"),
     png: bool = PngOpt,
+    tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Horizontal bars of each variant's change vs the full model."""
@@ -566,7 +573,7 @@ def export_ablation_fig(
     d = defs.get(metric, {})
     fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
                           xlabel=xlabel, width=_width(width), height=height)
-    _save_fig(fig, out, png)
+    _save_fig(fig, out, png, tex, width)
 
 
 @export_app.command("comparison-fig")
@@ -582,6 +589,7 @@ def export_comparison_fig(
     height: Optional[float] = typer.Option(None, "--height"),
     emphasize: list[str] = typer.Option([], "--emphasize"),
     png: bool = PngOpt,
+    tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Grouped bars: x = column key, one bar per row entity, error bar = std."""
@@ -595,7 +603,68 @@ def export_comparison_fig(
     fig = comparison_figure(pt, metric, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
                             width=_width(width), height=height, emphasize=emphasize,
                             row_labels=agg.method_labels(recs) if rows == "method" else None)
-    _save_fig(fig, out, png)
+    _save_fig(fig, out, png, tex, width)
+
+
+
+@export_app.command("visual")
+def export_visual(
+    experiment: str = ExpOpt,
+    out: Path = typer.Option(..., "--out", "-o", help=".png recommended for image panels (also writes a .json sidecar)"),
+    project: Optional[str] = ProjOpt,
+    dataset: Optional[str] = typer.Option(None, "--dataset", "-d"),
+    seed: Optional[int] = typer.Option(None, "--seed"),
+    instance: Optional[str] = typer.Option(None, "--instance"),
+    image: str = typer.Option("reconstruction.png", "--image", help="File name inside each run's artifacts_dir."),
+    reference: Optional[str] = typer.Option(None, "--reference", help="Ground-truth file name (in a run dir) or absolute path."),
+    measurement: Optional[str] = typer.Option(None, "--measurement", help="Degraded input file name or path."),
+    method: list[str] = typer.Option([], "--method", "-m", help="Methods in display order (default: baselines first)."),
+    metric: list[str] = typer.Option(["psnr"], "--metric", help="Metrics printed under each panel."),
+    crop: Optional[str] = typer.Option(None, "--crop", help="x,y,w,h zoom box, identical for all panels."),
+    error_maps: bool = typer.Option(False, "--error-maps", help="Add |x - x_ref| row (needs --reference)."),
+    width: str = typer.Option("double", "--width", help="double (7.16 in, default for image grids) | single | inches"),
+    labels: bool = typer.Option(False, "--labels", help="(a), (b), ... panel labels"),
+    tex: bool = TexOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Qualitative comparison figure: reference | measurement | baselines | proposed (+ zoom, error maps)."""
+    from . import aggregate as agg
+    from .export.figures import figure_tex
+    from .export.visual import build_panels, reconstruction_figure, save_visual
+
+    recs, defs = _load_experiment(experiment, project, db)
+    chosen = agg.select_runs(recs, dataset=dataset, seed=seed, instance=instance, methods=method or None)
+    if not chosen:
+        console.print("[red]no completed runs match[/]")
+        raise typer.Exit(code=1)
+    for label, why in agg.omitted_methods(recs, chosen, dataset=dataset).items():
+        err_console.print(f"[yellow]not shown:[/] {label} — {why}", soft_wrap=True)
+    panels, ref_panel, problems = build_panels(chosen, image, defs, metrics=metric, reference=reference, measurement=measurement)
+    for pr in problems:
+        err_console.print(f"[yellow]{pr}[/]", soft_wrap=True)
+    if not panels:
+        raise typer.Exit(code=1)
+    box = tuple(int(v) for v in crop.split(",")) if crop else None
+    if box is not None and len(box) != 4:
+        raise typer.BadParameter("--crop expects x,y,w,h")
+    fig, spec = reconstruction_figure(panels, reference=ref_panel, crop_box=box, error_maps=error_maps,
+                                      width=_width(width), panel_labels=labels)
+    spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image, spec.measurement = experiment, dataset, instance, seed, image, measurement
+    for pth in save_visual(fig, out, spec):
+        console.print(f"[green]wrote[/] {pth}")
+    typer.echo("caption material: " + spec.caption_stub())
+    if tex:
+        t = out.with_suffix(".tex")
+        t.write_text(figure_tex(out.name, caption=spec.caption_stub(), label=f"fig:{out.stem}", width=_width(width)))
+        console.print(f"[green]wrote[/] {t}")
+
+
+@export_app.command("preamble")
+def export_preamble():
+    """Print the LaTeX packages the generated tables and figures need."""
+    from .export.figures import ieee_preamble
+
+    typer.echo(ieee_preamble(), nl=False)
 
 
 @export_app.command("runs-csv")

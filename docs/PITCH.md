@@ -48,7 +48,12 @@ and `results-tracker ui --db demo.db` already open on the Overview page.
    compiled under IEEEtran two minutes after the last run finished, with a
    provenance comment naming the database and run count.*
 
-6. **Run detail** (20 s). Click one run: config, metrics, the reconstruction and
+6. **Visual** (30 s). Open Visual. Reference, measurement, three methods; the
+   same 32×32 crop on every panel; error maps on one shared scale. The
+   reported-only baseline is listed as "not shown" rather than quietly missing.
+   Download the PNG and the provenance JSON that names every source file.
+
+7. **Run detail** (20 s). Click one run: config, metrics, the reconstruction and
    error map from disk, and a config diff against any other run.
 
 ## Why it will get used (30 s)
@@ -57,7 +62,7 @@ and `results-tracker ui --db demo.db` already open on the Overview page.
 - Import the backlog: `results-tracker import old_results.csv -e main-comparison`.
 - Exports follow the lab's IEEE table and plot conventions, so the output goes
   into the paper unchanged.
-- 66 tests; the export tables compile under pdflatex.
+- 74 tests; the export tables compile under pdflatex.
 
 ## Likely questions
 

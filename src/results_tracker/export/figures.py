@@ -272,3 +272,43 @@ def figure_bytes(fig: Figure, fmt: str = "pdf", dpi: int = 300) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format=fmt, dpi=dpi, **SAVE_KW)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- LaTeX glue
+
+def figure_tex(
+    graphic: Union[str, Path],
+    caption: str = "TODO",
+    label: Optional[str] = None,
+    width: Union[str, float] = "single",
+    position: str = "!t",
+) -> str:
+    """`figure` (single column, \\columnwidth) or `figure*` (double column, \\textwidth) snippet."""
+    single = width == "single" or (isinstance(width, (int, float)) and float(width) <= 4.0)
+    env = "figure" if single else "figure*"
+    w = r"\columnwidth" if single else r"\textwidth"
+    name = Path(graphic).with_suffix("").as_posix()
+    lines = [f"\\begin{{{env}}}[{position}]", "\\centering", f"\\includegraphics[width={w}]{{{name}}}", f"\\caption{{{caption}}}"]
+    if label:
+        lines.append(f"\\label{{{label}}}")
+    lines.append(f"\\end{{{env}}}")
+    return "\n".join(lines) + "\n"
+
+
+def ieee_preamble() -> str:
+    """Packages the generated tables and figures rely on."""
+    return "\n".join([
+        r"\usepackage{booktabs}   % \toprule, \midrule, \bottomrule, \cmidrule",
+        r"\usepackage{amssymb}    % \checkmark in ablation tables",
+        r"\usepackage{graphicx}   % \includegraphics",
+    ]) + "\n"
+
+
+def to_grayscale_png(png_bytes: bytes) -> bytes:
+    """Convert a PNG to grayscale, for checking that series stay distinguishable in print."""
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(png_bytes)).convert("L")
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()

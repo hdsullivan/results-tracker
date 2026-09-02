@@ -6,9 +6,10 @@ traces back to a logged run; the table in the PDF is generated, not typed.
 
 ![Comparison page](docs/screenshots/comparison.png)
 
-**Status:** v1.0 — all five planned phases are done: schema and logging API,
-bulk import, six GUI pages (Overview, Comparison, Sweep, Ablation, Run detail,
-Export), and paper exports (booktabs LaTeX tables, IEEE-sized vector figures).
+**Status:** v1.1 — schema and logging API, bulk import, seven GUI pages
+(Overview, Comparison, Sweep, Ablation, Visual, Run detail, Export), and paper
+exports (booktabs LaTeX tables, IEEE-sized vector figures, qualitative image
+comparisons).
 See [PLAN.md](PLAN.md) for the design and [docs/PITCH.md](docs/PITCH.md) for the
 5-minute demo script.
 
@@ -31,6 +32,7 @@ non-trivial:
 | ![](docs/screenshots/overview.png) | **Overview** — projects, experiments, recent runs, failed-run count. |
 | ![](docs/screenshots/sweep.png) | **Sweep** — PSNR vs λ on a log axis, ± std band, best value ringed. The diverged run shows up as n = 2, not as a silently smoother curve. |
 | ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts. |
+| ![](docs/screenshots/visual.png) | **Visual** — qualitative comparison: reference, measurement, baselines, proposed. One crop box, one display range and one error-map scale for every method; metrics under each panel; provenance JSON with every source path. |
 | ![](docs/screenshots/run.png) | **Run detail** — config, metrics, config diff against any run, reconstruction and error map from disk. |
 | ![](docs/screenshots/export.png) | **Export** — booktabs LaTeX with a provenance comment, ready to paste; the comparison export first audits the grid (7/8 cells present, 1 missing); figures download as vector PDF. |
 
@@ -97,8 +99,45 @@ results-tracker export sweep-fig -e lambda-sweep --param lambda --metric psnr \
 results-tracker export ablation-fig -e ablation --metric psnr -o paper/fig_ablation.pdf
 results-tracker export comparison-fig -e main-comparison --metric psnr --emphasize Ours --width double -o paper/fig_main.pdf
 
+# qualitative comparison: reference | measurement | baselines | proposed, zoom row, error-map row
+results-tracker export visual -e main-comparison -d Set12 --seed 0 \
+    --reference ground_truth.png --measurement measurement.png \
+    --crop 30,30,32,32 --error-maps --metric psnr --metric ssim -o paper/fig_visual.png --tex
+
 results-tracker export runs-csv -e main-comparison -o all_runs.csv
+results-tracker export preamble            # the \usepackage lines the outputs need
 ```
+
+![Visual comparison export](docs/screenshots/visual_figure.png)
+
+### IEEE conventions baked in
+
+Tables (following the lab's IEEE results-table checklist):
+rankings on unrounded means; best bold, second underlined per column; units and
+direction arrows in the header; `\multicolumn` + `\cmidrule` dataset groups;
+missing cells as `--` and listed in a comment; a provenance comment on every
+`.tex`; a width hint when a table will overflow a single column. IEEEtran itself
+supplies the small-caps caption above the table, so the output inherits the
+class's look. Method row labels come from `define_method(name, label="TV~\\cite{rudin}")`.
+
+Figures: 3.5 in single or 7.16 in double column; Times New Roman (falls back to
+STIX) at 8 pt with 7 pt ticks; TrueType fonts embedded (`pdf.fonttype 42`); a
+fixed colour + line style + marker per method and hatched bars, so identities
+survive grayscale; a grayscale preview toggle in the GUI; `--tex` writes the
+`figure`/`figure*` environment with `\columnwidth` or `\textwidth`.
+
+Visual comparisons (via the lab's reconstruction-figure checklist): panel order
+reference → measurement → baselines → proposed; identical crop, display range,
+interpolation (nearest, native pixels) and colour map for every method; one
+shared error scale with a colour bar, error defined as |x − x_ref|; methods that
+were left out (e.g. a baseline with reported numbers only) are named, not
+silently dropped; a JSON sidecar records every source path and the crop box;
+the caption material states sample, crop, display range and error definition.
+
+Logging convention for visuals: give each run an `artifacts_dir` containing the
+reconstruction under the *same file name* for every method (e.g.
+`reconstruction.png`), and optionally `ground_truth.png` / `measurement.png`
+(only one copy is needed; the first run directory that has them is used).
 
 Conventions baked in: rankings are computed on unrounded means, best is bold and
 second best underlined per column, units and direction arrows sit in the header,
