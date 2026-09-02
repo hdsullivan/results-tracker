@@ -3,6 +3,8 @@ from datetime import datetime
 import pytest
 
 from results_tracker import (
+    DuplicateRunError,
+    DuplicateRunWarning,
     ExperimentType,
     delete_runs,
     RunStatus,
@@ -110,3 +112,45 @@ def test_delete_runs(engine):
     assert [r.id for r in get_runs(engine=engine)] == ids[1:]
     assert delete_runs([], engine=engine) == 0
     assert len(list_experiments(engine=engine)) == 1  # experiment kept
+
+
+def _log3(engine, **kw):
+    return [log_run("e", method="A", dataset="D", seed=s, config={"k": 1}, metrics={"psnr": 30 + s}, git_commit=None,
+                    engine=engine, **kw) for s in range(3)]
+
+
+def test_rerunning_a_script_does_not_inflate_n(engine):
+    from results_tracker import aggregate as agg
+
+    first = _log3(engine)
+    with pytest.warns(DuplicateRunWarning):
+        second = _log3(engine)
+    assert [r.id for r in second] == [r.id for r in first]  # existing runs returned
+    recs = run_records(get_runs(engine=engine), engine=engine)
+    assert agg.comparison_table(recs, ["method"]).cells[("A",)]["psnr"].n == 3
+
+
+def test_duplicate_policies(engine):
+    _log3(engine)
+    # a different config is not a duplicate
+    log_run("e", method="A", dataset="D", seed=0, config={"k": 2}, metrics={"psnr": 1}, git_commit=None, engine=engine)
+    assert len(get_runs(engine=engine)) == 4
+    # replace: new values win, count unchanged
+    r = log_run("e", method="A", dataset="D", seed=0, config={"k": 1}, metrics={"psnr": 99}, git_commit=None,
+                engine=engine, on_duplicate="replace")
+    assert len(get_runs(engine=engine)) == 4 and r.metrics == {"psnr": 99}
+    # allow: appends
+    log_run("e", method="A", dataset="D", seed=0, config={"k": 1}, metrics={"psnr": 5}, git_commit=None, engine=engine, on_duplicate="allow")
+    assert len(get_runs(engine=engine)) == 5
+    # error
+    with pytest.raises(DuplicateRunError):
+        log_run("e", method="A", dataset="D", seed=1, config={"k": 1}, metrics={"psnr": 5}, git_commit=None, engine=engine, on_duplicate="error")
+    with pytest.raises(ValueError):
+        log_run("e", metrics={"x": 1}, git_commit=None, engine=engine, on_duplicate="nope")
+
+
+def test_failed_duplicate_is_superseded_by_a_rerun(engine):
+    log_run("e", method="A", dataset="D", seed=0, config={"k": 1}, metrics={}, status="failed", git_commit=None, engine=engine)
+    r = log_run("e", method="A", dataset="D", seed=0, config={"k": 1}, metrics={"psnr": 30}, git_commit=None, engine=engine)
+    runs = get_runs(engine=engine)
+    assert len(runs) == 1 and runs[0].id == r.id and runs[0].status.value == "completed"

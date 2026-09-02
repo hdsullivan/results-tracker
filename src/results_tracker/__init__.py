@@ -1,6 +1,8 @@
 """results-tracker: log experiment runs, aggregate them, export paper-ready tables."""
 
 from .api import (
+    DuplicateRunError,
+    DuplicateRunWarning,
     define_method,
     delete_runs,
     define_metric,
@@ -17,6 +19,8 @@ from .models import Dataset, Experiment, ExperimentType, Method, Metric, Project
 __all__ = [
     "log_run",
     "delete_runs",
+    "DuplicateRunWarning",
+    "DuplicateRunError",
     "define_metric",
     "define_method",
     "get_metric_defs",

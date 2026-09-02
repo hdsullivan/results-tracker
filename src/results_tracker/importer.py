@@ -213,7 +213,7 @@ def import_records(
         try:
             run = log_run(
                 spec.experiment, project=spec.project, experiment_type=spec.experiment_type,
-                source=spec.source, tags=spec.tags, git_commit=None,
+                source=spec.source, tags=spec.tags, git_commit=None, on_duplicate="allow",
                 notes=f"imported from {raw.get('_file', '')}".strip(), engine=engine, **kw,
             )
         except Exception as e:  # noqa: BLE001

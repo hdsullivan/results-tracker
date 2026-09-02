@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import json
 import math
 import socket
 import subprocess
+import warnings
 from datetime import datetime
 from numbers import Number
 from typing import Any, Iterable, Optional, Sequence, Type, TypeVar, Union
@@ -30,6 +32,30 @@ _LOWER_IS_BETTER_HINTS = (
 
 class AUTO:  # sentinel: "capture this automatically"
     pass
+
+
+class DuplicateRunWarning(UserWarning):
+    """A run with the same experiment/method/dataset/instance/seed/config already exists."""
+
+
+class DuplicateRunError(ValueError):
+    """Raised by log_run(on_duplicate="error")."""
+
+
+ON_DUPLICATE = ("skip", "replace", "allow", "error")
+
+
+def config_fingerprint(config: Optional[dict]) -> str:
+    return json.dumps(_to_plain(config or {}), sort_keys=True, default=str)
+
+
+def _find_duplicates(session: Session, exp: Experiment, method_id, dataset_id, instance, seed, config) -> list[Run]:
+    """Existing runs of the same setting: same experiment, method, dataset, instance, seed and config."""
+    stmt = select(Run).where(Run.experiment_id == exp.id, Run.method_id == method_id, Run.dataset_id == dataset_id)
+    stmt = stmt.where(Run.instance == instance) if instance is not None else stmt.where(Run.instance.is_(None))  # type: ignore[union-attr]
+    stmt = stmt.where(Run.seed == seed) if seed is not None else stmt.where(Run.seed.is_(None))  # type: ignore[union-attr]
+    fp = config_fingerprint(config)
+    return [r for r in session.exec(stmt).all() if config_fingerprint(r.config) == fp]
 
 
 # --------------------------------------------------------------------------- helpers
@@ -134,13 +160,25 @@ def log_run(
     timestamp: Optional[datetime] = None,
     git_commit: Union[str, None, Type[AUTO]] = AUTO,
     hostname: Union[str, None, Type[AUTO]] = AUTO,
+    on_duplicate: str = "skip",
     db=None,
     engine=None,
 ) -> Run:
     """Record one run. Creates the project / experiment / method / dataset on first use.
 
     `experiment_type` only matters the first time an experiment is seen.
+
+    Duplicate protection (`on_duplicate`): a run with the same experiment, method, dataset, instance, seed
+    and config already in the database is a duplicate *setting*. Re-running a script must not inflate n, so:
+
+    - "skip" (default): keep the existing completed run and return it, with a DuplicateRunWarning. If the
+      existing duplicates are all failed/running, they are replaced by the new run (a re-run after a crash).
+    - "replace": delete the existing duplicates and log the new run.
+    - "allow": append regardless (deliberate repeats without a seed; the importer uses this).
+    - "error": raise DuplicateRunError.
     """
+    if on_duplicate not in ON_DUPLICATE:
+        raise ValueError(f"on_duplicate must be one of {ON_DUPLICATE}")
     engine = _resolve_engine(engine, db)
     exp_type = ExperimentType(experiment_type)
     run_status = RunStatus(status)
@@ -153,6 +191,22 @@ def log_run(
         meth = get_or_create(s, Method, method) if method else None
         ds = get_or_create(s, Dataset, dataset) if dataset else None
         _ensure_metric_defs(s, clean_metrics.keys())
+
+        if on_duplicate != "allow":
+            dups = _find_duplicates(s, exp, meth.id if meth else None, ds.id if ds else None, instance, seed, clean_config)
+            if dups:
+                setting = f"{experiment}/{method}/{dataset}" + (f"/{instance}" if instance else "") + (f"/seed {seed}" if seed is not None else "")
+                completed = [d for d in dups if d.status == RunStatus.completed]
+                if on_duplicate == "error":
+                    raise DuplicateRunError(f"run already logged for {setting} (ids {[d.id for d in dups]})")
+                if on_duplicate == "skip" and completed:
+                    warnings.warn(f"duplicate run skipped for {setting}: existing run id {completed[-1].id} kept "
+                                  f"(pass on_duplicate='replace' to overwrite, 'allow' to append)", DuplicateRunWarning, stacklevel=2)
+                    return completed[-1]
+                # "replace", or "skip" with only failed/running duplicates: the new run supersedes them
+                for d in dups:
+                    s.delete(d)
+                s.flush()
 
         run = Run(
             experiment_id=exp.id,

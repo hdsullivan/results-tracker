@@ -166,9 +166,10 @@ def log(
     source: str = typer.Option("logged", "--source", help="logged | imported | reported"),
     notes: str = typer.Option("", "--notes"),
     artifacts_dir: Optional[Path] = typer.Option(None, "--artifacts"),
+    on_duplicate: str = typer.Option("skip", "--on-duplicate", help="skip | replace | allow | error (same setting already logged)"),
     db: Optional[Path] = DbOpt,
 ):
-    """Record a single run from the shell."""
+    """Record a single run from the shell. A run with the same setting is skipped unless --on-duplicate says otherwise."""
     metrics = json.loads(metrics_json.read_text()) if metrics_json else {}
     metrics.update(_parse_kv(metric))
     config = json.loads(config_json.read_text()) if config_json else {}
@@ -176,9 +177,10 @@ def log(
     r = log_run(
         experiment, project=project, method=method, dataset=dataset, seed=seed,
         experiment_type=experiment_type, config=config, metrics=metrics, tags=tag,
-        source=source, notes=notes, artifacts_dir=str(artifacts_dir) if artifacts_dir else None, db=db,
+        source=source, notes=notes, artifacts_dir=str(artifacts_dir) if artifacts_dir else None,
+        on_duplicate=on_duplicate, db=db,
     )
-    console.print(f"[green]logged run {r.id}[/] -> {experiment}: {metrics}")
+    console.print(f"[green]logged run {r.id}[/] -> {experiment}: {r.metrics}")
 
 
 @metric_app.command("define")
