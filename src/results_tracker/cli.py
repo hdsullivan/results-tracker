@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import aggregate as agg
-from .api import define_metric, get_metric_defs, get_runs, list_experiments, list_projects, log_run, run_records
+from .api import define_metric, delete_runs, get_metric_defs, get_runs, list_experiments, list_projects, log_run, run_records
 from .db import get_engine, resolve_db_path
 
 app = typer.Typer(help="Track paper results: comparisons, sweeps, ablations.", no_args_is_help=True)
@@ -102,6 +102,52 @@ def runs(
             json.dumps(r["config"]),
         )
     console.print(t)
+
+
+@app.command()
+def delete(
+    run_ids: list[int] = typer.Argument(None, help="Run ids to delete (see `runs`)."),
+    experiment: Optional[str] = typer.Option(None, "--experiment", "-e", help="Or select by filters …"),
+    project: Optional[str] = typer.Option(None, "--project", "-p"),
+    method: Optional[str] = typer.Option(None, "--method", "-m"),
+    dataset: Optional[str] = typer.Option(None, "--dataset", "-d"),
+    status: Optional[str] = typer.Option(None, "--status", help="completed | failed | running"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted and stop."),
+    db: Optional[Path] = DbOpt,
+):
+    """Delete runs by id, or every run matching the filters. Shows the rows first and asks unless --yes.
+
+    Projects, experiments, methods and metric definitions are kept. Note the deletion in your commit message.
+    """
+    engine = get_engine(db)
+    if not run_ids and not any([experiment, project, method, dataset, status]):
+        console.print("[red]give run ids or at least one filter (-e/-p/-m/-d/--status)[/]")
+        raise typer.Exit(code=2)
+    rs = get_runs(experiment=experiment, project=project, method=method, dataset=dataset, status=status, engine=engine)
+    if run_ids:
+        wanted = set(run_ids)
+        rs = [r for r in rs if r.id in wanted]
+        missing = wanted - {r.id for r in rs}
+        if missing:
+            err_console.print(f"[yellow]not found (or excluded by the filters):[/] {sorted(missing)}")
+    if not rs:
+        console.print("nothing to delete")
+        raise typer.Exit(code=0)
+    recs = run_records(rs, engine=engine)
+    t = Table("id", "experiment", "method", "dataset", "seed", "status", "metrics")
+    for r in recs:
+        t.add_row(str(r["run_id"]), r["experiment"], str(r["method"]), str(r["dataset"]), str(r["seed"]), r["status"],
+                  json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in r["metrics"].items()}))
+    console.print(t)
+    if dry_run:
+        console.print(f"[cyan]dry run:[/] {len(recs)} run(s) would be deleted")
+        raise typer.Exit(code=0)
+    if not yes and not typer.confirm(f"Delete {len(recs)} run(s)? This cannot be undone.", default=False):
+        console.print("aborted")
+        raise typer.Exit(code=1)
+    n = delete_runs([r["run_id"] for r in recs], engine=engine)
+    console.print(f"[green]deleted {n} run(s)[/]")
 
 
 @app.command()

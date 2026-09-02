@@ -158,3 +158,27 @@ def test_export_bundle_cli(tmp_path):
                             "-o", str(tmp_path / "v.png"), "--db", db])
     assert r.exit_code == 0, r.output
     assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in r.output
+
+
+def test_delete_command(tmp_path):
+    db = str(tmp_path / "r.db")
+    assert runner.invoke(app, ["demo", "--db", db]).exit_code == 0
+    # needs ids or a filter
+    assert runner.invoke(app, ["delete", "--db", db]).exit_code == 2
+    # dry run changes nothing
+    r = runner.invoke(app, ["delete", "-e", "lambda-sweep", "--status", "failed", "--dry-run", "--db", db])
+    assert r.exit_code == 0 and "would be deleted" in r.output
+    n_before = len(runner.invoke(app, ["runs", "-n", "1000", "--db", db]).output.splitlines())
+    assert len(runner.invoke(app, ["runs", "-n", "1000", "--db", db]).output.splitlines()) == n_before
+    # declining the prompt aborts
+    r = runner.invoke(app, ["delete", "-e", "lambda-sweep", "--status", "failed", "--db", db], input="n\n")
+    assert r.exit_code == 1 and "aborted" in r.output
+    # delete the one failed sweep run
+    r = runner.invoke(app, ["delete", "-e", "lambda-sweep", "--status", "failed", "--yes", "--db", db])
+    assert r.exit_code == 0 and "deleted 1 run" in r.output
+    r = runner.invoke(app, ["sweep", "-e", "lambda-sweep", "--param", "lambda", "--metric", "psnr", "--db", db])
+    assert r.exit_code == 0
+    # by id, with an unknown id reported
+    r = runner.invoke(app, ["delete", "1", "2", "99999", "--yes", "--db", db])
+    assert r.exit_code == 0 and "deleted 2 run" in r.output and "99999" in r.output
+    assert runner.invoke(app, ["delete", "1", "--db", db]).output.strip().endswith("nothing to delete")

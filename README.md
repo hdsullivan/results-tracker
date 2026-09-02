@@ -54,6 +54,7 @@ results-tracker table  -e main-comparison --by method --by dataset --db demo.db
 results-tracker sweep  -e lambda-sweep --param lambda --metric psnr --db demo.db
 results-tracker ablation -e ablation --db demo.db
 results-tracker runs -e lambda-sweep --db demo.db
+results-tracker delete 34 --db demo.db        # remove a wrong run (shows it, asks first; --yes to skip)
 results-tracker demo --reset --db demo.db     # start the demo over
 ```
 

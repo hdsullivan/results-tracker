@@ -2,6 +2,7 @@
 
 from .api import (
     define_method,
+    delete_runs,
     define_metric,
     get_metric_defs,
     get_runs,
@@ -15,6 +16,7 @@ from .models import Dataset, Experiment, ExperimentType, Method, Metric, Project
 
 __all__ = [
     "log_run",
+    "delete_runs",
     "define_metric",
     "define_method",
     "get_metric_defs",

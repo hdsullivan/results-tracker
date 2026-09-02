@@ -4,6 +4,7 @@ import pytest
 
 from results_tracker import (
     ExperimentType,
+    delete_runs,
     RunStatus,
     define_metric,
     get_metric_defs,
@@ -101,3 +102,11 @@ def test_guess_direction():
     assert not guess_higher_is_better("val_loss")
     assert not guess_higher_is_better("NRMSE")
     assert not guess_higher_is_better("time_per_iter")
+
+
+def test_delete_runs(engine):
+    ids = [log_run("e", method="m", seed=s, metrics={"x": s}, git_commit=None, engine=engine).id for s in range(3)]
+    assert delete_runs([ids[0], 999], engine=engine) == 1  # unknown ids are ignored
+    assert [r.id for r in get_runs(engine=engine)] == ids[1:]
+    assert delete_runs([], engine=engine) == 0
+    assert len(list_experiments(engine=engine)) == 1  # experiment kept

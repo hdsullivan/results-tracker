@@ -200,6 +200,20 @@ def define_method(name: str, *, label: str = "", is_baseline: bool = False, db=N
         return m
 
 
+def delete_runs(run_ids: Iterable[int], db=None, engine=None) -> int:
+    """Delete runs by id. Returns how many rows were removed. Projects, experiments, methods and
+    metric definitions are left in place (a re-run of the same setting will reuse them)."""
+    engine = _resolve_engine(engine, db)
+    ids = [int(i) for i in run_ids]
+    if not ids:
+        return 0
+    with session_scope(engine) as s:
+        rows = list(s.exec(select(Run).where(Run.id.in_(ids))).all())  # type: ignore[attr-defined]
+        for r in rows:
+            s.delete(r)
+        return len(rows)
+
+
 # --------------------------------------------------------------------------- read API
 
 def list_projects(db=None, engine=None) -> list[Project]:
