@@ -14,8 +14,8 @@ def stat(m, s=0.1, n=3):
 
 def test_style_map_is_stable_and_distinct():
     sm = style_map(["A", "B", "C"], emphasize=["C"])
-    assert sm["A"]["color"] != sm["B"]["color"] and sm["A"]["linestyle"] != sm["B"]["linestyle"]
-    assert sm["C"]["linewidth"] > sm["A"]["linewidth"]
+    assert sm["A"]["color"] != sm["B"]["color"]
+    assert sm["C"]["linewidth"] > sm["A"]["linewidth"] and sm["C"]["markersize"] > sm["A"]["markersize"]
     assert style_map(["B", "A"])["B"]["color"] == sm["A"]["color"]  # first-seen order
 
 
@@ -26,19 +26,25 @@ def test_sweep_figure_log_axis_ticks_and_size(tmp_path):
     assert ax.get_xscale() == "log"
     assert [t.get_text() for t in ax.get_xticklabels()] == ["0.01", "0.1", "1"]
     assert ax.get_ylabel() == "PSNR (dB)"
-    assert fig.get_size_inches()[0] == pytest.approx(SINGLE_COL_IN)
+    assert fig.get_size_inches()[0] == pytest.approx(SINGLE_COL_IN) == 5.0
     assert ax.get_legend() is None  # single series: title/labels name it
+    assert len(ax.collections) == 1  # the shaded ± std band (default)
+    assert any(l.get_linestyle() == ":" for l in ax.lines)  # dotted guide at the best value
     paths = save_figure(fig, tmp_path / "s.pdf", also_png=True)
     assert [p.suffix for p in paths] == [".pdf", ".png"] and all(p.stat().st_size > 1000 for p in paths)
 
 
 def test_sweep_figure_multi_group_legend_and_errorbars():
     series = {("A",): [(1, stat(1.0)), (2, stat(2.0))], ("B",): [(1, stat(3.0)), (2, stat(2.5))]}
-    fig = sweep_figure(series, "k", "psnr", band=False, width="double", log_x=False)
+    fig = sweep_figure(series, "k", "psnr", band=False, width="double", log_x=False, caption="a. Test panel")
     ax = fig.axes[0]
     assert ax.get_xscale() == "linear"
-    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A", "B"]
-    assert fig.get_size_inches()[0] == pytest.approx(DOUBLE_COL_IN)
+    leg = ax.get_legend()
+    assert [t.get_text() for t in leg.get_texts()] == ["A", "B"]
+    assert leg.get_frame().get_edgecolor()[:3] == (0.0, 0.0, 0.0)  # bordered legend
+    assert fig.get_size_inches()[0] == pytest.approx(DOUBLE_COL_IN) == 10.5
+    assert any(t.get_text() == "(a) Test panel" and t.get_fontweight() == "bold" for t in ax.texts)
+    assert sweep_figure(series, "k", "psnr", width="ieee-single").get_size_inches()[0] == pytest.approx(3.5)
 
 
 def test_ablation_figure_bars_and_polarity():
@@ -53,8 +59,9 @@ def test_ablation_figure_bars_and_polarity():
     assert len(bars) == 2
     labels = [t.get_text() for t in ax.get_yticklabels()]
     assert labels == ["w/o a", "bigger b"]  # sorted worst first
-    hatched = [b for b in bars if b.get_hatch()]
-    assert len(hatched) == 1  # the hurting one
+    import matplotlib.colors as mc
+    fills = [mc.to_hex(b.get_facecolor()) for b in bars]
+    assert fills == ["#d62728", "#1f77b4"]  # hurts = red, improves = blue
 
 
 def test_comparison_figure_grouped_bars():
@@ -112,5 +119,12 @@ def test_ieee_axes_style():
     assert not any(l.get_visible() for l in ax.get_xgridlines())
     assert ax.yaxis.get_ticks_position() == "default"  # ticks on both sides (left + right) in IEEE style
     assert ax.xaxis.get_ticks_position() == "default"
-    data_line = ax.containers[0].lines[0]  # errorbar container: (data line, caplines, barlines)
-    assert data_line.get_markerfacecolor() == "white"
+    line = [l for l in ax.get_lines() if l.get_label() == "psnr"][0]
+    assert line.get_marker() == "o" and line.get_markerfacecolor() == line.get_color()  # filled circles
+
+
+def test_math_only_axis_label_is_bumped():
+    series = {(): [(0.01, stat(29.0)), (0.1, stat(31.0)), (1.0, stat(29.5))]}
+    fig = sweep_figure(series, "lambda", "psnr", xlabel=r"$\lambda$", ylabel="PSNR (dB)")
+    ax = fig.axes[0]
+    assert ax.xaxis.label.get_fontsize() == 14 and ax.yaxis.label.get_fontsize() == 11

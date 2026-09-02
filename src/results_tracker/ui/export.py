@@ -144,14 +144,16 @@ def render() -> None:
             c1, c2, c3 = st.columns(3)
             xlabel = c1.text_input("x label", value=param)
             ylabel = c2.text_input("y label", value=f"{metric} ({unit})" if unit else metric)
-            width = c3.selectbox("Width", ["single", "double"])
+            width = c3.selectbox("Width", ["single", "double", "ieee-single", "ieee-double"],
+                                 help="single/double = 5.0/10.5 in (lab convention, LaTeX scales down); ieee-* = literal 3.5/7.16 in")
             c1, c2, c3 = st.columns(3)
-            band = c1.checkbox("Shaded ± std band", value=False, help="Default: error bars with caps.")
-            emph = c2.multiselect("Emphasize", [" / ".join(map(str, g)) for g in series if g], default=[])
-            height = c3.number_input("Height (in)", min_value=1.0, max_value=6.0, value=2.2, step=0.1)
+            band = c1.checkbox("Shaded ± std band", value=True, help="Off: capped error bars.")
+            emph = c2.multiselect("Emphasize (proposed)", [" / ".join(map(str, g)) for g in series if g], default=[])
+            height = c3.number_input("Height (in)", min_value=1.0, max_value=8.0, value=3.1, step=0.1)
+            cap = st.text_input("Panel caption (bold, below)", value="", placeholder="a. PSNR vs λ")
             best = {g: agg.best_sweep_value(s, hib.get(metric, True)) for g, s in series.items()}
             fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel, band=band, best_by_group=best,
-                               width=width, height=height, emphasize=emph)
+                               width=width, height=height, emphasize=emph, caption=cap or None)
             _figure_block(fig, f"{stem}-{param}-{metric}", width)
 
     elif kind == "Ablation figure":
@@ -159,14 +161,15 @@ def render() -> None:
         metric = c1.selectbox("Metric", metrics_all)
         unit = defs.get(metric, {}).get("unit", "")
         xlabel = c2.text_input("x label", value=f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else ""))
-        width = c3.selectbox("Width", ["single", "double"])
+        width = c3.selectbox("Width", ["single", "double", "ieee-single", "ieee-double"])
+        cap = st.text_input("Panel caption (bold, below)", value="", placeholder="b. Ablation", key="abl_cap")
         rows = agg.ablation_table(recs, metrics=[metric])
         if not any(r.is_base for r in rows):
             st.warning("No run matches the base config; nothing to plot. Tag a run `base`.")
             return
         d = defs.get(metric, {})
         fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
-                              xlabel=xlabel, width=width)
+                              xlabel=xlabel, width=width, caption=cap or None)
         _figure_block(fig, f"{stem}-ablation-{metric}", width)
 
     elif kind == "Comparison figure":
@@ -178,12 +181,15 @@ def render() -> None:
         unit = defs.get(metric, {}).get("unit", "")
         c1, c2, c3 = st.columns(3)
         ylabel = c1.text_input("y label", value=f"{metric} ({unit})" if unit else metric)
-        width = c2.selectbox("Width", ["single", "double"])
+        width = c2.selectbox("Width", ["single", "double", "ieee-single", "ieee-double"])
         pt = agg.pivot_table(recs, row_key, None if col_key == "none" else col_key, metrics=[metric], higher_is_better=hib)
-        emph = c3.multiselect("Emphasize", [str(r) for r in pt.rows], default=[])
-        zero = st.checkbox("y axis from 0", value=False, help="Default is data-tight; say which in the caption.")
-        fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, emphasize=emph, zero_based=zero,
-                                row_labels=agg.method_labels(recs) if row_key == "method" else None)
+        emph = c3.multiselect("Emphasize (proposed)", [str(r) for r in pt.rows], default=[])
+        k1, k2, k3 = st.columns(3)
+        zero = k1.checkbox("y axis from 0", value=False, help="Default is data-tight; say which in the caption.")
+        hatch = k2.checkbox("Hatch bars", value=False, help="Grayscale print safety.")
+        cap = k3.text_input("Panel caption", value="", placeholder="a. PSNR", key="cmp_cap")
+        fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, emphasize=emph, zero_based=zero, hatch=hatch,
+                                caption=cap or None, row_labels=agg.method_labels(recs) if row_key == "method" else None)
         _figure_block(fig, f"{stem}-{metric}", width)
 
     elif kind == "Runs (CSV)":

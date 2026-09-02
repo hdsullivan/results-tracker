@@ -120,17 +120,20 @@ missing cells as `--` and listed in a comment; a provenance comment on every
 supplies the small-caps caption above the table, so the output inherits the
 class's look. Method row labels come from `define_method(name, label="TV~\\cite{rudin}")`.
 
-Figures: 3.5 in single or 7.16 in double column; Times New Roman (falls back to
-STIX) at 8 pt with 7 pt ticks; TrueType fonts embedded (`pdf.fonttype 42`);
-closed black axes box with inward major and minor ticks on all four sides; no
-grid; framed square-cornered legend; thin lines with small white-faced markers
-and the best sweep value as a filled marker; ± std as capped error bars by
-default (`--band` for a shaded band); Okabe-Ito colours with a fixed line style
-and marker per method; bar charts use a white-to-black fill ramp with black
-edges and light hatching, a one-row legend above the axes, data-tight y limits
-(`--zero-based` or `--ylim lo,hi` to override) and *no* bar for a missing cell;
-a grayscale preview toggle in the GUI; `--tex` writes the `figure`/`figure*`
-environment with `\columnwidth` or `\textwidth`.
+Figures follow the lab's paper style (ported from the adaptivePnP
+`set_paper_style`): Times-like serif text at 8 pt base with 11 pt axis labels,
+9 pt ticks and an 11 pt legend; a full boxed axes frame with inward major and
+minor ticks on all four sides; no grid; a black-bordered legend in one row above
+the axes; solid tab10 colours with filled circle markers, the proposed method
+heavier (`--emphasize Ours`); ± std as a shaded band (`--error-bars` for capped
+bars); the chosen sweep value ringed with a dotted guide; bold "(a) …" captions
+under panels via `--panel-label "a. …"`; widths of 5.0 in (single) and 10.5 in
+(double) that LaTeX scales to `\columnwidth` / `\textwidth`, or `ieee-single` /
+`ieee-double` for the literal 3.5 / 7.16 in. Bars use method colours with thin
+black edges (`--hatch` for grayscale safety), data-tight y limits
+(`--zero-based` or `--ylim lo,hi` to override) and *no* bar for a missing cell.
+TrueType fonts are embedded (`pdf.fonttype 42`); a grayscale preview toggle
+lives in the GUI; `--tex` writes the `figure`/`figure*` environment.
 
 Visual comparisons (via the lab's reconstruction-figure checklist): panel order
 reference → measurement → baselines → proposed; identical crop, display range,

@@ -34,7 +34,9 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
   `results-tracker metric define`.
 - Streamlit widgets: use `width="stretch"` (not the deprecated `use_container_width`).
 - Categorical colours: the GUI (`ui/charts.py`) uses the bright dataviz palette; print exports
-  (`export/figures.py`) use Okabe-Ito with grayscale/hatched bars and the classic IEEE axes style in `IEEE_RC`.
-  Assign hues in fixed first-seen order; never cycle by rank.
+  (`export/figures.py`) follow the lab's paper style ported from
+  `adaptivePnP-paper-workspace/.../utils/ablation_utils.py::set_paper_style` (tab10 colours, filled
+  circles, boxed axes, inward ticks, top bordered legend, bold panel captions, 5.0/10.5 in widths).
+  Keep the two in sync if the lab style changes. Assign hues in fixed first-seen order; never cycle by rank.
 - UI tests use `AppTest.from_string("from results_tracker.ui import X; X.render()")`.
 - A long-running `streamlit run` does not reload edited *imported* modules reliably; restart it.

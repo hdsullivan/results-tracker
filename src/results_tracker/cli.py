@@ -415,7 +415,8 @@ OutOpt = typer.Option(None, "--out", "-o", help="Output file; prints to stdout w
 EnvOpt = typer.Option("table", "--env", help="table | table* | none (bare tabular)")
 StdOpt = typer.Option("pm", "--std", help="pm | small | none")
 FontOpt = typer.Option(None, "--font", help="e.g. small, footnotesize")
-WidthOpt = typer.Option("single", "--width", help="single (3.5 in) | double (7.16 in) | inches")
+WidthOpt = typer.Option("single", "--width", help="single (5.0 in) | double (10.5 in) | ieee-single (3.5) | ieee-double (7.16) | inches")
+CaptionOpt = typer.Option(None, "--panel-label", help='Bold caption under the panel, e.g. "a. PSNR vs lambda"')
 PngOpt = typer.Option(False, "--png", help="Also write a 300-dpi PNG next to the PDF.")
 TexOpt = typer.Option(False, "--tex", help="Also write a figure/figure* environment snippet next to the file.")
 
@@ -531,8 +532,9 @@ def export_sweep_fig(
     ylabel: Optional[str] = typer.Option(None, "--ylabel", help="e.g. 'PSNR (dB)'"),
     width: str = WidthOpt,
     height: Optional[float] = typer.Option(None, "--height", help="inches"),
-    band: bool = typer.Option(False, "--band", help="Shaded ± std band instead of error bars with caps."),
-    emphasize: list[str] = typer.Option([], "--emphasize", help="Group label(s) drawn thicker, e.g. Ours"),
+    error_bars: bool = typer.Option(False, "--error-bars", help="Capped error bars instead of the shaded ± std band."),
+    emphasize: list[str] = typer.Option([], "--emphasize", help="Group label(s) drawn heavier (the proposed method), e.g. Ours"),
+    panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
     tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
@@ -547,7 +549,8 @@ def export_sweep_fig(
     best = {g: agg.best_sweep_value(s, hib) for g, s in series.items()}
     unit = defs.get(metric, {}).get("unit", "")
     fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
-                       band=band, best_by_group=best, width=_width(width), height=height, emphasize=emphasize)
+                       band=not error_bars, best_by_group=best, width=_width(width), height=height,
+                       emphasize=emphasize, caption=panel_label)
     _save_fig(fig, out, png, tex, width)
 
 
@@ -560,6 +563,7 @@ def export_ablation_fig(
     xlabel: Optional[str] = typer.Option(None, "--xlabel"),
     width: str = WidthOpt,
     height: Optional[float] = typer.Option(None, "--height"),
+    panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
     tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
@@ -572,7 +576,7 @@ def export_ablation_fig(
     rows = agg.ablation_table(recs, metrics=[metric])
     d = defs.get(metric, {})
     fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
-                          xlabel=xlabel, width=_width(width), height=height)
+                          xlabel=xlabel, width=_width(width), height=height, caption=panel_label)
     _save_fig(fig, out, png, tex, width)
 
 
@@ -590,6 +594,8 @@ def export_comparison_fig(
     emphasize: list[str] = typer.Option([], "--emphasize"),
     zero_based: bool = typer.Option(False, "--zero-based", help="Start the y axis at 0 (default: data-tight)."),
     ylim: Optional[str] = typer.Option(None, "--ylim", help="lo,hi y-axis limits"),
+    hatch: bool = typer.Option(False, "--hatch", help="Add hatching to bars (grayscale print safety)."),
+    panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
     tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
@@ -605,6 +611,7 @@ def export_comparison_fig(
     lim = tuple(float(v) for v in ylim.split(",")) if ylim else None
     fig = comparison_figure(pt, metric, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
                             width=_width(width), height=height, emphasize=emphasize, zero_based=zero_based, ylim=lim,
+                            hatch=hatch, caption=panel_label,
                             row_labels=agg.method_labels(recs) if rows == "method" else None)
     _save_fig(fig, out, png, tex, width)
 

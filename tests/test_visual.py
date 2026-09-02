@@ -85,7 +85,8 @@ def test_reconstruction_figure_layout_and_sidecar(art, tmp_path):
     assert len(fig.axes) == 4 * 3 + 1 + 2
     assert spec.error_vmax is not None and spec.error_vmax > 0
     assert [p["title"] for p in spec.panels] == ["Reference", "Measurement", "TV [1]", "Ours"]
-    assert fig.get_size_inches()[0] == pytest.approx(7.16)
+    from results_tracker.export.figures import DOUBLE_COL_IN
+    assert fig.get_size_inches()[0] == pytest.approx(DOUBLE_COL_IN)
     titles = [a.get_title() for a in fig.axes if a.get_title()]
     assert titles == ["Reference", "Measurement", "TV [1]", "Ours"]
     out = save_visual(fig, tmp_path / "vis.png", spec)
