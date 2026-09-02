@@ -9,7 +9,8 @@ from PIL import Image  # noqa: E402
 from results_tracker import aggregate as agg  # noqa: E402
 from results_tracker.export.figures import figure_tex, ieee_preamble, to_grayscale_png, figure_bytes  # noqa: E402
 from results_tracker.export.visual import (  # noqa: E402
-    Panel, build_panels, crop, error_map, list_image_files, load_image, psnr, reconstruction_figure, save_visual,
+    IEEE_TEXTWIDTH_IN, Panel, PanelRow, build_panels, build_rows, crop, error_map, list_image_files, load_image,
+    luminance, psnr, reconstruction_figure, save_visual, zoom_region,
 )
 
 DEFS = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"}, "ssim": {"unit": "", "higher_is_better": True, "fmt": ".3f"}}
@@ -76,40 +77,99 @@ def test_build_panels_reports_problems(art):
     assert any("missing" in p for p in problems) and any("reference" in p for p in problems)
 
 
-def test_reconstruction_figure_layout_and_sidecar(art, tmp_path):
-    gt, recs = art
-    panels, ref, _ = build_panels(agg.select_runs(recs), "reconstruction.png", DEFS, reference="ground_truth.png",
-                                  measurement="measurement.png")
-    fig, spec = reconstruction_figure(panels, reference=ref, crop_box=(10, 10, 16, 16), error_maps=True, width="double")
-    # 4 columns (ref + meas + 2 methods) x 3 rows + colour bar + 2 spacer axes
-    assert len(fig.axes) == 4 * 3 + 1 + 2
-    assert spec.error_vmax is not None and spec.error_vmax > 0
-    assert [p["title"] for p in spec.panels] == ["Reference", "Measurement", "TV [1]", "Ours"]
-    from results_tracker.export.figures import DOUBLE_COL_IN
-    assert fig.get_size_inches()[0] == pytest.approx(DOUBLE_COL_IN)
+def _panels(art):
+    _, recs = art
+    return build_panels(agg.select_runs(recs), "reconstruction.png", DEFS, reference="ground_truth.png",
+                        measurement="measurement.png")
+
+
+def test_zoom_region_and_luminance():
+    assert zoom_region((100, 100), 0.3, (0.5, 0.5)) == (35, 35, 30, 30)
+    assert zoom_region((100, 60), 0.5, (0.0, 1.0)) == (0, 70, 30, 30)  # clamped inside
+    rgb = np.zeros((4, 4, 3), dtype=np.float32); rgb[..., 1] = 1.0
+    assert np.allclose(luminance(rgb), 0.587)
+    assert luminance(np.ones((2, 2))).shape == (2, 2)
+
+
+def test_reconstruction_figure_image_mode_with_zoom(art, tmp_path):
+    panels, ref, _ = _panels(art)
+    methods = [p for p in panels if p.kind == "method"]
+    meas = next(p for p in panels if p.kind == "measurement")
+    fig, spec = reconstruction_figure(methods, reference=ref, measurement=meas, zoom=True, width="double")
+    # 4 panels (GT, Meas, TV, Ours), each with one zoom inset (inset axes are children, not fig.axes)
+    assert len(fig.axes) == 4 and sum(len(a.child_axes) for a in fig.axes) == 4
+    assert fig.get_size_inches()[0] == pytest.approx(IEEE_TEXTWIDTH_IN)
     titles = [a.get_title() for a in fig.axes if a.get_title()]
     assert titles == ["Reference", "Measurement", "TV [1]", "Ours"]
+    assert spec.crop_box == zoom_region(ref.image.shape) and spec.mode == "image" and spec.error_vmax is None
+    # metric stamps present on method panels (upper-left because of the zoom inset)
+    stamps = [t for a in fig.axes for t in a.texts if "dB" in t.get_text()]
+    assert len(stamps) == 2 and all(t.get_position()[1] > 0.5 for t in stamps)
+    # yellow zoom boxes on every panel
+    from matplotlib.patches import Rectangle
+    boxes = [pch for a in fig.axes for pch in a.patches if isinstance(pch, Rectangle)]
+    assert len(boxes) == 4
     out = save_visual(fig, tmp_path / "vis.png", spec)
     assert [p.suffix for p in out] == [".png", ".json"]
     side = json.loads(out[1].read_text())
-    assert side["crop_box"] == [10, 10, 16, 16] and side["panels"][2]["path"].endswith("TV/reconstruction.png")
-    assert "Zoom: 16x16 crop at (10, 10)" in spec.caption_stub() and "shared scale" in spec.caption_stub()
-    # error maps: the worse method has the larger mean error
-    tv = error_map(panels[1].image, ref.image).mean()
-    ours = error_map(panels[2].image, ref.image).mean()
-    assert tv > ours
+    assert side["mode"] == "image" and side["panels"][2]["path"].endswith("TV/reconstruction.png")
+    assert "Yellow box" in spec.caption_stub() and "Left to right: Reference, Measurement, TV [1], Ours" in spec.caption_stub()
+
+
+def test_reconstruction_figure_error_mode(art):
+    panels, ref, _ = _panels(art)
+    methods = [p for p in panels if p.kind == "method"]
+    meas = next(p for p in panels if p.kind == "measurement")
+    fig, spec = reconstruction_figure(methods, reference=ref, measurement=meas, mode="error")
+    # 4 panels + colour bar
+    assert len(fig.axes) == 5
+    assert spec.error_vmax is not None and 0 < spec.error_vmax <= 1
+    assert "luminance" in spec.caption_stub() and "99th percentile" in spec.caption_stub()
+    err_axes = [a for a in fig.axes if a.get_title() in ("TV [1]", "Ours")]
+    ims = [a.images[0] for a in err_axes]
+    assert all(im.get_clim() == (0.0, spec.error_vmax) for im in ims)  # one shared scale
+    assert ims[0].get_array().mean() > ims[1].get_array().mean()  # TV is worse
+    with pytest.raises(ValueError):
+        reconstruction_figure(methods, mode="error")  # needs a reference
+
+
+def test_reconstruction_figure_rows_and_kernel(art):
+    _, recs = art
+    # two "rows": same runs relabelled as K=1 / K=5
+    p1, ref, _ = _panels(art)
+    methods = [p for p in p1 if p.kind == "method"]
+    meas = next(p for p in p1 if p.kind == "measurement")
+    kernel = Panel("Kernel", np.eye(5, dtype=np.float32), kind="kernel")
+    rows = [PanelRow(methods, "$K = 1$"), PanelRow(methods, "$K = 5$")]
+    fig, spec = reconstruction_figure(rows, reference=ref, measurement=meas, kernel=kernel, zoom=True)
+    # left block stacked (2 axes) + 4 method panels; insets: 6 zoom + 1 kernel as child axes
+    assert len(fig.axes) == 6 and sum(len(a.child_axes) for a in fig.axes) == 7
+    assert spec.rows == ["$K = 1$", "$K = 5$"]
+    ylabels = [a.get_ylabel() for a in fig.axes if a.get_ylabel()]
+    assert ylabels == ["$K = 1$", "$K = 5$"]
+    assert "Rows: $K = 1$, $K = 5$" in spec.caption_stub()
+
+
+def test_build_rows_groups_by_key(art):
+    _, recs = art
+    more = [{**r, "run_id": 100 + i, "seed": 1, "metrics": {"psnr": 20.0}} for i, r in enumerate(recs[:2])]
+    rows, problems = build_rows(recs[:2] + more, "seed", "reconstruction.png", DEFS, metrics=["psnr"])
+    assert [r.label for r in rows] == ["$seed = 0$", "$seed = 1$"]
+    assert [p.title for p in rows[0].panels] == ["TV [1]", "Ours"] and rows[1].panels[0].subtitle == "20.00 dB"
+    assert problems == []
 
 
 def test_reconstruction_figure_minimal_and_errors(art):
     _, recs = art
     panels, _, _ = build_panels(agg.select_runs(recs), "reconstruction.png", DEFS)
-    fig, spec = reconstruction_figure(panels, width="single", panel_labels=True)
-    assert len(fig.axes) == 2 and fig.axes[0].get_title().startswith("(a) ")
-    assert spec.error_vmax is None
+    fig, spec = reconstruction_figure(panels, width="single", show_titles=False)
+    assert len(fig.axes) == 2 and spec.error_vmax is None and spec.crop_box is None
     with pytest.raises(ValueError):
         reconstruction_figure(panels, crop_box=(40, 40, 20, 20))
     with pytest.raises(ValueError):
         reconstruction_figure([])
+    with pytest.raises(ValueError):
+        reconstruction_figure(panels, mode="nope")
 
 
 def test_latex_glue_and_grayscale():
@@ -121,3 +181,19 @@ def test_latex_glue_and_grayscale():
     fig, _ = reconstruction_figure([Panel("a", np.zeros((8, 8)))], width="single", show_titles=False)
     g = to_grayscale_png(figure_bytes(fig, "png", dpi=50))
     assert Image.open(__import__("io").BytesIO(g)).mode == "L"
+
+
+def test_rows_use_their_own_reference_for_error_maps(art, tmp_path):
+    """Rows showing different images (e.g. instances) must be scored against their own ground truth."""
+    p1, ref, _ = _panels(art)
+    methods = [p for p in p1 if p.kind == "method"]
+    other_ref = Panel("Reference", np.zeros_like(ref.image), kind="reference")  # a wrong reference: all-zero
+    rows = [PanelRow(methods, "row A", reference=ref), PanelRow(methods, "row B", reference=other_ref)]
+    fig, spec = reconstruction_figure(rows, reference=ref, mode="error")
+    err_axes = [a for a in fig.axes if a.images and a.images[0].get_cmap().name == "magma"]
+    means = [a.images[0].get_array().mean() for a in err_axes]
+    assert len(means) == 4 and max(means[:2]) < min(means[2:])  # row B (zero reference) has far larger error
+    # build_rows attaches per-row references when asked
+    _, recs = art
+    rws, _ = build_rows(recs[:2], "seed", "reconstruction.png", DEFS, reference="ground_truth.png")
+    assert rws[0].reference is not None and rws[0].reference.kind == "reference"

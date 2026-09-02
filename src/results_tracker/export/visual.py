@@ -1,11 +1,12 @@
-"""Qualitative reconstruction comparisons: reference | measurement | baselines | proposed.
+"""Qualitative reconstruction comparisons in the lab's IEEE style (adaptivePnP deblur_figures.py).
 
-Conventions (lab's IEEE reconstruction-figure checklist):
-- identical crop, display range, interpolation, colour map and error-map scale for every method;
-- nearest-neighbour rendering so native pixels are preserved;
-- panel order reference -> observation -> baselines -> proposed;
-- one shared error scale, shown as a colour bar, error defined as |x - x_ref| (mean over channels);
-- provenance (source paths, crop box, display range) saved next to the figure.
+- Ground truth / measurement block on the left, a narrow spacer, then baselines -> proposed;
+- identical zoom box (yellow) magnified into a lower-right inset on every panel, same display range,
+  native pixels (nearest-neighbour), same colour map;
+- per-panel metric stamp ("31.27 dB / 0.873") with a white backing box;
+- error mode: |luminance(x) - luminance(x_ref)| on one pooled 99th-percentile scale, magma, bottom colour bar;
+- several rows (iteration budgets, seeds, instances) share the left block and get a row label;
+- provenance (source paths, zoom box, display range, error scale) saved next to the figure.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-from .figures import IEEE_RC, SAVE_KW, width_in
+from .figures import IEEE_RC, SAVE_KW
 
 BOX_COLOR = "#eda100"  # yellow from the categorical palette: visible on gray and on the magma error map
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
@@ -105,7 +106,10 @@ class VisualSpec:
     crop_box: Optional[Box] = None
     display_range: tuple[float, float] = (0.0, 1.0)
     error_vmax: Optional[float] = None
-    panels: list[dict[str, Any]] = field(default_factory=list)  # title, path, run_id
+    mode: str = "image"
+    kernel: Optional[str] = None
+    rows: list[str] = field(default_factory=list)
+    panels: list[dict[str, Any]] = field(default_factory=list)  # title, path, kind[, row]
 
     def caption_stub(self) -> str:
         parts = []
@@ -114,11 +118,20 @@ class VisualSpec:
             parts.append(f"Sample: {where}" + (f" (seed {self.seed})" if self.seed is not None else "") + ".")
         if self.crop_box:
             x, y, w, h = self.crop_box
-            parts.append(f"Zoom: {w}x{h} crop at ({x}, {y}), identical for all methods.")
-        parts.append(f"Display range [{self.display_range[0]:g}, {self.display_range[1]:g}] for all panels; nearest-neighbour rendering.")
-        if self.reference and self.error_vmax is not None:
-            parts.append(f"Error maps show |x - x_ref| averaged over channels on a shared scale [0, {self.error_vmax:.3g}].")
-        parts.append("Left to right: " + ", ".join(p["title"] for p in self.panels) + ".")
+            parts.append(f"Yellow box: {w}x{h} px region at ({x}, {y}), magnified in the inset; identical for all panels.")
+        parts.append(f"Display range [{self.display_range[0]:g}, {self.display_range[1]:g}] for all panels; native pixels (nearest-neighbour).")
+        if self.mode == "error" and self.error_vmax is not None:
+            parts.append(f"Error maps show |luminance(x) − luminance(x_ref)| on a shared scale [0, {self.error_vmax:.3g}] "
+                         f"(99th percentile of all method panels).")
+        if self.rows:
+            parts.append("Rows: " + ", ".join(self.rows) + ".")
+        names = [p["title"] for p in self.panels if not p.get("row")] + \
+                list(dict.fromkeys(p["title"] for p in self.panels if p.get("row")))
+        if not self.rows:
+            names = [p["title"] for p in self.panels]
+        parts.append("Left to right: " + ", ".join(names) + ".")
+        if any(p.get("kind") == "method" for p in self.panels):
+            parts.append("Numbers on panels are the shown image's own PSNR / SSIM as logged.")
         return " ".join(parts)
 
 
@@ -142,10 +155,13 @@ def build_panels(
     metrics: Sequence[str] = ("psnr",),
     reference: Optional[str] = None,
     measurement: Optional[str] = None,
+    kernel: Optional[str] = None,
     titles: Optional[Mapping[str, str]] = None,
 ) -> tuple[list[Panel], Optional[Panel], list[str]]:
     """One panel per record (in the given order) plus optional reference/measurement panels found
-    in the first record directory that has them. Returns (panels, reference_panel, problems)."""
+    in the first record directory that has them. The measurement panel is inserted first with
+    kind="measurement"; an optional kernel/PSF thumbnail is appended with kind="kernel".
+    Returns (panels, reference_panel, problems)."""
     problems: list[str] = []
     panels: list[Panel] = []
     ref_panel: Optional[Panel] = None
@@ -186,113 +202,292 @@ def build_panels(
     if meas_panel is not None:
         panels.insert(0, meas_panel)
     shapes = {p.image.shape[:2] for p in panels} | ({ref_panel.image.shape[:2]} if ref_panel else set())
+    kp = find(kernel)
+    if kernel and kp is None:
+        problems.append(f"kernel image {kernel!r} not found")
+    elif kp is not None:
+        panels.append(Panel("Kernel", load_image(kp), path=str(kp), kind="kernel"))
     if len(shapes) > 1:
         problems.append(f"image sizes differ across panels: {sorted(shapes)}")
     return panels, ref_panel, problems
 
 
+def build_rows(
+    records: Sequence[Mapping[str, Any]],
+    row_key: str,
+    image: str,
+    defs: Mapping[str, Mapping[str, Any]],
+    *,
+    metrics: Sequence[str] = ("psnr",),
+    methods: Optional[Sequence[Any]] = None,
+    titles: Optional[Mapping[str, str]] = None,
+    reference: Optional[str] = None,
+) -> tuple[list[PanelRow], list[str]]:
+    """One PanelRow per distinct value of `row_key` ('seed', 'instance' or 'config.<k>'), methods as columns.
+
+    `records` should already be filtered to the dataset (and instance/seed when they are not the row key).
+    With `reference`, each row also carries the ground truth found in its own run directories, so error maps
+    for rows that show different images (instances) are scored against the right reference."""
+    from .. import aggregate as agg
+
+    values = sorted({agg.get_field(r, row_key) for r in records if agg.get_field(r, row_key) is not None},
+                    key=lambda v: (isinstance(v, str), v))
+    rows: list[PanelRow] = []
+    problems: list[str] = []
+    name = row_key.split(".")[-1]
+    for v in values:
+        subset = [r for r in records if agg.get_field(r, row_key) == v]
+        chosen = agg.select_runs(subset, methods=methods)
+        panels, ref_panel, probs = build_panels(chosen, image, defs, metrics=metrics, titles=titles, reference=reference)
+        problems += [f"{name}={v}: {pr}" for pr in probs]
+        label = f"${name} = {v:g}$" if isinstance(v, (int, float)) and not isinstance(v, bool) else f"{name} = {v}"
+        rows.append(PanelRow([p for p in panels if p.kind == "method"], label, reference=ref_panel))
+    return rows, problems
+
+
 # --------------------------------------------------------------------------- figure
 
+# Lab conventions (adaptivePnP deblur_figures.py): IEEE text width, 8 pt serif titles, hidden ticks/spines,
+# yellow zoom box + lower-right magnified inset, metric stamp with a white backing box, magma error maps on a
+# pooled 99th-percentile scale with a bottom colour bar, GT/Measurement block + spacer column on the left.
+IEEE_TEXTWIDTH_IN = 7.16
+IEEE_FONT_SIZE = 8
+ZOOM_FRACTION = 0.30
+ZOOM_CENTER = (0.5, 0.5)
+ZOOM_INSET_BOUNDS = (0.5, 0.02, 0.48, 0.48)  # axes fraction, lower-right
+ZOOM_EDGE_COLOR = "#ffd400"
+KERNEL_INSET_BOUNDS = (0.78, 0.78, 0.2, 0.2)  # axes fraction, upper-right of the Measurement panel
+ERROR_CMAP = "magma"
+ERROR_VMAX_PERCENTILE = 99.0
+SPACER_RATIO = 0.15
+VIS_WIDTHS = {"double": IEEE_TEXTWIDTH_IN, "single": 3.5, "ieee-double": IEEE_TEXTWIDTH_IN, "ieee-single": 3.5}
+
+
+@dataclass
+class PanelRow:
+    """One row of method panels, e.g. one iteration budget K or one seed; `label` goes on the left.
+
+    `reference` (optional) is the ground truth for *this* row; error maps use it when rows have their own
+    reference (e.g. rows = instances). The left block shows the figure-level reference."""
+
+    panels: list[Panel]
+    label: str = ""
+    reference: Optional[Panel] = None
+
+
+def luminance(img: np.ndarray) -> np.ndarray:
+    if img.ndim == 2:
+        return img.astype(np.float32)
+    w = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    return (img[..., :3].astype(np.float32) @ w)
+
+
+def zoom_region(shape: tuple[int, ...], fraction: float = ZOOM_FRACTION, center: tuple[float, float] = ZOOM_CENTER) -> Box:
+    """Square zoom box (x, y, side, side) as a fraction of the short side, centred at `center`, clamped inside."""
+    h, w = shape[:2]
+    side = max(2, int(round(min(h, w) * fraction)))
+    cx, cy = int(center[0] * w), int(center[1] * h)
+    x0 = min(max(cx - side // 2, 0), w - side)
+    y0 = min(max(cy - side // 2, 0), h - side)
+    return (x0, y0, side, side)
+
+
+def _style_panel(ax) -> None:
+    """Hide ticks and spines but keep titles/labels usable (unlike ax.axis('off'))."""
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.tick_params(which="both", length=0)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+
+
+def _show(ax, img: np.ndarray, vmin: float, vmax: float, cmap: str) -> None:
+    ax.imshow(img, cmap=cmap if img.ndim == 2 else None, vmin=vmin, vmax=vmax, interpolation="nearest")
+
+
+def _add_zoom_inset(ax, img: np.ndarray, box: Box, vmin: float, vmax: float, cmap: str) -> None:
+    x0, y0, bw, bh = box
+    ax.add_patch(Rectangle((x0 - 0.5, y0 - 0.5), bw, bh, fill=False, edgecolor=ZOOM_EDGE_COLOR, linewidth=0.9))
+    ix, iy, iw, ih = ZOOM_INSET_BOUNDS
+    if bh != bw:  # keep the inset's aspect equal to the box's
+        ih = min(0.6, iw * bh / bw)
+        iy = 0.02
+    axins = ax.inset_axes((ix, iy, iw, ih))
+    _show(axins, crop(img, box), vmin, vmax, cmap)
+    axins.set_xticks([])
+    axins.set_yticks([])
+    for sp in axins.spines.values():
+        sp.set_visible(True)
+        sp.set_edgecolor(ZOOM_EDGE_COLOR)
+        sp.set_linewidth(0.9)
+
+
+def _add_kernel_inset(ax, kernel: np.ndarray) -> None:
+    axins = ax.inset_axes(KERNEL_INSET_BOUNDS)
+    axins.imshow(kernel, cmap="gray" if kernel.ndim == 2 else None, interpolation="nearest")
+    axins.set_xticks([])
+    axins.set_yticks([])
+    for sp in axins.spines.values():
+        sp.set_visible(True)
+        sp.set_edgecolor("white")
+        sp.set_linewidth(0.9)
+
+
+def _stamp(ax, text: str, corner: str) -> None:
+    """`31.27 dB / 0.873` in a corner with a legibility backing box (upper-left when a zoom inset is present)."""
+    y, va = (0.035, "bottom") if corner == "lower left" else (0.965, "top")
+    ax.text(0.035, y, text, transform=ax.transAxes, fontsize=IEEE_FONT_SIZE - 1.5, va=va, ha="left", color="black",
+            bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none", "boxstyle": "round,pad=0.15"})
+
+
 def reconstruction_figure(
-    panels: Sequence[Panel],
+    panels: Union[Sequence[Panel], Sequence[PanelRow]],
     *,
     reference: Optional[Panel] = None,
+    measurement: Optional[Panel] = None,
+    kernel: Optional[Panel] = None,
+    mode: str = "image",
+    zoom: bool = False,
+    zoom_fraction: float = ZOOM_FRACTION,
+    zoom_center: tuple[float, float] = ZOOM_CENTER,
     crop_box: Optional[Box] = None,
-    error_maps: bool = False,
     error_vmax: Optional[float] = None,
     display_range: tuple[float, float] = (0.0, 1.0),
     width: Union[str, float] = "double",
     cmap: str = "gray",
-    error_cmap: str = "magma",
+    annotate: bool = True,
     show_titles: bool = True,
-    show_subtitles: bool = True,
-    panel_labels: bool = False,
-    box_color: str = BOX_COLOR,
+    error_maps: Optional[bool] = None,
 ) -> tuple[Figure, VisualSpec]:
-    """Grid: columns = [reference] + panels; rows = full view [, zoomed crop] [, error map].
+    """Lab-style qualitative grid.
 
-    All panels share `display_range`, `crop_box`, `cmap` and the error scale. Returns the figure and
-    the spec (with the resolved error_vmax) for the caption and the provenance sidecar.
+    Columns: [Reference | Measurement] (side by side for one row, stacked in one column for several rows),
+    a narrow spacer, then one column per method. Rows: one `PanelRow` per iteration budget / seed / instance.
+
+    mode="image": reconstructions, optionally with an identical yellow zoom box + lower-right magnified inset
+    on every panel (`zoom`, with `zoom_fraction`/`zoom_center`, or an explicit `crop_box`).
+    mode="error": |luminance(x) − luminance(x_ref)| per method panel on one pooled scale (99th percentile,
+    or `error_vmax`) with a bottom colour bar; the reference block still shows the images.
+    Metric stamps (panel.subtitle) go in the lower-left corner, upper-left when the zoom inset is present.
     """
-    cols: list[Panel] = ([reference] if reference is not None else []) + list(panels)
-    if not cols:
+    if error_maps is not None:  # backwards compatibility with the old flag
+        mode = "error" if error_maps else mode
+    if mode not in ("image", "error"):
+        raise ValueError("mode must be 'image' or 'error'")
+    # normalise input into rows; a plain list of Panels (possibly containing a measurement panel) is one row
+    if panels and isinstance(panels[0], PanelRow):
+        rows: list[PanelRow] = list(panels)  # type: ignore[arg-type]
+    else:
+        flat = [p for p in panels if p.kind != "measurement"]  # type: ignore[union-attr]
+        meas_in = [p for p in panels if p.kind == "measurement"]  # type: ignore[union-attr]
+        if meas_in and measurement is None:
+            measurement = meas_in[0]
+        rows = [PanelRow(list(flat))]
+    n_rows = len(rows)
+    n_methods = max((len(r.panels) for r in rows), default=0)
+    if n_methods == 0 and reference is None and measurement is None:
         raise ValueError("no panels")
-    use_err = error_maps and reference is not None
-    rows = 1 + (1 if crop_box else 0) + (1 if use_err else 0)
-    n = len(cols)
-    h0, w0 = cols[0].image.shape[:2]
-    aspect = h0 / w0
-    if crop_box:
+    if mode == "error" and reference is None:
+        raise ValueError("error mode needs a reference image")
+
+    left = [p for p in (reference, measurement) if p is not None]
+    first = (rows[0].panels[0] if rows and rows[0].panels else left[0]).image
+    h0, w0 = first.shape[:2]
+    if crop_box is not None:
         cx, cy, cw, ch = crop_box
         if cx < 0 or cy < 0 or cx + cw > w0 or cy + ch > h0 or cw <= 0 or ch <= 0:
             raise ValueError(f"crop box {crop_box} outside image {w0}x{h0}")
+        box: Optional[Box] = crop_box
+    else:
+        box = zoom_region(first.shape, zoom_fraction, zoom_center) if zoom else None
+    use_zoom = mode == "image" and box is not None
 
-    errs: dict[int, np.ndarray] = {}
-    if use_err:
-        for i, p in enumerate(cols):
-            if p.kind == "method" or p.kind == "measurement":
-                errs[i] = error_map(p.image, reference.image)
-        if error_vmax is None and errs:
-            error_vmax = float(max(np.percentile(e, 99.5) for e in errs.values())) or 1.0
+    # column layout
+    left_cols = len(left) if n_rows == 1 else (1 if left else 0)
+    ratios: list[float] = [1.0] * left_cols + ([SPACER_RATIO] if left_cols and n_methods else []) + [1.0] * n_methods
+    n_cols = len(ratios)
+    fw = VIS_WIDTHS.get(width, None) if isinstance(width, str) else float(width)
+    if fw is None:
+        fw = float(width)
+    unit = fw / sum(ratios)
+    fh = unit * n_rows * (h0 / w0) + 0.3 + (0.35 if mode == "error" else 0.0)
+    vmin, vmax = display_range
 
-    with matplotlib.rc_context(IEEE_RC):
-        fw = width_in(width)
-        title_h = 0.14 if show_titles else 0.0
-        sub_h = 0.14 if show_subtitles else 0.0
-        cbar_w = 0.18 if use_err else 0.0
-        panel_w = (fw - cbar_w) / n
-        row_hs = [panel_w * aspect] + ([panel_w * (ch / cw)] if crop_box else []) + ([panel_w * aspect] if use_err else [])
-        fh = sum(row_hs) + title_h + sub_h + 0.02 * (rows - 1) * panel_w
-        fig = Figure(figsize=(fw, fh))
-        gs = fig.add_gridspec(
-            rows, n + (1 if use_err else 0),
-            width_ratios=[1] * n + ([cbar_w / panel_w] if use_err else []),
-            height_ratios=row_hs, wspace=0.03, hspace=0.03,
-            left=0, right=1, top=1 - title_h / fh, bottom=sub_h / fh,
-        )
-        vmin, vmax = display_range
-        last_im = None
-        for i, p in enumerate(cols):
-            ax = fig.add_subplot(gs[0, i])
-            ax.imshow(p.image, cmap=cmap if p.image.ndim == 2 else None, vmin=vmin, vmax=vmax, interpolation="nearest")
-            ax.set_axis_off()
+    # pooled error scale over every method panel
+    errs: dict[tuple[int, int], np.ndarray] = {}
+    if mode == "error":
+        for ri, row in enumerate(rows):
+            ref_lum = luminance((row.reference or reference).image)  # a row's own reference wins
+            for ci, p in enumerate(row.panels):
+                if p.image.shape[:2] != ref_lum.shape:
+                    raise ValueError(f"{p.title}: shape {p.image.shape[:2]} differs from reference {ref_lum.shape}")
+                errs[(ri, ci)] = np.abs(luminance(p.image) - ref_lum)
+        if error_vmax is None:
+            pooled = np.concatenate([e.ravel() for e in errs.values()]) if errs else np.zeros(1)
+            error_vmax = max(float(np.percentile(pooled, ERROR_VMAX_PERCENTILE)), 1e-6)
+
+    with matplotlib.rc_context({**IEEE_RC, "font.size": IEEE_FONT_SIZE, "axes.titlesize": IEEE_FONT_SIZE,
+                                "axes.labelsize": IEEE_FONT_SIZE}):
+        fig = Figure(figsize=(fw, fh), dpi=300)
+        gs = fig.add_gridspec(n_rows, n_cols, width_ratios=ratios)
+
+        def draw_ref_block(ax, p: Panel) -> None:
+            _style_panel(ax)
+            _show(ax, p.image, vmin, vmax, cmap)
+            if use_zoom:
+                _add_zoom_inset(ax, p.image, box, vmin, vmax, cmap)
+            if kernel is not None and p.kind == "measurement":
+                _add_kernel_inset(ax, kernel.image)
             if show_titles:
-                t = p.title if not panel_labels else f"({chr(97 + i)}) {p.title}"
-                ax.set_title(t, fontsize=8, pad=2)
-            if crop_box:
-                ax.add_patch(Rectangle((cx - 0.5, cy - 0.5), cw, ch, fill=False, edgecolor=box_color, linewidth=0.8))
-                axc = fig.add_subplot(gs[1, i])
-                axc.imshow(crop(p.image, crop_box), cmap=cmap if p.image.ndim == 2 else None, vmin=vmin, vmax=vmax,
-                           interpolation="nearest")
-                axc.set_xticks([]); axc.set_yticks([])
-                axc.tick_params(which="both", length=0)
-                for s in axc.spines.values():
-                    s.set_edgecolor(box_color); s.set_linewidth(0.8)
-            if use_err:
-                axe = fig.add_subplot(gs[rows - 1, i])
-                if i in errs:
-                    last_im = axe.imshow(errs[i], cmap=error_cmap, vmin=0, vmax=error_vmax, interpolation="nearest")
+                ax.set_title(p.title, fontsize=IEEE_FONT_SIZE)
+            if annotate and p.subtitle:
+                _stamp(ax, p.subtitle, "upper left" if use_zoom else "lower left")
+
+        if left:
+            if n_rows == 1:
+                for i, p in enumerate(left):
+                    draw_ref_block(fig.add_subplot(gs[0, i]), p)
+            else:
+                sub = gs[:, 0].subgridspec(len(left), 1, hspace=0.15)
+                for i, p in enumerate(left):
+                    draw_ref_block(fig.add_subplot(sub[i, 0]), p)
+
+        method_axes = []
+        mappable = None
+        c0 = left_cols + (1 if left_cols and n_methods else 0)
+        for ri, row in enumerate(rows):
+            for ci, p in enumerate(row.panels):
+                ax = fig.add_subplot(gs[ri, c0 + ci])
+                _style_panel(ax)
+                method_axes.append(ax)
+                if mode == "error":
+                    mappable = ax.imshow(errs[(ri, ci)], cmap=ERROR_CMAP, vmin=0.0, vmax=error_vmax, interpolation="nearest")
                 else:
-                    axe.imshow(np.zeros_like(errs[next(iter(errs))]) if errs else np.zeros((2, 2)), cmap=error_cmap,
-                               vmin=0, vmax=error_vmax or 1, interpolation="nearest")
-                    axe.text(0.5, 0.5, "reference", ha="center", va="center", fontsize=7, color="white", transform=axe.transAxes)
-                axe.set_axis_off()
-            bottom_ax = axe if use_err else (axc if crop_box else ax)
-            if show_subtitles and p.subtitle:
-                bottom_ax.text(0.5, -0.04, p.subtitle, ha="center", va="top", fontsize=7, transform=bottom_ax.transAxes)
-        if use_err and last_im is not None:
-            cax = fig.add_subplot(gs[rows - 1, n])
-            cb = fig.colorbar(last_im, cax=cax)
-            cb.set_label("|x − x_ref|", fontsize=7)
-            cb.ax.tick_params(labelsize=6, width=0.5, length=2)
-            cb.outline.set_linewidth(0.5)
-            for j in range(rows - 1):
-                fig.add_subplot(gs[j, n]).set_axis_off()
+                    _show(ax, p.image, vmin, vmax, cmap)
+                    if use_zoom:
+                        _add_zoom_inset(ax, p.image, box, vmin, vmax, cmap)
+                if annotate and p.subtitle:
+                    _stamp(ax, p.subtitle, "upper left" if use_zoom else "lower left")
+                if ri == 0 and show_titles:
+                    ax.set_title(p.title, fontsize=IEEE_FONT_SIZE)
+                if ci == 0 and row.label:
+                    ax.set_ylabel(row.label, fontsize=IEEE_FONT_SIZE)
+
+        fig.tight_layout(pad=0.4, h_pad=0.6, w_pad=0.3)
+        if mode == "error" and mappable is not None:
+            cbar = fig.colorbar(mappable, ax=method_axes, location="bottom", shrink=0.6, aspect=40, pad=0.03)
+            cbar.set_label("| luminance error |", fontsize=IEEE_FONT_SIZE)
+            cbar.ax.tick_params(labelsize=IEEE_FONT_SIZE - 1.5)
 
     spec = VisualSpec(
-        crop_box=crop_box, display_range=display_range, error_vmax=error_vmax if use_err else None,
+        crop_box=box if use_zoom else None, display_range=display_range,
+        error_vmax=error_vmax if mode == "error" else None,
         reference=reference.path if reference else None,
-        panels=[{"title": p.title, "path": p.path, "kind": p.kind} for p in cols],
+        measurement=measurement.path if measurement else None,
+        mode=mode, kernel=kernel.path if kernel else None,
+        rows=[r.label for r in rows] if n_rows > 1 else [],
+        panels=[{"title": p.title, "path": p.path, "kind": p.kind} for p in left]
+               + [{"title": p.title, "path": p.path, "kind": p.kind, "row": r.label} for r in rows for p in r.panels],
     )
     return fig, spec
 

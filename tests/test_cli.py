@@ -123,11 +123,17 @@ def test_export_visual_cli(tmp_path):
     out = tmp_path / "vis.png"
     r = runner.invoke(app, ["export", "visual", "-e", "main-comparison", "-d", "Set12", "--seed", "0",
                             "--reference", "ground_truth.png", "--measurement", "measurement.png",
-                            "--crop", "30,30,32,32", "--error-maps", "--tex", "-o", str(out), "--db", db])
+                            "--zoom", "--tex", "-o", str(out), "--db", db])
     assert r.exit_code == 0, r.output
     assert out.exists() and out.with_suffix(".json").exists() and out.with_suffix(".tex").exists()
     assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in r.output
-    assert "figure*" in out.with_suffix(".tex").read_text()
+    assert "Yellow box" in r.output and "figure*" in out.with_suffix(".tex").read_text()
+    # error mode and rows by seed
+    r = runner.invoke(app, ["export", "visual", "-e", "main-comparison", "-d", "Set12", "--reference", "ground_truth.png",
+                            "--measurement", "measurement.png", "--mode", "error", "--rows", "seed",
+                            "-o", str(tmp_path / "err.png"), "--db", db])
+    assert r.exit_code == 0, r.output
+    assert "Rows: $seed = 0$, $seed = 1$, $seed = 2$" in r.output and "luminance" in r.output
     # DPIR (reported, no artifacts) is named as omitted, not silently dropped
     assert "not shown:" in r.output and "DPIR" in r.output and "no artifacts_dir" in r.output
     r = runner.invoke(app, ["export", "sweep-fig", "-e", "lambda-sweep", "--param", "lambda", "--metric", "psnr",

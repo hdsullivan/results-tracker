@@ -620,7 +620,7 @@ def export_comparison_fig(
 @export_app.command("visual")
 def export_visual(
     experiment: str = ExpOpt,
-    out: Path = typer.Option(..., "--out", "-o", help=".png recommended for image panels (also writes a .json sidecar)"),
+    out: Path = typer.Option(..., "--out", "-o", help=".pdf or .png (a .json provenance sidecar is written too)"),
     project: Optional[str] = ProjOpt,
     dataset: Optional[str] = typer.Option(None, "--dataset", "-d"),
     seed: Optional[int] = typer.Option(None, "--seed"),
@@ -628,38 +628,64 @@ def export_visual(
     image: str = typer.Option("reconstruction.png", "--image", help="File name inside each run's artifacts_dir."),
     reference: Optional[str] = typer.Option(None, "--reference", help="Ground-truth file name (in a run dir) or absolute path."),
     measurement: Optional[str] = typer.Option(None, "--measurement", help="Degraded input file name or path."),
+    kernel: Optional[str] = typer.Option(None, "--kernel", help="Kernel/PSF thumbnail shown on the Measurement panel."),
     method: list[str] = typer.Option([], "--method", "-m", help="Methods in display order (default: baselines first)."),
-    metric: list[str] = typer.Option(["psnr"], "--metric", help="Metrics printed under each panel."),
-    crop: Optional[str] = typer.Option(None, "--crop", help="x,y,w,h zoom box, identical for all panels."),
-    error_maps: bool = typer.Option(False, "--error-maps", help="Add |x - x_ref| row (needs --reference)."),
-    width: str = typer.Option("double", "--width", help="double (7.16 in, default for image grids) | single | inches"),
-    labels: bool = typer.Option(False, "--labels", help="(a), (b), ... panel labels"),
+    metric: list[str] = typer.Option(["psnr", "ssim"], "--metric", help="Metrics stamped on each panel."),
+    mode: str = typer.Option("image", "--mode", help="image | error (|luminance error| on a pooled scale)"),
+    zoom: bool = typer.Option(False, "--zoom", help="Yellow zoom box + lower-right magnified inset on every panel."),
+    zoom_fraction: float = typer.Option(0.30, "--zoom-fraction", help="Box side as a fraction of the short side."),
+    zoom_center: str = typer.Option("0.5,0.5", "--zoom-center", help="cx,cy in [0,1]"),
+    crop: Optional[str] = typer.Option(None, "--crop", help="Explicit x,y,w,h zoom box (overrides fraction/centre)."),
+    rows: Optional[str] = typer.Option(None, "--rows", help="One row per value of: seed | instance | config.<key>"),
+    width: str = typer.Option("double", "--width", help="double (IEEE text width 7.16 in) | single (3.5 in) | inches"),
     tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
 ):
-    """Qualitative comparison figure: reference | measurement | baselines | proposed (+ zoom, error maps)."""
+    """Qualitative comparison in the lab's IEEE style: GT | Measurement | baselines | proposed (+ zoom / error)."""
     from . import aggregate as agg
     from .export.figures import figure_tex
-    from .export.visual import build_panels, reconstruction_figure, save_visual
+    from .export.visual import build_panels, build_rows, reconstruction_figure, save_visual
 
     recs, defs = _load_experiment(experiment, project, db)
-    chosen = agg.select_runs(recs, dataset=dataset, seed=seed, instance=instance, methods=method or None)
+    pool = agg.completed(recs)
+    if dataset is not None:
+        pool = [r for r in pool if r.get("dataset") == dataset]
+    if instance is not None and rows != "instance":
+        pool = [r for r in pool if r.get("instance") == instance]
+    if seed is not None and rows != "seed":
+        pool = [r for r in pool if r.get("seed") == seed]
+    chosen = agg.select_runs(pool, methods=method or None)
     if not chosen:
         console.print("[red]no completed runs match[/]")
         raise typer.Exit(code=1)
-    for label, why in agg.omitted_methods(recs, chosen, dataset=dataset).items():
+    shown = [r for r in pool if r.get("artifacts_dir")] if rows else chosen
+    for label, why in agg.omitted_methods(recs, shown, dataset=dataset).items():
         err_console.print(f"[yellow]not shown:[/] {label} — {why}", soft_wrap=True)
-    panels, ref_panel, problems = build_panels(chosen, image, defs, metrics=metric, reference=reference, measurement=measurement)
+    if rows:
+        # reference block from any run directory; method panels come from build_rows
+        aux, ref_panel, problems = build_panels(shown[:1], image, defs, reference=reference, measurement=measurement, kernel=kernel)
+        problems = [pr for pr in problems if pr.startswith(("reference", "measurement", "kernel"))]
+        row_specs, probs = build_rows(pool, rows, image, defs, metrics=metric, methods=method or None, reference=reference)
+        problems += probs
+        panel_arg = row_specs
+    else:
+        aux, ref_panel, problems = build_panels(chosen, image, defs, metrics=metric, reference=reference,
+                                                measurement=measurement, kernel=kernel)
+        panel_arg = [p for p in aux if p.kind == "method"]
+    meas_panel = next((p for p in aux if p.kind == "measurement"), None)
+    ker_panel = next((p for p in aux if p.kind == "kernel"), None)
     for pr in problems:
         err_console.print(f"[yellow]{pr}[/]", soft_wrap=True)
-    if not panels:
+    if not panel_arg:
         raise typer.Exit(code=1)
     box = tuple(int(v) for v in crop.split(",")) if crop else None
     if box is not None and len(box) != 4:
         raise typer.BadParameter("--crop expects x,y,w,h")
-    fig, spec = reconstruction_figure(panels, reference=ref_panel, crop_box=box, error_maps=error_maps,
-                                      width=_width(width), panel_labels=labels)
-    spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image, spec.measurement = experiment, dataset, instance, seed, image, measurement
+    cx, cy = (float(v) for v in zoom_center.split(","))
+    fig, spec = reconstruction_figure(panel_arg, reference=ref_panel, measurement=meas_panel, kernel=ker_panel,
+                                      mode=mode, zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=(cx, cy),
+                                      crop_box=box, width=_width(width))
+    spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image = experiment, dataset, instance, seed, image
     for pth in save_visual(fig, out, spec):
         console.print(f"[green]wrote[/] {pth}")
     typer.echo("caption material: " + spec.caption_stub())

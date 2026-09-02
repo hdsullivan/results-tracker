@@ -34,16 +34,19 @@ def demo_exists(db=None, engine=None) -> bool:
 
 
 def _scene(dataset: str, seed: int, n: int = 96):
-    """Deterministic 'ground truth': smooth background, a bright square, a thin line and a small dot."""
+    """Deterministic 'ground truth' per dataset (smooth background, bright square, thin line, small defect).
+
+    The scene depends on the dataset only; `seed` seeds the returned generator for the noise realisation,
+    so different seeds share a ground truth like real repeated runs do."""
     import numpy as np
 
-    rng = np.random.default_rng(hash((dataset, seed)) % (2**32))
+    rng = np.random.default_rng(hash(dataset) % (2**32))
     yy, xx = np.mgrid[0:n, 0:n] / n
     gt = 0.5 + 0.3 * np.sin(2 * np.pi * (xx * 1.3 + 0.2 * rng.random())) * np.cos(2 * np.pi * (yy * 0.9 + 0.1 * rng.random()))
     gt[n // 3:2 * n // 3, n // 3:2 * n // 3] += 0.25          # square (edge recovery)
     gt[int(0.8 * n), int(0.1 * n):int(0.9 * n)] = 1.0          # thin line
     gt[int(0.2 * n):int(0.2 * n) + 3, int(0.75 * n):int(0.75 * n) + 3] = 0.0  # small dark defect
-    return np.clip(gt, 0, 1), rng
+    return np.clip(gt, 0, 1), np.random.default_rng(hash((dataset, seed)) % (2**32))
 
 
 def _write_artifacts(root: Path, method: str, dataset: str, seed: int, psnr: float, rng: random.Random) -> str:

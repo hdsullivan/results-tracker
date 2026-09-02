@@ -110,6 +110,8 @@ results-tracker export preamble            # the \usepackage lines the outputs n
 
 ![Visual comparison export](docs/screenshots/visual_figure.png)
 
+![Error-map export with one row per seed](docs/screenshots/visual_figure_error.png)
+
 ### IEEE conventions baked in
 
 Tables (following the lab's IEEE results-table checklist):
@@ -144,13 +146,18 @@ rules only, dataset column groups with cmidrules, bold best, underlined
 second). The Export page shows this rendered preview above the LaTeX, so what
 you see while browsing is what the compiled paper will show.
 
-Visual comparisons (via the lab's reconstruction-figure checklist): panel order
-reference → measurement → baselines → proposed; identical crop, display range,
-interpolation (nearest, native pixels) and colour map for every method; one
-shared error scale with a colour bar, error defined as |x − x_ref|; methods that
-were left out (e.g. a baseline with reported numbers only) are named, not
-silently dropped; a JSON sidecar records every source path and the crop box;
-the caption material states sample, crop, display range and error definition.
+Visual comparisons follow the lab's `deblur_figures.py` layout: a ground-truth /
+measurement block on the left (side by side for one row, stacked for several),
+a narrow spacer, then baselines → proposed at IEEE text width (7.16 in) with 8 pt
+serif titles and no ticks or spines; an identical yellow zoom box magnified into
+a lower-right inset on every panel (`--zoom`, `--zoom-fraction`, `--zoom-center`,
+or an explicit `--crop`); the shown image's own metrics stamped in a corner on a
+white backing; an optional kernel/PSF thumbnail on the Measurement panel
+(`--kernel`); error mode showing |luminance(x) − luminance(x_ref)| in magma on
+one pooled 99th-percentile scale with a bottom colour bar (`--mode error`); rows
+per seed, instance or config key (`--rows config.K`) sharing the left block;
+methods left out (e.g. reported-only baselines) named rather than dropped; and a
+JSON sidecar with every source path, the zoom box and the error scale.
 
 Logging convention for visuals: give each run an `artifacts_dir` containing the
 reconstruction under the *same file name* for every method (e.g.

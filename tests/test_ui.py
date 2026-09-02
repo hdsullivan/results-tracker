@@ -137,9 +137,13 @@ def test_visual_page(demo_db):
     at = _run("visual")
     assert not at.error
     caption = "\n".join(c.value for c in at.caption)
-    assert "shared display range" in caption
+    assert "IEEE text width" in caption
     body = "\n".join(m.value for m in at.markdown) + "\n".join(str(t.value) for t in at.text)
-    assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in body
+    assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in body and "Yellow box" in body
+    # error-map mode
+    at.radio[0].set_value("Error maps").run()
+    assert not at.exception and not at.error
+    assert "luminance" in "\n".join(m.value for m in at.markdown)
     # DPIR has no artifacts -> warned, not crashed
     assert any("DPIR" in w.value for w in at.warning)
     # grayscale + labels toggles re-render
