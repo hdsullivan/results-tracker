@@ -91,8 +91,11 @@ def test_sweep_page(demo_db):
     at = _run("sweep")
     md = "\n".join(m.value for m in at.markdown)
     assert "<th>lambda</th>" in md and "<b>" in md  # best value bolded
+    assert "<b>Fig. 1.</b>" in md and "stays within" in md  # caption with the sensitivity statement
+    assert "TABLE II" in md and "plateau" in md  # sensitivity table
     caption = "\n".join(c.value for c in at.caption)
     assert "best lambda = **0.1**" in caption
+    assert any("\\toprule" in c.value for c in at.code)  # LaTeX expander
     assert not at.warning
 
 
@@ -104,6 +107,8 @@ def test_sweep_page_heatmap_mode(demo_db):
     assert not at.exception
     caption = "\n".join(c.value for c in at.caption)
     assert "best at lambda=0.1" in caption
+    md = "\n".join(m.value for m in at.markdown)
+    assert "<b>Fig. 1.</b>" in md and 'class="ieee-paper"' in md and "<b>31.26" in md  # paper-look grid with best bold
 
 
 def test_ablation_page(demo_db):

@@ -372,6 +372,43 @@ def _sort_key(x: Any) -> tuple:
 
 
 @dataclass
+class Plateau:
+    """Which swept values are 'as good as the best' within a tolerance."""
+
+    best: Any
+    best_stat: Stat
+    tolerance: float
+    members: list[Any]  # swept values whose mean is within tolerance of the best mean (sorted)
+    worst: Any
+    worst_stat: Stat
+
+    @property
+    def span(self) -> tuple[Any, Any]:
+        return (self.members[0], self.members[-1])
+
+    @property
+    def drop(self) -> float:
+        """Best mean minus worst mean, as a positive 'cost of a bad choice'."""
+        return abs(self.best_stat.mean - self.worst_stat.mean)
+
+
+def sweep_plateau(series: Sequence[tuple[Any, Stat]], higher_is_better: bool = True,
+                  tolerance: Optional[float] = None) -> Optional[Plateau]:
+    """Sensitivity summary of one sweep line. Default tolerance = std of the best point (0 -> 1% of the range)."""
+    if not series:
+        return None
+    pick = max if higher_is_better else min
+    best_x, best_st = pick(series, key=lambda t: t[1].mean)
+    worst_x, worst_st = (min if higher_is_better else max)(series, key=lambda t: t[1].mean)
+    if tolerance is None:
+        rng = abs(best_st.mean - worst_st.mean)
+        tolerance = best_st.std if best_st.std > 0 else 0.01 * (rng if rng > 0 else abs(best_st.mean) or 1.0)
+    members = [x for x, st in series if (best_st.mean - st.mean if higher_is_better else st.mean - best_st.mean) <= tolerance]
+    members.sort(key=_sort_key)
+    return Plateau(best_x, best_st, tolerance, members, worst_x, worst_st)
+
+
+@dataclass
 class SweepGrid:
     xs: list[Any]
     ys: list[Any]

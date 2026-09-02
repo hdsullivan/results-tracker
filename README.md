@@ -30,7 +30,7 @@ non-trivial:
 | Page | What you see |
 |---|---|
 | ![](docs/screenshots/overview.png) | **Overview** — experiments with run counts, methods, datasets and metrics; a "results at a glance" table that reads each experiment's headline off the data (best method, best swept value, costliest ablation); recent runs. All in the paper look. |
-| ![](docs/screenshots/sweep.png) | **Sweep** — PSNR vs λ on a log axis, ± std band, best value ringed. The diverged run shows up as n = 2, not as a silently smoother curve. |
+| ![](docs/screenshots/sweep.png) | **Sweep** — PSNR vs λ on a log axis, ± std band, best value ringed, with an IEEE-style caption that states the plateau (the range of values within one std of the best) and the cost of the worst choice; a sensitivity table; the booktabs table; LaTeX and a paper-style PDF in expanders. The diverged run shows up as n = 2, not as a silently smoother curve. |
 | ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts. |
 | ![](docs/screenshots/visual.png) | **Visual** — qualitative comparison in the lab's figure layout: ground truth, measurement, baselines, proposed, with the same zoom inset or one error-map scale on every panel and metrics stamped per panel. Below it an IEEE-style caption, a panel-metrics table that recomputes PSNR from the displayed images and flags any gap to the logged numbers, and the source files. |
 | ![](docs/screenshots/run.png) | **Run detail** — config, metrics, config diff against any run, and the run's artifacts rendered as a lab-style figure strip (ground truth, measurement, this run stamped with its metrics, optionally the compared run), with zoom inset or error-map mode and PDF download. |
@@ -73,7 +73,9 @@ Pages:
   instance, seed, or any config key.
 - **Sweep** — metric vs one swept config key (lines with ± std band, best value
   marked, log axis when the values span a decade) or vs two keys (heatmap).
-  One line per method or dataset if you ask for it.
+  One line per method or dataset if you ask for it. A sensitivity table and
+  caption report the plateau: the parameter range whose mean stays within one
+  std of the best, i.e. how forgiving the choice of default is.
 - **Ablation** — every config variant vs the full model: which settings changed
   (✓ / ✗ / value), mean ± std with Δ (absolute or %), and a bar chart of the
   deltas. The base is the run tagged `base`, else the most common config, or

@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from results_tracker import aggregate as agg
 
 
@@ -188,3 +190,17 @@ def test_rank_values_ties():
 def test_method_labels():
     recs = [{"method": "TV", "method_label": "TV [1]"}, {"method": "Ours", "method_label": "Ours"}, {"method": None}]
     assert agg.method_labels(recs) == {"TV": "TV [1]", "Ours": "Ours"}
+
+
+def test_sweep_plateau():
+    series = [(0.01, agg.summarize([29.4, 29.5])), (0.03, agg.summarize([30.8, 30.9])),
+              (0.1, agg.summarize([31.2, 31.3])), (0.3, agg.summarize([31.15, 31.25])), (1.0, agg.summarize([29.6, 29.7]))]
+    pl = agg.sweep_plateau(series, higher_is_better=True)
+    assert pl.best == 0.1 and pl.worst == 0.01
+    assert pl.members == [0.1, 0.3] and pl.span == (0.1, 0.3)  # 0.3 within one std (~0.07) of the best
+    assert pl.drop == pytest.approx(31.25 - 29.45)
+    pl2 = agg.sweep_plateau(series, higher_is_better=True, tolerance=0.5)
+    assert pl2.members == [0.03, 0.1, 0.3]
+    lower = agg.sweep_plateau([(1, agg.summarize([0.2])), (2, agg.summarize([0.1])), (3, agg.summarize([0.3]))], higher_is_better=False)
+    assert lower.best == 2 and lower.members == [2] and lower.tolerance == pytest.approx(0.002)  # std 0 -> 1% of range
+    assert agg.sweep_plateau([]) is None

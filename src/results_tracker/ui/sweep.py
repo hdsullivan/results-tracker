@@ -7,9 +7,12 @@ import io
 import pandas as pd
 import streamlit as st
 
+from ..export.figures import figure_bytes, figure_tex, sweep_figure, to_grayscale_png
+from ..export.latex import sweep_latex
+
 from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
-from .tables import sweep_html
+from .tables import figure_caption_html, generic_html, sweep_html
 from .common import fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db
 
 GROUP_KEYS = ["method", "dataset", "instance"]
@@ -62,12 +65,27 @@ def render() -> None:
                    f"best at {param_x}={best[0]}, {param_y}={best[1]}: {grid.cells[best].format(fmt)}")
         st.plotly_chart(sweep_heatmap(grid.xs, grid.ys, grid.matrix(), param_x, param_y, metric, fmt, hib, best),
                         theme=None, width="stretch")
+        ns = sorted({c.n for c in grid.cells.values()})
+        n_txt = f"n = {ns[0]}" if len(ns) == 1 else f"n = {ns[0]}–{ns[-1]}"
+        st.markdown(figure_caption_html(
+            f"Mean {metric} over {n_txt} runs per cell as a function of {param_x} (columns) and {param_y} (rows); "
+            f"darker is {'better' if hib else 'better (lower)'}. Best cell outlined: {param_x} = {best[0]}, {param_y} = {best[1]} "
+            f"({grid.cells[best].format(fmt)}).", number=1), unsafe_allow_html=True)
+        headers = [f"{param_y} \\ {param_x}"] + [f"{x:g}" if isinstance(x, float) else str(x) for x in grid.xs]
+        rows = []
+        for y in grid.ys:
+            cells = []
+            for x in grid.xs:
+                c = grid.cells.get((x, y))
+                txt = "—" if c is None else c.format(fmt)
+                cells.append(f"<b>{txt}</b>" if (x, y) == best else txt)
+            rows.append([f"{y:g}" if isinstance(y, float) else str(y)] + cells)
+        st.markdown(generic_html(headers, rows, number=1, left_cols=1, raw_html_cols=list(range(1, len(headers))),
+                                 caption=f"{metric} (mean ± std) over {param_x} × {param_y}. Best in bold."), unsafe_allow_html=True)
         df = pd.DataFrame(
             [{param_y: y, **{str(x): (grid.cells[(x, y)].mean if (x, y) in grid.cells else None) for x in grid.xs}}
              for y in grid.ys]
         )
-        with st.expander("Table (means)"):
-            st.dataframe(df, width="stretch", hide_index=True)
         st.download_button("Download CSV", df.to_csv(index=False), file_name=f"{experiment}-{param_x}-{param_y}.csv", mime="text/csv")
         return
 
@@ -92,7 +110,53 @@ def render() -> None:
     st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best),
                     theme=None, width="stretch")
 
-    st.markdown(sweep_html(series, param_x, metric, defs), unsafe_allow_html=True)
+    # sensitivity: how flat is the optimum?
+    plateaus = {g: agg.sweep_plateau(s_, hib) for g, s_ in series.items()}
+    ns = sorted({st_.n for s_ in series.values() for _, st_ in s_})
+    n_txt = f"n = {ns[0]}" if len(ns) == 1 else f"n = {ns[0]}–{ns[-1]}"
+    parts = [f"{metric}{f' ({unit})' if unit else ''} as a function of {param_x}; mean ± std over {n_txt} runs per value"
+             + ("; log axis" if log_x else "") + "."]
+    for g, pl in plateaus.items():
+        if pl is None:
+            continue
+        who = (" / ".join(map(str, g)) + ": ") if g else ""
+        lo, hi = pl.span
+        within = f"within {pl.tolerance:{fmt}} of the best" if pl.tolerance else "at the best"
+        parts.append(f"{who}best {param_x} = {pl.best} ({pl.best_stat.format(fmt)}); {metric} stays {within} for "
+                     + (f"{param_x} ∈ [{lo}, {hi}]" if lo != hi else f"{param_x} = {lo} only")
+                     + f"; the worst value ({param_x} = {pl.worst}) costs {pl.drop:{fmt}}.")
+    st.markdown(figure_caption_html(" ".join(parts), number=1), unsafe_allow_html=True)
+
+    st.markdown(sweep_html(series, param_x, metric, defs, number=1), unsafe_allow_html=True)
+
+    st.subheader("Sensitivity")
+    srows = []
+    for g, pl in plateaus.items():
+        if pl is None:
+            continue
+        lo, hi = pl.span
+        srows.append([" / ".join(map(str, g)) if g else metric, str(pl.best), pl.best_stat.format(fmt),
+                      f"[{lo}, {hi}]" if lo != hi else str(lo), f"{len(pl.members)} / {len(series[g])}",
+                      f"{pl.worst} ({pl.drop:{fmt}} worse)"])
+    st.markdown(generic_html(["Line", f"best {param_x}", f"{metric} at best", "plateau", "values on plateau", "worst value"],
+                             srows, number=2, left_cols=1,
+                             caption=f"Sensitivity to {param_x}: the plateau is the range of values whose mean {metric} is within one "
+                                     f"std of the best (or 1% of the range when std is 0). A wide plateau means the choice is forgiving."),
+                unsafe_allow_html=True)
+
+    with st.expander("LaTeX (booktabs table + figure snippet)"):
+        st.code(sweep_latex(series, param_x, metric, defs), language="latex")
+        st.code(figure_tex(f"figures/{experiment}-{param_x}-{metric}.pdf", label=f"fig:{experiment}-{param_x}", width="single"),
+                language="latex")
+        st.caption("More options (captions, labels, widths) on the Export page.")
+    with st.expander("Paper figure (matplotlib, IEEE style)"):
+        pf = sweep_figure(series, param_x, metric, ylabel=f"{metric} ({unit})" if unit else metric, best_by_group=best,
+                          band=show_band, log_x=log_x, width="single")
+        g1, g2 = st.columns([3, 1])
+        gray = g2.checkbox("Grayscale", value=False, key="sweep_gray")
+        png = figure_bytes(pf, "png", dpi=200)
+        g1.image(to_grayscale_png(png) if gray else png)
+        g2.download_button("Download PDF", figure_bytes(pf, "pdf"), file_name=f"{experiment}-{param_x}-{metric}.pdf", mime="application/pdf")
 
     rows = []
     for g, s in series.items():
