@@ -7,7 +7,7 @@ them in a Streamlit GUI, export booktabs LaTeX tables and IEEE-sized matplotlib 
 
 ```bash
 source .venv/bin/activate            # or use .venv/bin/<tool> directly
-pytest -q                            # 87 tests, ~5 s
+pytest -q                            # 88 tests, ~5 s
 results-tracker demo --db demo.db --reset --artifacts demo_artifacts
 results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back to a free port)
 results-tracker export table -e main-comparison --db demo.db

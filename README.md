@@ -33,7 +33,7 @@ non-trivial:
 | ![](docs/screenshots/sweep.png) | **Sweep** — PSNR vs λ on a log axis, ± std band, best value ringed. The diverged run shows up as n = 2, not as a silently smoother curve. |
 | ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts. |
 | ![](docs/screenshots/visual.png) | **Visual** — qualitative comparison: reference, measurement, baselines, proposed. One crop box, one display range and one error-map scale for every method; metrics under each panel; provenance JSON with every source path. |
-| ![](docs/screenshots/run.png) | **Run detail** — config, metrics, config diff against any run, reconstruction and error map from disk. |
+| ![](docs/screenshots/run.png) | **Run detail** — config, metrics, config diff against any run, and the run's artifacts rendered as a lab-style figure strip (ground truth, measurement, this run stamped with its metrics, optionally the compared run), with zoom inset or error-map mode and PDF download. |
 | ![](docs/screenshots/export.png) | **Export** — booktabs LaTeX with a provenance comment, ready to paste; the comparison export first audits the grid (7/8 cells present, 1 missing); figures download as vector PDF. |
 
 Screenshots are regenerated with `python scripts/screenshot.py` (needs Chrome).
@@ -78,7 +78,9 @@ Pages:
   deltas. The base is the run tagged `base`, else the most common config, or
   any run you pick.
 - **Run detail** — config, metrics, config and metric diff against any other
-  run, image gallery and log tail from the run's `artifacts_dir`.
+  run; the run's `artifacts_dir` rendered as a lab-style figure strip (ground
+  truth, measurement, this run and optionally the compared run, zoom inset or
+  error map) plus the remaining images and a log tail.
 - **Export** — LaTeX tables (comparison, ablation, sweep) and IEEE figures
   (sweep lines, ablation deltas, grouped comparison bars) with preview and
   download. The comparison export audits the grid first and lists missing or

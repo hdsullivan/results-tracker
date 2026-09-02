@@ -10,7 +10,7 @@ from results_tracker import aggregate as agg  # noqa: E402
 from results_tracker.export.figures import figure_tex, ieee_preamble, to_grayscale_png, figure_bytes  # noqa: E402
 from results_tracker.export.visual import (  # noqa: E402
     IEEE_TEXTWIDTH_IN, Panel, PanelRow, build_panels, build_rows, crop, error_map, list_image_files, load_image,
-    luminance, psnr, reconstruction_figure, save_visual, zoom_region,
+    guess_roles, luminance, psnr, reconstruction_figure, save_visual, zoom_region,
 )
 
 DEFS = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"}, "ssim": {"unit": "", "higher_is_better": True, "fmt": ".3f"}}
@@ -197,3 +197,13 @@ def test_rows_use_their_own_reference_for_error_maps(art, tmp_path):
     _, recs = art
     rws, _ = build_rows(recs[:2], "seed", "reconstruction.png", DEFS, reference="ground_truth.png")
     assert rws[0].reference is not None and rws[0].reference.kind == "reference"
+
+
+def test_guess_roles():
+    files = ["error_map.png", "ground_truth.png", "measurement.png", "reconstruction.png", "psf.png"]
+    r = guess_roles(files)
+    assert r == {"reconstruction": "reconstruction.png", "reference": "ground_truth.png",
+                 "measurement": "measurement.png", "kernel": "psf.png"}
+    r2 = guess_roles(["out/x_hat.png", "clean.png"])
+    assert r2["reconstruction"] == "out/x_hat.png" and r2["reference"] == "clean.png" and r2["measurement"] is None
+    assert guess_roles(["a.png"])["reconstruction"] == "a.png" and guess_roles([])["reconstruction"] is None

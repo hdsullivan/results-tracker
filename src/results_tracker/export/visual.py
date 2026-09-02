@@ -81,6 +81,29 @@ def list_image_files(dirs: Iterable[Optional[str]]) -> list[str]:
     return sorted(out)
 
 
+ROLE_KEYS = {
+    "reconstruction": ("recon", "restored", "output", "estimate", "x_hat", "xhat"),
+    "reference": ("ground_truth", "gt", "reference", "clean", "target"),
+    "measurement": ("measurement", "input", "degraded", "noisy", "observ", "blurred", "sinogram"),
+    "kernel": ("kernel", "psf"),
+}
+
+
+def guess_roles(files: Sequence[str]) -> dict[str, Optional[str]]:
+    """Guess which artifact file plays which role from its name (first match wins)."""
+    out: dict[str, Optional[str]] = {}
+    taken: set[str] = set()
+    for role, keys in ROLE_KEYS.items():
+        hit = next((f for f in files if f not in taken and any(k in Path(f).stem.lower() for k in keys)), None)
+        out[role] = hit
+        if hit:
+            taken.add(hit)
+    if out["reconstruction"] is None:
+        rest = [f for f in files if f not in taken]
+        out["reconstruction"] = rest[0] if rest else (files[0] if files else None)
+    return out
+
+
 # --------------------------------------------------------------------------- panels
 
 @dataclass

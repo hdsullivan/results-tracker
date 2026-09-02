@@ -7,20 +7,21 @@ optional rows (seed / instance / a config key such as K) and an optional kernel 
 from __future__ import annotations
 
 import json
+from typing import Optional
 from dataclasses import asdict
 
 import streamlit as st
 
 from .. import aggregate as agg
 from ..export.figures import figure_bytes, figure_tex, to_grayscale_png
-from ..export.visual import ZOOM_FRACTION, build_panels, build_rows, list_image_files, reconstruction_figure
+from ..export.visual import ZOOM_FRACTION, build_panels, build_rows, guess_roles, list_image_files, reconstruction_figure
 from .common import load_metric_defs, load_records, select_project_experiment, sidebar_db
 
 NONE = "— none —"
 
 
-def _pick(files: list[str], keys: tuple[str, ...]) -> str:
-    return next((f for f in files if any(k in f.lower() for k in keys)), NONE)
+def _opt(files: list[str], role_file: Optional[str]) -> int:
+    return ([NONE] + files).index(role_file) if role_file in files else 0
 
 
 def render() -> None:
@@ -57,10 +58,11 @@ def render() -> None:
             st.warning("No image files found in the artifact folders.")
             return
         st.markdown("**Images**")
-        image = st.selectbox("Reconstruction file", files, index=files.index(_pick(files, ("recon",)) if _pick(files, ("recon",)) != NONE else files[0]))
-        reference = st.selectbox("Ground truth", [NONE] + files, index=([NONE] + files).index(_pick(files, ("ground_truth", "gt", "reference", "clean"))))
-        measurement = st.selectbox("Measurement / input", [NONE] + files, index=([NONE] + files).index(_pick(files, ("measurement", "input", "degraded", "noisy", "observ"))))
-        kernel = st.selectbox("Kernel / PSF thumbnail", [NONE] + files, index=([NONE] + files).index(_pick(files, ("kernel", "psf"))))
+        roles = guess_roles(files)
+        image = st.selectbox("Reconstruction file", files, index=files.index(roles["reconstruction"]) if roles["reconstruction"] in files else 0)
+        reference = st.selectbox("Ground truth", [NONE] + files, index=_opt(files, roles["reference"]))
+        measurement = st.selectbox("Measurement / input", [NONE] + files, index=_opt(files, roles["measurement"]))
+        kernel = st.selectbox("Kernel / PSF thumbnail", [NONE] + files, index=_opt(files, roles["kernel"]))
         metrics_all = agg.metric_names(pool)
         metrics = st.multiselect("Metrics stamped on panels", metrics_all, default=[m for m in metrics_all if m in ("psnr", "ssim")][:2])
 

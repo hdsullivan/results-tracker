@@ -71,6 +71,14 @@ def test_run_detail_page(demo_db, tmp_path):
     assert any("Config" in h.value for h in at.subheader)
     # pick another run to compare against and check a diff / metric table renders
     assert len(at.dataframe) >= 1
+    # artifacts render as the lab-style figure strip (this run + compared run)
+    caption = "\n".join(c.value for c in at.caption)
+    assert "IEEE text width" in caption and "logged metrics" in caption
+    assert not at.error and not at.exception
+    # error-map mode
+    [r for r in at.radio if r.label == "Mode"][0].set_value("Error map").run()
+    assert not at.exception and not at.error
+    assert "error scale" in "\n".join(c.value for c in at.caption)
 
 
 def test_sweep_page(demo_db):
