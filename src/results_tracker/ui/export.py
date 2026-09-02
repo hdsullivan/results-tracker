@@ -7,15 +7,21 @@ import streamlit as st
 from .. import aggregate as agg
 from ..export.csv import runs_csv
 from ..export.figures import ablation_figure, comparison_figure, figure_bytes, figure_tex, ieee_preamble, sweep_figure, to_grayscale_png
+from typing import Optional
+
 from ..export.latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
 from .common import db_path, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .tables import ablation_html, comparison_html, sweep_html
 
 KINDS = ["Comparison table (LaTeX)", "Ablation table (LaTeX)", "Sweep table (LaTeX)",
          "Sweep figure", "Ablation figure", "Comparison figure", "Runs (CSV)"]
 PREFERRED = {"comparison": 0, "ablation": 1, "sweep": 3}
 
 
-def _latex_block(tex: str, filename: str) -> None:
+def _latex_block(tex: str, filename: str, preview: Optional[str] = None) -> None:
+    if preview:
+        st.markdown("**Preview** (how it will look once compiled)")
+        st.markdown(preview, unsafe_allow_html=True)
     st.code(tex, language="latex")
     st.download_button("Download .tex", tex, file_name=filename, mime="text/x-tex")
     with st.expander("Preamble packages"):
@@ -100,7 +106,9 @@ def render() -> None:
                                underline_second=underline,
                                row_labels=agg.method_labels(recs) if row_key == "method" else None,
                                audit=audit, provenance=prov)
-        _latex_block(tex, f"{stem}-table.tex")
+        _latex_block(tex, f"{stem}-table.tex", preview=comparison_html(
+            pt, defs, caption=caption, show_std=std != "none", underline_second=underline,
+            row_labels=agg.method_labels(recs) if row_key == "method" else None))
 
     elif kind == "Ablation table (LaTeX)":
         metrics = st.multiselect("Metrics", metrics_all, default=metrics_all)
@@ -116,7 +124,8 @@ def render() -> None:
             st.warning("No run matches the base config; deltas will be missing. Tag a run `base`.")
         tex = ablation_latex(rows, metrics, defs, caption=caption, label=label, env=env, font=font, std=std,
                              show_delta=show_delta, setting_columns=settings, provenance=prov)
-        _latex_block(tex, f"{stem}-ablation.tex")
+        _latex_block(tex, f"{stem}-ablation.tex", preview=ablation_html(
+            rows, metrics, defs, caption=caption, show_std=std != "none", setting_columns=settings))
 
     elif kind in ("Sweep table (LaTeX)", "Sweep figure"):
         all_keys = sorted({k for r in recs for k in agg.flatten(r["config"])})
@@ -138,7 +147,8 @@ def render() -> None:
             env, std, font, label, caption = _common_table_opts()
             tex = sweep_latex(series, param, metric, defs, caption=caption, label=label, env=env, font=font, std=std,
                               param_label=param_label, provenance=prov)
-            _latex_block(tex, f"{stem}-{param}.tex")
+            _latex_block(tex, f"{stem}-{param}.tex", preview=sweep_html(
+                series, param, metric, defs, caption=caption, show_std=std != "none", param_label=param_label))
         else:
             unit = defs.get(metric, {}).get("unit", "")
             c1, c2, c3 = st.columns(3)

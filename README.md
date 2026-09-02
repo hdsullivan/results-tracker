@@ -138,8 +138,11 @@ lives in the GUI; `--tex` writes the `figure`/`figure*` environment.
 The interactive Plotly charts in the GUI use the same look (white paper
 background, serif text, boxed axes with inward mirrored ticks, no grid,
 bordered top legend, tab10 colours, shaded bands, ringed best value) with hover
-tooltips on top, so what you see while browsing is what the paper export will
-look like.
+tooltips on top, and the results tables are rendered in the IEEEtran look
+(white paper card, Times serif, small-caps "TABLE I" caption above, booktabs
+rules only, dataset column groups with cmidrules, bold best, underlined
+second). The Export page shows this rendered preview above the LaTeX, so what
+you see while browsing is what the compiled paper will show.
 
 Visual comparisons (via the lab's reconstruction-figure checklist): panel order
 reference → measurement → baselines → proposed; identical crop, display range,

@@ -9,33 +9,10 @@ import streamlit as st
 
 from .. import aggregate as agg
 from .charts import comparison_bars
+from .tables import comparison_html, flat_html
 from .common import fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db
 
 BASE_KEYS = ["method", "dataset", "instance", "seed"]
-
-
-def markdown_table(ct: agg.ComparisonTable, defs: dict, show_std: bool, show_n: bool) -> str:
-    head = [" / ".join(ct.group_by)] + [f"{m} {'↑' if ct.higher_is_better[m] else '↓'}" for m in ct.metrics]
-    if show_n:
-        head.append("n")
-    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-    for row in ct.rows:
-        cells = [ct.row_label(row)]
-        for m in ct.metrics:
-            st_ = ct.cells[row].get(m)
-            if st_ is None:
-                cells.append("—")
-                continue
-            s = st_.format(fmt_for(defs, m), with_std=show_std)
-            if ct.is_best(row, m):
-                s = f"**{s}**"
-            elif ct.is_second(row, m):
-                s = f"<u>{s}</u>"
-            cells.append(s)
-        if show_n:
-            cells.append(str(max((c.n for c in ct.cells[row].values() if c), default=0)))
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
 
 
 def to_frame(ct: agg.ComparisonTable) -> pd.DataFrame:
@@ -88,7 +65,14 @@ def render() -> None:
 
     n_runs = len(pool)
     st.caption(f"{experiment} · {n_runs} runs · mean ± std over everything not in the row key · **bold** best, <u>underlined</u> second", unsafe_allow_html=True)
-    st.markdown(markdown_table(ct, defs, show_std, show_n), unsafe_allow_html=True)
+    if len(group_by) <= 2:
+        pt = agg.pivot_table(pool, group_by[0], group_by[1] if len(group_by) == 2 else None, metrics=metrics,
+                             higher_is_better=hib_map(defs))
+        st.markdown(comparison_html(pt, defs, show_std=show_std, show_n=show_n,
+                                    row_labels=agg.method_labels(pool) if group_by[0] == "method" else None),
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(flat_html(ct, defs, show_std=show_std, show_n=show_n), unsafe_allow_html=True)
 
     df = to_frame(ct)
     buf = io.StringIO()

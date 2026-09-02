@@ -9,6 +9,7 @@ import streamlit as st
 
 from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
+from .tables import sweep_html
 from .common import fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db
 
 GROUP_KEYS = ["method", "dataset", "instance"]
@@ -91,21 +92,7 @@ def render() -> None:
     st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best),
                     theme=None, width="stretch")
 
-    # table: rows = x values, one column per group
-    cols = {(" / ".join(map(str, g)) if g else metric): dict(s) for g, s in series.items()}
-    lines = ["| " + param_x + " | " + " | ".join(cols) + " |", "|---|" + "---|" * len(cols)]
-    for x in xs_all:
-        cells = []
-        for gname, lookup in cols.items():
-            st_ = lookup.get(x)
-            if st_ is None:
-                cells.append("—")
-            else:
-                s = st_.format(fmt)
-                g = next(g for g in series if (" / ".join(map(str, g)) if g else metric) == gname)
-                cells.append(f"**{s}**" if best[g] == x else s)
-        lines.append(f"| {x} | " + " | ".join(cells) + " |")
-    st.markdown("\n".join(lines))
+    st.markdown(sweep_html(series, param_x, metric, defs), unsafe_allow_html=True)
 
     rows = []
     for g, s in series.items():

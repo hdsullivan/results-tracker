@@ -42,13 +42,17 @@ def test_comparison_page_table_and_chart(demo_db):
     assert not at.exception
     md = "\n".join(m.value for m in at.markdown)
     assert "TV" in md and "PnP-BM3D" in md and "Ours" in md
-    assert "**" in md  # something is bolded as best
-    assert "psnr" in md
-    # group by method and dataset -> 6 rows
+    assert "<b>" in md and 'class="ieee-paper"' in md  # IEEE-look table with a bolded best
+    assert "PSNR (dB) ↑" in md
+    # group by method and dataset -> dataset column groups (cmidrules)
     at.sidebar.multiselect[0].set_value(["method", "dataset"]).run()
     assert not at.exception
     md = "\n".join(m.value for m in at.markdown)
-    assert "Ours / Set12" in md and "TV / CBSD68" in md
+    assert "<span>Set12</span>" in md and "<span>CBSD68</span>" in md
+    # three keys -> flat layout
+    at.sidebar.multiselect[0].set_value(["method", "dataset", "seed"]).run()
+    assert not at.exception
+    assert "Ours / Set12 / 0" in "\n".join(m.value for m in at.markdown)
 
 
 def test_comparison_page_empty_db(tmp_path, monkeypatch):
@@ -72,7 +76,7 @@ def test_run_detail_page(demo_db, tmp_path):
 def test_sweep_page(demo_db):
     at = _run("sweep")
     md = "\n".join(m.value for m in at.markdown)
-    assert "lambda" in md and "**" in md  # best value bolded
+    assert "<th>lambda</th>" in md and "<b>" in md  # best value bolded
     caption = "\n".join(c.value for c in at.caption)
     assert "best lambda = **0.1**" in caption
     assert not at.warning
@@ -91,14 +95,14 @@ def test_sweep_page_heatmap_mode(demo_db):
 def test_ablation_page(demo_db):
     at = _run("ablation")
     md = "\n".join(m.value for m in at.markdown)
-    assert "**full model**" in md and "w/o adaptive" in md and "✗" in md
+    assert "<td>Full model</td>" in md and "w/o adaptive" in md and "<td>×</td>" in md
     caption = "\n".join(c.value for c in at.caption)
     assert "Largest drop" in caption and "w/o adaptive" in caption
     # relative deltas
     [cb for cb in at.sidebar.checkbox if "%" in cb.label][0].check().run()
     assert not at.exception
     md = "\n".join(m.value for m in at.markdown)
-    assert "%)" in md
+    assert "%)</small>" in md
 
 
 def test_export_page_latex_and_figure(demo_db):
@@ -126,6 +130,7 @@ def test_export_page_comparison_audit(demo_db):
     assert "DPIR" in "\n".join(c.value for c in at.code)
     code = "\n".join(c.value for c in at.code)
     assert "\\multicolumn{3}{c}{Set12}" in code and "TV [1]" in code
+    assert any('class="ieee-paper"' in m.value for m in at.markdown)  # rendered preview above the LaTeX
 
 
 def test_visual_page(demo_db):

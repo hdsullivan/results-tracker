@@ -11,6 +11,7 @@ from .. import aggregate as agg
 from .charts import ablation_deltas
 from .common import fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db
 from .run_detail import run_label
+from .tables import ablation_html
 
 AUTO = "auto (run tagged 'base', else most common config)"
 
@@ -52,33 +53,8 @@ def render() -> None:
     st.caption(f"{experiment} · {len(recs)} runs · {len(rows)} variants · {len(keys)} ablated settings · "
                f"**bold** = full model")
 
-    def fmt_delta(r: agg.AblationRow, m: str) -> str:
-        if r.is_base or r.delta.get(m) is None:
-            return ""
-        f = fmt_for(defs, m)
-        if relative:
-            rd = r.rel_delta(m)
-            return "" if rd is None else f" ({rd * 100:+.1f}%)"
-        return f" ({r.delta[m]:+{f}})"
-
-    head = ["variant"] + keys + [f"{m} {'↑' if hib.get(m, True) else '↓'} (Δ)" for m in metrics] + ["n"]
-    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-    for r in rows:
-        label = f"**{r.label}**" if r.is_base else r.label
-        knob_cells = []
-        for k in keys:
-            if k in r.diff:
-                v = r.diff[k][1]
-                knob_cells.append("✗" if v is False else ("✓" if v is True else str(v)))
-            else:
-                knob_cells.append("·")
-        metric_cells = []
-        for m in metrics:
-            st_ = r.stats.get(m)
-            metric_cells.append("—" if st_ is None else st_.format(fmt_for(defs, m)) + fmt_delta(r, m))
-        lines.append("| " + " | ".join([label] + knob_cells + metric_cells + [str(r.n)]) + " |")
-    st.markdown("\n".join(lines))
-    st.caption("· = same as full model · ✓/✗ = switched on/off · other values shown literally")
+    st.markdown(ablation_html(rows, metrics, defs, relative=relative), unsafe_allow_html=True)
+    st.caption("· settings shown per variant: ✓ on, × off, other values literally")
 
     # --- chart
     st.subheader("Effect of each change")
