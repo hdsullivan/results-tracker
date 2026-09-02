@@ -30,7 +30,7 @@ def test_overview_page(demo_db):
     labels = [m.label for m in at.metric]
     assert "Projects" in labels and "Runs" in labels
     values = {m.label: m.value for m in at.metric}
-    assert values["Runs"] == "45"
+    assert values["Runs"] == "46"
     assert len(at.dataframe) == 2
 
 
@@ -121,6 +121,8 @@ def test_export_page_comparison_audit(demo_db):
     exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
     assert not at.exception
     assert at.sidebar.radio[0].value == "Comparison table (LaTeX)"
-    assert any("6/6 cells present" in s.value for s in at.success)
+    # DPIR is reported on Set12 only -> one missing cell, flagged before the LaTeX
+    assert any("7/8 cells present" in w.value and "1 missing" in w.value for w in at.warning)
+    assert "DPIR" in "\n".join(c.value for c in at.code)
     code = "\n".join(c.value for c in at.code)
     assert "\\multicolumn{3}{c}{Set12}" in code and "TV [1]" in code

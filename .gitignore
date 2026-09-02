@@ -8,3 +8,4 @@ build/
 *.db
 *.db-journal
 .DS_Store
+demo_artifacts/

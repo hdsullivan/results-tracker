@@ -18,6 +18,22 @@ from .api import define_metric, get_metric_defs, get_runs, list_experiments, lis
 from .db import get_engine, resolve_db_path
 
 app = typer.Typer(help="Track paper results: comparisons, sweeps, ablations.", no_args_is_help=True)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"results-tracker {version('results-tracker')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(False, "--version", "-V", callback=_version_callback, is_eager=True, help="Show version."),
+):
+    """Track paper results: comparisons, sweeps, ablations."""
+
 metric_app = typer.Typer(help="Define how metrics are displayed and ranked.")
 app.add_typer(metric_app, name="metric")
 export_app = typer.Typer(help="Paper-ready exports: booktabs LaTeX tables, IEEE-sized figures, CSV.", no_args_is_help=True)
@@ -225,13 +241,27 @@ def ablation(
 
 
 @app.command()
-def demo(db: Optional[Path] = DbOpt):
-    """Populate the database with a synthetic paper (comparison + sweep + ablation)."""
-    from .demo import PROJECT, seed_demo
+def demo(
+    db: Optional[Path] = DbOpt,
+    reset: bool = typer.Option(False, "--reset", help="Delete the database file first."),
+    artifacts: Optional[Path] = typer.Option(None, "--artifacts", help="Write demo reconstruction images/logs here (for Run detail)."),
+):
+    """Populate the database with a synthetic paper (comparison + sweep + ablation). Safe to re-run."""
+    from .demo import PROJECT, demo_exists, seed_demo
 
-    counts = seed_demo(db=db)
-    console.print(f"[green]seeded project '{PROJECT}'[/] into {resolve_db_path(db)}: {counts}")
-    console.print("try:  results-tracker table -e main-comparison --by method --by dataset")
+    path = resolve_db_path(db)
+    if reset and path != ":memory:" and Path(path).exists():
+        Path(path).unlink()
+        console.print(f"[yellow]deleted[/] {path}")
+    engine = get_engine(db)
+    if demo_exists(engine=engine):
+        console.print(f"[yellow]project '{PROJECT}' already exists in {path}[/]; use --reset to start over.")
+        raise typer.Exit(code=0)
+    counts = seed_demo(engine=engine, artifacts_dir=str(artifacts) if artifacts else None)
+    console.print(f"[green]seeded project '{PROJECT}'[/] into {path}: {counts}")
+    if artifacts:
+        console.print(f"artifacts written under {artifacts}")
+    console.print("try:  results-tracker ui --db " + str(db or path))
 
 
 @app.command("import")

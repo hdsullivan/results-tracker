@@ -1,11 +1,40 @@
 # results-tracker
 
 Track paper results — method comparisons, parameter sweeps, ablation studies —
-and export them as paper-ready tables and figures.
+and export them as paper-ready tables and figures. Every number in the paper
+traces back to a logged run; the table in the PDF is generated, not typed.
 
-**Status:** phase 4 — schema, logging API, CLI, aggregation, bulk import, six GUI
-pages (Overview, Comparison, Sweep, Ablation, Run detail, Export) and paper
-exports: booktabs LaTeX tables and IEEE-sized vector figures. See [PLAN.md](PLAN.md).
+![Comparison page](docs/screenshots/comparison.png)
+
+**Status:** v1.0 — all five planned phases are done: schema and logging API,
+bulk import, six GUI pages (Overview, Comparison, Sweep, Ablation, Run detail,
+Export), and paper exports (booktabs LaTeX tables, IEEE-sized vector figures).
+See [PLAN.md](PLAN.md) for the design and [docs/PITCH.md](docs/PITCH.md) for the
+5-minute demo script.
+
+## 5-minute tour
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,ui]"
+results-tracker demo --db demo.db --artifacts demo_artifacts   # synthetic paper
+results-tracker ui --db demo.db                                 # opens the GUI
+```
+
+The demo paper has three methods × two datasets × three seeds, a baseline copied
+from another paper that only covers one dataset, a λ sweep with one diverged run,
+and a one-at-a-time ablation. That is enough to show every page doing something
+non-trivial:
+
+| Page | What you see |
+|---|---|
+| ![](docs/screenshots/overview.png) | **Overview** — projects, experiments, recent runs, failed-run count. |
+| ![](docs/screenshots/sweep.png) | **Sweep** — PSNR vs λ on a log axis, ± std band, best value ringed. The diverged run shows up as n = 2, not as a silently smoother curve. |
+| ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts. |
+| ![](docs/screenshots/run.png) | **Run detail** — config, metrics, config diff against any run, reconstruction and error map from disk. |
+| ![](docs/screenshots/export.png) | **Export** — booktabs LaTeX with a provenance comment, ready to paste; the comparison export first audits the grid (7/8 cells present, 1 missing); figures download as vector PDF. |
+
+Screenshots are regenerated with `python scripts/screenshot.py` (needs Chrome).
 
 ## Install
 
@@ -14,14 +43,15 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,ui]"
 ```
 
-## Quick start
+## Command line
 
 ```bash
-results-tracker demo --db results.db          # synthetic paper: 3 experiments
-results-tracker experiments --db results.db
-results-tracker table  -e main-comparison --by method --by dataset --db results.db
-results-tracker sweep  -e lambda-sweep --param lambda --metric psnr --db results.db
-results-tracker ablation -e ablation --db results.db
+results-tracker experiments --db demo.db
+results-tracker table  -e main-comparison --by method --by dataset --db demo.db
+results-tracker sweep  -e lambda-sweep --param lambda --metric psnr --db demo.db
+results-tracker ablation -e ablation --db demo.db
+results-tracker runs -e lambda-sweep --db demo.db
+results-tracker demo --reset --db demo.db     # start the demo over
 ```
 
 Set `RESULTS_TRACKER_DB=/path/to/results.db` to avoid passing `--db` every time.

@@ -57,7 +57,7 @@ def show_artifacts(path: str) -> None:
 def render() -> None:
     st.title("Run detail")
     sidebar_db()
-    project, experiment = select_project_experiment()
+    project, experiment = select_project_experiment(prefer="comparison")
     if experiment is None:
         return
     recs = load_records(project, experiment)
@@ -76,7 +76,8 @@ def render() -> None:
     meta[1].metric("Source", run["source"])
     meta[2].metric("Seed", "—" if run["seed"] is None else run["seed"])
     meta[3].metric("Commit", (run["git_commit"] or "—")[:8])
-    meta[4].metric("Logged", run["timestamp"].strftime("%Y-%m-%d %H:%M") if run["timestamp"] else "—")
+    ts = run["timestamp"]
+    meta[4].metric("Logged", ts.strftime("%Y-%m-%d") if ts else "—", help=ts.strftime("%H:%M:%S") if ts else None)
     if run["tags"]:
         st.caption("tags: " + ", ".join(f"`{t}`" for t in run["tags"]))
     if run["notes"]:
