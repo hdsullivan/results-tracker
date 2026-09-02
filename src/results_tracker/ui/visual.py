@@ -138,14 +138,15 @@ def render() -> None:
         headers, rows, warns = panel_metrics_rows(chosen, panels, ref_panel, defs, metrics=metrics or ("psnr",))
         st.subheader("Panel metrics")
         st.markdown(generic_html(headers, rows, number=1, left_cols=1,
-                                 caption="Metrics of the shown images: as logged with the run, and PSNR recomputed from the "
-                                         "displayed reconstruction against the ground truth (luminance, 10 px border dropped, "
-                                         "data range 1). A gap flags a mismatch between the figure and the table numbers."),
+                                 caption="Metrics of the shown images: as logged with the run, and PSNR (and SSIM, Gaussian window "
+                                         "σ = 1.5) recomputed from the displayed reconstruction against the ground truth (luminance, "
+                                         "10 px border dropped, data range 1). A gap flags a mismatch between the figure and the table."),
                     unsafe_allow_html=True)
         for w in warns:
             st.warning(w)
         if ref_panel is not None and not warns and rows:
-            st.success("Logged PSNR matches the displayed images within 0.05 dB for every panel.")
+            st.success("Logged PSNR" + (" and SSIM" if "ssim" in metrics else "") + " match the displayed images for every panel "
+                       "(within 0.05 dB" + (" / 0.005" if "ssim" in metrics else "") + ").")
 
     with st.expander("LaTeX figure snippet"):
         st.code(figure_tex(f"figures/{stem}.pdf", caption=vr.spec.caption_stub(), label="fig:visual", width=width), language="latex")

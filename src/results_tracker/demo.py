@@ -46,6 +46,11 @@ def _scene(dataset: str, seed: int, n: int = 96):
     gt[n // 3:2 * n // 3, n // 3:2 * n // 3] += 0.25          # square (edge recovery)
     gt[int(0.8 * n), int(0.1 * n):int(0.9 * n)] = 1.0          # thin line
     gt[int(0.2 * n):int(0.2 * n) + 3, int(0.75 * n):int(0.75 * n) + 3] = 0.0  # small dark defect
+    # fine texture (period-4 stripes and a speckle patch): what over-smoothing destroys and SSIM rewards
+    r0, r1, c0, c1 = int(0.55 * n), int(0.92 * n), int(0.05 * n), int(0.30 * n)
+    gt[r0:r1, c0:c1] = 0.5 + 0.3 * np.sign(np.sin(2 * np.pi * xx[r0:r1, c0:c1] * n / 4))
+    r0, r1, c0, c1 = int(0.05 * n), int(0.30 * n), int(0.05 * n), int(0.30 * n)
+    gt[r0:r1, c0:c1] = 0.5 + 0.25 * rng.choice([-1.0, 1.0], size=(r1 - r0, c1 - c0))
     return np.clip(gt, 0, 1), np.random.default_rng(hash((dataset, seed)) % (2**32))
 
 
@@ -71,13 +76,21 @@ def _write_artifacts(root: Path, method: str, dataset: str, seed: int, psnr: flo
 
     gt, nrng = _scene(dataset, seed)
     meas = gt + nrng.normal(0, 0.12, gt.shape)
-    sigma = 10 ** (-psnr / 20)  # noise level implied by the logged psnr (data range 1)
+    sigma = 10 ** (-psnr / 20)  # noise level implied by the target psnr (data range 1)
     mrng = np.random.default_rng(hash((method, dataset, seed)) % (2**32))
-    recon = gt + mrng.normal(0, sigma, gt.shape)
-    if method == "TV":  # oversmoothing: blur the edges a little
-        k = np.array([1, 2, 1]) / 4
-        recon = np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 0, recon)
-        recon = np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 1, recon)
+    k = np.array([1, 2, 1]) / 4
+
+    def blur(a):
+        a = np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 0, a)
+        return np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 1, a)
+
+    noise = mrng.normal(0, sigma, gt.shape)
+    if method == "TV":  # over-smoothing: the whole image is blurred, edges and the thin line suffer
+        recon = blur(gt + noise)
+    else:  # learned denoisers leave low-amplitude, spatially correlated residuals rather than white noise
+        corr = blur(noise)
+        corr *= sigma / (corr.std() + 1e-12)  # keep the target noise power
+        recon = gt + corr
     save(gt, "ground_truth.png")
     save(meas, "measurement.png")
     save(recon, "reconstruction.png")
