@@ -3,9 +3,9 @@
 Track paper results — method comparisons, parameter sweeps, ablation studies —
 and export them as paper-ready tables and figures.
 
-**Status:** phase 2 — schema, logging API, CLI, aggregation, bulk import, and the
-first GUI pages (Overview, Comparison, Run detail). Sweep and Ablation pages come
-in phase 3, paper exports in phase 4. See [PLAN.md](PLAN.md).
+**Status:** phase 3 — schema, logging API, CLI, aggregation, bulk import, and all
+five GUI pages (Overview, Comparison, Sweep, Ablation, Run detail). Paper exports
+(LaTeX tables, IEEE figures) come in phase 4. See [PLAN.md](PLAN.md).
 
 ## Install
 
@@ -32,10 +32,21 @@ Set `RESULTS_TRACKER_DB=/path/to/results.db` to avoid passing `--db` every time.
 results-tracker ui --db results.db        # opens http://localhost:8501
 ```
 
-Pages: **Overview** (what is in the database), **Comparison** (methods × metrics,
-mean ± std, best in bold, second underlined, bar chart, CSV download) and
-**Run detail** (config, metrics, config diff against any other run, image
-gallery and log tail from the run's `artifacts_dir`).
+Pages:
+
+- **Overview** — what is in the database.
+- **Comparison** — methods × metrics, mean ± std, best in bold, second
+  underlined, bar chart, CSV download. Rows can be grouped by method, dataset,
+  instance, seed, or any config key.
+- **Sweep** — metric vs one swept config key (lines with ± std band, best value
+  marked, log axis when the values span a decade) or vs two keys (heatmap).
+  One line per method or dataset if you ask for it.
+- **Ablation** — every config variant vs the full model: which settings changed
+  (✓ / ✗ / value), mean ± std with Δ (absolute or %), and a bar chart of the
+  deltas. The base is the run tagged `base`, else the most common config, or
+  any run you pick.
+- **Run detail** — config, metrics, config and metric diff against any other
+  run, image gallery and log tail from the run's `artifacts_dir`.
 
 ## Importing existing results
 

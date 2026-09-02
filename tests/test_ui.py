@@ -67,3 +67,35 @@ def test_run_detail_page(demo_db, tmp_path):
     assert any("Config" in h.value for h in at.subheader)
     # pick another run to compare against and check a diff / metric table renders
     assert len(at.dataframe) >= 1
+
+
+def test_sweep_page(demo_db):
+    at = _run("sweep")
+    md = "\n".join(m.value for m in at.markdown)
+    assert "lambda" in md and "**" in md  # best value bolded
+    caption = "\n".join(c.value for c in at.caption)
+    assert "best lambda = **0.1**" in caption
+    assert not at.warning
+
+
+def test_sweep_page_heatmap_mode(demo_db):
+    at = _run("sweep")
+    box = [sb for sb in at.sidebar.selectbox if sb.label.startswith("Second parameter")][0]
+    # only lambda varies in the demo sweep, so a 2nd parameter gives a 1-row heatmap; still must not crash
+    box.select(box.options[1]).run()
+    assert not at.exception
+    caption = "\n".join(c.value for c in at.caption)
+    assert "best at lambda=0.1" in caption
+
+
+def test_ablation_page(demo_db):
+    at = _run("ablation")
+    md = "\n".join(m.value for m in at.markdown)
+    assert "**full model**" in md and "w/o adaptive" in md and "✗" in md
+    caption = "\n".join(c.value for c in at.caption)
+    assert "Largest drop" in caption and "w/o adaptive" in caption
+    # relative deltas
+    [cb for cb in at.sidebar.checkbox if "%" in cb.label][0].check().run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert "%)" in md

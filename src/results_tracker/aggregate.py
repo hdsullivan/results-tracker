@@ -189,6 +189,55 @@ def best_sweep_value(series: Sequence[tuple[Any, Stat]], higher_is_better: bool 
     return pick(series, key=lambda t: t[1].mean)[0]
 
 
+def _sort_key(x: Any) -> tuple:
+    return (isinstance(x, str), x)
+
+
+@dataclass
+class SweepGrid:
+    xs: list[Any]
+    ys: list[Any]
+    cells: dict[tuple[Any, Any], Stat]  # (x, y) -> Stat
+
+    def matrix(self) -> list[list[Optional[float]]]:
+        """rows = ys, cols = xs, mean or None."""
+        return [[(self.cells[(x, y)].mean if (x, y) in self.cells else None) for x in self.xs] for y in self.ys]
+
+    def best(self, higher_is_better: bool = True) -> Optional[tuple[Any, Any]]:
+        if not self.cells:
+            return None
+        pick = max if higher_is_better else min
+        return pick(self.cells, key=lambda k: self.cells[k].mean)
+
+
+def sweep_grid(
+    records: Iterable[Record], param_x: str, param_y: str, metric: str, only_completed: bool = True
+) -> SweepGrid:
+    """Two swept parameters -> one aggregated cell per (x, y). Runs missing either parameter are skipped."""
+    recs = list(records)
+    if only_completed:
+        recs = completed(recs)
+    cells: dict[tuple[Any, Any], Stat] = {}
+    for (x, y), rs in group_records(recs, [f"config.{param_x}", f"config.{param_y}"]).items():
+        if x is None or y is None:
+            continue
+        st = summarize(r["metrics"].get(metric) for r in rs)
+        if st is not None:
+            cells[(x, y)] = st
+    xs = sorted({k[0] for k in cells}, key=_sort_key)
+    ys = sorted({k[1] for k in cells}, key=_sort_key)
+    return SweepGrid(xs, ys, cells)
+
+
+def varying_config_keys(records: Iterable[Record]) -> list[str]:
+    """Flattened config keys that take more than one value across the records."""
+    seen: dict[str, set] = {}
+    for r in records:
+        for k, v in flatten(r.get("config", {})).items():
+            seen.setdefault(k, set()).add(repr(v))
+    return [k for k, vals in seen.items() if len(vals) > 1]
+
+
 # --------------------------------------------------------------------------- ablations
 
 def config_diff(base: Mapping[str, Any], other: Mapping[str, Any]) -> dict[str, tuple[Any, Any]]:
@@ -226,6 +275,14 @@ class AblationRow:
     stats: dict[str, Optional[Stat]]
     delta: dict[str, Optional[float]]  # variant mean - base mean
     is_base: bool = False
+    base_mean: dict[str, Optional[float]] = field(default_factory=dict)
+
+    def rel_delta(self, metric: str) -> Optional[float]:
+        """(variant - base) / |base| as a fraction; None when undefined."""
+        d, b = self.delta.get(metric), self.base_mean.get(metric)
+        if d is None or b is None or b == 0:
+            return None
+        return d / abs(b)
 
 
 def _diff_signature(diff: Mapping[str, tuple[Any, Any]]) -> tuple:
@@ -283,6 +340,9 @@ def ablation_table(
         for m in names:
             b, v = base_stats.get(m), stats.get(m)
             delta[m] = (v.mean - b.mean) if (b is not None and v is not None) else None
-        rows.append(AblationRow(describe_diff(d), d, len(rs), stats, delta, is_base=(sig == ())))
+        rows.append(AblationRow(
+            describe_diff(d), d, len(rs), stats, delta, is_base=(sig == ()),
+            base_mean={m: (b.mean if b is not None else None) for m, b in base_stats.items()},
+        ))
     rows.sort(key=lambda r: (not r.is_base, len(r.diff), r.label))
     return rows

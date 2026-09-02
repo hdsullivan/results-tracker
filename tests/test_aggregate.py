@@ -112,3 +112,37 @@ def test_ablation_table_explicit_base_config_without_base_runs():
     rows = agg.ablation_table(recs, base_config={"a": 0})
     assert len(rows) == 1 and not rows[0].is_base and rows[0].delta["psnr"] is None
     assert agg.ablation_table([]) == []
+
+
+def test_sweep_grid_and_best():
+    recs = []
+    for lam in [0.01, 0.1, 1.0]:
+        for it in [10, 50]:
+            for s in range(2):
+                val = 30 - abs(math.log10(lam / 0.1)) + (0.5 if it == 50 else 0) + 0.01 * s
+                recs.append(rec("m", s, cfg={"lambda": lam, "iters": it}, psnr=val))
+    recs.append(rec("m", 0, cfg={"lambda": 0.1}, psnr=99.0))  # missing iters -> skipped
+    grid = agg.sweep_grid(recs, "lambda", "iters", "psnr")
+    assert grid.xs == [0.01, 0.1, 1.0] and grid.ys == [10, 50]
+    assert grid.best(True) == (0.1, 50)
+    assert grid.best(False) in ((0.01, 10), (1.0, 10))
+    m = grid.matrix()
+    assert len(m) == 2 and len(m[0]) == 3
+    assert grid.cells[(0.1, 50)].n == 2
+    assert math.isclose(m[1][1], 30.505)
+
+
+def test_varying_config_keys():
+    recs = [rec("m", 0, cfg={"a": 1, "b": "x", "c": {"d": 1}}), rec("m", 1, cfg={"a": 2, "b": "x", "c": {"d": 2}})]
+    assert agg.varying_config_keys(recs) == ["a", "c.d"]
+
+
+def test_ablation_relative_delta():
+    base = {"a": True}
+    recs = [rec("m", s, cfg=base, tags=["base"], psnr=20.0) for s in range(2)]
+    recs += [rec("m", s, cfg={"a": False}, psnr=18.0) for s in range(2)]
+    rows = agg.ablation_table(recs, metrics=["psnr"])
+    var = next(r for r in rows if not r.is_base)
+    assert math.isclose(var.delta["psnr"], -2.0)
+    assert math.isclose(var.rel_delta("psnr"), -0.1)
+    assert rows[0].rel_delta("psnr") == 0.0

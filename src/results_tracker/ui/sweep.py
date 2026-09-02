@@ -1,0 +1,117 @@
+"""Sweep page: metric vs one swept parameter (lines) or two (heatmap), aggregated over seeds."""
+
+from __future__ import annotations
+
+import io
+
+import pandas as pd
+import streamlit as st
+
+from .. import aggregate as agg
+from .charts import is_log_friendly, sweep_heatmap, sweep_lines
+from .common import fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db
+
+GROUP_KEYS = ["method", "dataset", "instance"]
+
+
+def render() -> None:
+    st.title("Parameter sweep")
+    sidebar_db()
+    project, experiment = select_project_experiment(prefer="sweep")
+    if experiment is None:
+        return
+    recs = agg.completed(load_records(project, experiment))
+    defs = load_metric_defs()
+    if not recs:
+        st.info("No completed runs in this experiment.")
+        return
+
+    all_keys = sorted({k for r in recs for k in agg.flatten(r["config"])})
+    varying = agg.varying_config_keys(recs)
+    metrics = agg.metric_names(recs)
+    if not all_keys or not metrics:
+        st.warning("Runs need a config with at least one key and at least one metric.")
+        return
+
+    with st.sidebar:
+        st.markdown("**Sweep**")
+        default_x = varying[0] if varying else all_keys[0]
+        param_x = st.selectbox("Parameter (x)", all_keys, index=all_keys.index(default_x))
+        second_opts = ["— none —"] + [k for k in all_keys if k != param_x]
+        default_y = next((k for k in varying if k != param_x), None)
+        param_y = st.selectbox("Second parameter (heatmap)", second_opts,
+                               index=second_opts.index(default_y) if default_y in second_opts and len(varying) > 1 else 0)
+        metric = st.selectbox("Metric", metrics)
+        group_opts = [k for k in GROUP_KEYS if len({r.get(k) for r in recs}) > 1]
+        group_by = st.multiselect("One line per", group_opts, default=[])
+        show_band = st.checkbox("Shaded ± std band", value=True, help="Off: error bars instead.")
+
+    hib = defs.get(metric, {}).get("higher_is_better", True)
+    fmt = fmt_for(defs, metric)
+    unit = defs.get(metric, {}).get("unit", "")
+    arrow = "↑" if hib else "↓"
+
+    if param_y != "— none —":
+        grid = agg.sweep_grid(recs, param_x, param_y, metric)
+        if not grid.cells:
+            st.warning("No runs have both parameters set.")
+            return
+        best = grid.best(hib)
+        st.caption(f"{experiment} · {len(recs)} runs · {metric} {arrow} over {param_x} × {param_y} · "
+                   f"best at {param_x}={best[0]}, {param_y}={best[1]}: {grid.cells[best].format(fmt)}")
+        st.plotly_chart(sweep_heatmap(grid.xs, grid.ys, grid.matrix(), param_x, param_y, metric, fmt, hib, best),
+                        width="stretch")
+        df = pd.DataFrame(
+            [{param_y: y, **{str(x): (grid.cells[(x, y)].mean if (x, y) in grid.cells else None) for x in grid.xs}}
+             for y in grid.ys]
+        )
+        with st.expander("Table (means)"):
+            st.dataframe(df, width="stretch", hide_index=True)
+        st.download_button("Download CSV", df.to_csv(index=False), file_name=f"{experiment}-{param_x}-{param_y}.csv", mime="text/csv")
+        return
+
+    series = agg.sweep_series(recs, param_x, metric, group_by=group_by)
+    series = {g: s for g, s in series.items() if s}
+    if not series:
+        st.warning(f"No runs have `{param_x}` in their config.")
+        return
+    best = {g: agg.best_sweep_value(s, hib) for g, s in series.items()}
+    xs_all = sorted({x for s in series.values() for x, _ in s}, key=lambda x: (isinstance(x, str), x))
+    log_default = is_log_friendly(xs_all)
+    log_x = st.sidebar.checkbox("Log x axis", value=log_default, disabled=not is_log_friendly(xs_all))
+
+    if len(series) == 1:
+        (g, s), = series.items()
+        st.caption(f"{experiment} · {len(recs)} runs · {metric} {arrow} vs {param_x} · "
+                   f"best {param_x} = **{best[g]}** ({dict(s)[best[g]].format(fmt)})")
+    else:
+        st.caption(f"{experiment} · {len(recs)} runs · {metric} {arrow} vs {param_x} · best per line: " +
+                   ", ".join(f"{' / '.join(map(str, g))} → {b}" for g, b in best.items()))
+
+    st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best),
+                    width="stretch")
+
+    # table: rows = x values, one column per group
+    cols = {(" / ".join(map(str, g)) if g else metric): dict(s) for g, s in series.items()}
+    lines = ["| " + param_x + " | " + " | ".join(cols) + " |", "|---|" + "---|" * len(cols)]
+    for x in xs_all:
+        cells = []
+        for gname, lookup in cols.items():
+            st_ = lookup.get(x)
+            if st_ is None:
+                cells.append("—")
+            else:
+                s = st_.format(fmt)
+                g = next(g for g in series if (" / ".join(map(str, g)) if g else metric) == gname)
+                cells.append(f"**{s}**" if best[g] == x else s)
+        lines.append(f"| {x} | " + " | ".join(cells) + " |")
+    st.markdown("\n".join(lines))
+
+    rows = []
+    for g, s in series.items():
+        for x, st_ in s:
+            rows.append({**dict(zip(group_by, g)), param_x: x, f"{metric}_mean": st_.mean, f"{metric}_std": st_.std, "n": st_.n})
+    df = pd.DataFrame(rows)
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    st.download_button("Download CSV", buf.getvalue(), file_name=f"{experiment}-{param_x}-{metric}.csv", mime="text/csv")
