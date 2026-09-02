@@ -12,7 +12,7 @@ import math
 import socket
 import subprocess
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from numbers import Number
 from typing import Any, Iterable, Optional, Sequence, Type, TypeVar, Union
 
@@ -124,6 +124,8 @@ def _clean_metrics(metrics: Optional[dict]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in (metrics or {}).items():
         v = _to_plain(v)
+        if isinstance(v, bool):
+            raise TypeError(f"metric {k!r} is a bool; log flags in `config`/`tags`, or an explicit 0/1 (int) if you mean a rate")
         if v is not None and not isinstance(v, Number):
             raise TypeError(f"metric {k!r} must be numeric or None, got {type(v).__name__}")
         out[str(k)] = v
@@ -333,6 +335,9 @@ def run_records(runs: Iterable[Run], db=None, engine=None) -> list[dict[str, Any
         m = methods.get(r.method_id)
         d = datasets.get(r.dataset_id)
         e = experiments.get(r.experiment_id)
+        ts = r.timestamp
+        if ts is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)  # stored in UTC; SQLite drops the zone
         out.append(
             {
                 "run_id": r.id,
@@ -349,7 +354,7 @@ def run_records(runs: Iterable[Run], db=None, engine=None) -> list[dict[str, Any
                 "status": r.status.value if isinstance(r.status, RunStatus) else r.status,
                 "source": r.source,
                 "tags": list(r.tags or []),
-                "timestamp": r.timestamp,
+                "timestamp": ts,
                 "git_commit": r.git_commit,
                 "artifacts_dir": r.artifacts_dir,
                 "notes": r.notes,

@@ -54,20 +54,18 @@ def render() -> None:
         metrics = st.multiselect("Metrics", all_metrics, default=all_metrics)
         show_std = st.checkbox("Show ± std", value=True)
         show_n = st.checkbox("Show n", value=True)
-        include_failed = st.checkbox("Include failed runs", value=False)
 
     if not group_by or not metrics:
         st.warning("Pick at least one grouping key and one metric.")
         return
 
-    pool = recs if include_failed else agg.completed(recs)
+    pool = agg.completed(recs)  # failed runs never enter a results table; they are counted on the Overview
+    n_failed = sum(r["status"] == "failed" for r in recs)
     ct = agg.comparison_table(pool, group_by=group_by, metrics=metrics, higher_is_better=hib_map(defs))
-    if include_failed:
-        # comparison_table filters failed runs itself; rebuild with everything if asked
-        ct = agg.ComparisonTable(**{**ct.__dict__, "cells": agg.aggregate_metrics(pool, group_by, metrics, only_completed=False)})
 
     n_runs = len(pool)
-    st.caption(f"{experiment} · {n_runs} runs · mean ± std over everything not in the row key · **bold** best, <u>underlined</u> second", unsafe_allow_html=True)
+    st.caption(f"{experiment} · {n_runs} completed runs" + (f" ({n_failed} failed excluded)" if n_failed else "")
+               + " · mean ± std over everything not in the row key · **bold** best, <u>underlined</u> second", unsafe_allow_html=True)
     for msg in agg.coverage_audit(pool, group_by):
         st.warning("Rows are pooled over different " + msg)
     if len(group_by) <= 2:

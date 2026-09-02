@@ -10,7 +10,8 @@ from results_tracker import aggregate as agg  # noqa: E402
 from results_tracker.export.figures import figure_tex, ieee_preamble, to_grayscale_png, figure_bytes  # noqa: E402
 from results_tracker.export.visual import (  # noqa: E402
     IEEE_TEXTWIDTH_IN, Panel, PanelRow, build_panels, build_rows, crop, error_map, list_image_files, load_image,
-    guess_roles, luminance, panel_metrics_rows, panel_psnr, psnr, reconstruction_figure, save_visual, zoom_region,
+    guess_roles, luminance, panel_metrics_rows, panel_psnr, panel_ssim, psnr, reconstruction_figure, save_visual, ssim,
+    zoom_region,
 )
 
 DEFS = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"}, "ssim": {"unit": "", "higher_is_better": True, "fmt": ".3f"}}
@@ -240,10 +241,11 @@ def test_panel_psnr_and_metrics_rows(art):
     with pytest.raises(ValueError):
         panel_psnr(ref.image, ref.image[:10])
     headers, rows, warns = panel_metrics_rows(recs, panels, ref, DEFS, metrics=["psnr", "ssim"])
-    assert headers == ["Panel", "psnr (logged)", "ssim (logged)", "PSNR (from image)", "Δ (dB)"]
+    assert headers == ["Panel", "psnr (logged)", "ssim (logged)", "PSNR (from image)", "Δ (dB)", "SSIM (from image)", "Δ"]
     assert [r[0] for r in rows] == ["TV [1]", "Ours"] and rows[0][1] == "30.00" and rows[0][2] == "0.900"
-    # the fixture's logged numbers are invented, so they must be flagged against the recomputed ones
-    assert len(warns) == 2 and all("recomputed" in w for w in warns)
+    # the fixture's logged numbers are invented, so PSNR and SSIM must both be flagged against the recomputed ones
+    assert len([w for w in warns if "PSNR" in w]) == 2 and len([w for w in warns if "SSIM" in w]) == 2
+    assert all("recomputed" in w for w in warns)
     # no reference -> no computed columns, no warnings
     h2, r2, w2 = panel_metrics_rows(recs, panels, None, DEFS, metrics=["psnr"])
     assert h2 == ["Panel", "psnr (logged)"] and len(r2[0]) == 2 and w2 == []
@@ -262,3 +264,29 @@ def test_make_visual_records_the_seed_and_flags_mixed_seeds(art, tmp_path):
     two[1] = {**two[1], "seed": 1}
     vr2 = make_visual(two, DEFS, dataset="D")
     assert vr2.spec.seed is None and any("different seeds" in p for p in vr2.problems)
+
+
+def test_ssim_properties():
+    rng = np.random.default_rng(0)
+    img = np.clip(0.5 + 0.3 * np.sin(np.linspace(0, 8, 64))[None, :] * np.cos(np.linspace(0, 6, 64))[:, None], 0, 1)
+    assert ssim(img, img) == pytest.approx(1.0)
+    noisy_small = np.clip(img + rng.normal(0, 0.02, img.shape), 0, 1)
+    noisy_big = np.clip(img + rng.normal(0, 0.15, img.shape), 0, 1)
+    s_small, s_big = ssim(noisy_small, img), ssim(noisy_big, img)
+    assert 1.0 > s_small > s_big > 0.0
+    shifted = np.roll(img, 7, axis=1)  # same content, misaligned: structure lost, scores below even heavy noise
+    assert ssim(shifted, img) < s_small  # structure matters more than a little noise
+    assert ssim(np.stack([img] * 3, axis=2), img) == pytest.approx(1.0)  # RGB vs gray via luminance
+    with pytest.raises(ValueError):
+        ssim(img, img[:10])
+    with pytest.raises(ValueError):
+        ssim(np.zeros((8, 8)), np.zeros((8, 8)))  # too small for the window
+    assert 0 < panel_ssim(noisy_small, img) <= 1
+
+
+def test_panel_metrics_include_ssim_when_logged(art):
+    _, recs = art
+    panels, ref, _ = _panels(art)
+    headers, rows, warns = panel_metrics_rows(recs, panels, ref, DEFS, metrics=["psnr", "ssim"])
+    assert headers[-2:] == ["SSIM (from image)", "Δ"] and all(len(r) == len(headers) for r in rows)
+    assert any("SSIM" in w for w in warns)  # the fixture's invented ssim of 0.9 does not match the image

@@ -20,8 +20,10 @@ from .tables import fmt_stat, generic_html
 
 
 def _fmt_ts(ts: Any, with_time: bool = True) -> str:
+    """Local wall-clock time (records carry UTC)."""
     try:
-        return ts.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
+        local = ts.astimezone() if ts.tzinfo is not None else ts
+        return local.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
     except Exception:  # noqa: BLE001
         return "—"
 
@@ -113,7 +115,7 @@ def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
 def recent_rows(recs: list[dict], defs: dict, n: int = 15) -> tuple[list[str], list[list[Any]]]:
     recent = sorted(recs, key=lambda r: r["timestamp"] or 0, reverse=True)[:n]
     metrics = agg.metric_names(recent)[:4]
-    headers = ["#", "logged", "experiment", "method", "dataset", "seed", "status"] + [display_metric_name(m) for m in metrics]
+    headers = ["#", "logged (local time)", "experiment", "method", "dataset", "seed", "status"] + [display_metric_name(m) for m in metrics]
     rows = []
     for r in recent:
         vals = []

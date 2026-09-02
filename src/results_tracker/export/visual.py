@@ -658,6 +658,43 @@ def panel_psnr(img: np.ndarray, ref: np.ndarray, border: int = METRIC_BORDER_CRO
     return psnr(a, b, data_range)
 
 
+def _gaussian_blur(x: np.ndarray, sigma: float = 1.5, radius: int = 5) -> np.ndarray:
+    """Separable Gaussian filter, 'valid' region (no border padding), like skimage's SSIM window."""
+    t = np.arange(-radius, radius + 1, dtype=np.float64)
+    g = np.exp(-(t**2) / (2 * sigma**2))
+    g /= g.sum()
+    x = x.astype(np.float64)
+    out = np.apply_along_axis(lambda v: np.convolve(v, g, mode="valid"), 0, x)
+    out = np.apply_along_axis(lambda v: np.convolve(v, g, mode="valid"), 1, out)
+    return out
+
+
+def ssim(img: np.ndarray, ref: np.ndarray, data_range: float = 1.0, sigma: float = 1.5, radius: int = 5) -> float:
+    """Mean SSIM on luminance with an 11-tap Gaussian window (sigma 1.5), K1 = 0.01, K2 = 0.03 (Wang et al. 2004).
+
+    Matches skimage.metrics.structural_similarity(gaussian_weights=True, sigma=1.5, use_sample_covariance=False)
+    up to border handling (this implementation drops the window border)."""
+    a, b = luminance(img).astype(np.float64), luminance(ref).astype(np.float64)
+    if a.shape != b.shape:
+        raise ValueError(f"shape mismatch {a.shape} vs {b.shape}")
+    if min(a.shape) < 2 * radius + 1:
+        raise ValueError("image too small for an 11x11 SSIM window")
+    c1, c2 = (0.01 * data_range) ** 2, (0.03 * data_range) ** 2
+    mu_a, mu_b = _gaussian_blur(a, sigma, radius), _gaussian_blur(b, sigma, radius)
+    var_a = _gaussian_blur(a * a, sigma, radius) - mu_a**2
+    var_b = _gaussian_blur(b * b, sigma, radius) - mu_b**2
+    cov = _gaussian_blur(a * b, sigma, radius) - mu_a * mu_b
+    num = (2 * mu_a * mu_b + c1) * (2 * cov + c2)
+    den = (mu_a**2 + mu_b**2 + c1) * (var_a + var_b + c2)
+    return float(np.mean(num / den))
+
+
+def panel_ssim(img: np.ndarray, ref: np.ndarray, border: int = METRIC_BORDER_CROP, data_range: float = 1.0) -> float:
+    a, b = luminance(img), luminance(ref)
+    bc = border if min(a.shape) > 2 * border + 12 else 0
+    return ssim(a[bc:a.shape[0] - bc, bc:a.shape[1] - bc], b[bc:b.shape[0] - bc, bc:b.shape[1] - bc], data_range)
+
+
 def panel_metrics_rows(
     records: Sequence[Mapping[str, Any]],
     panels: Sequence[Panel],
@@ -665,14 +702,18 @@ def panel_metrics_rows(
     defs: Mapping[str, Mapping[str, Any]],
     metrics: Sequence[str] = ("psnr", "ssim"),
     tolerance_db: float = 0.05,
+    tolerance_ssim: float = 0.005,
 ) -> tuple[list[str], list[list[str]], list[str]]:
-    """Rows for a 'panel metrics' table: logged metrics per shown run plus PSNR recomputed from the image.
+    """Rows for a 'panel metrics' table: logged metrics per shown run plus PSNR (and SSIM when logged)
+    recomputed from the image.
 
-    Returns (headers, rows, warnings). A gap between logged and recomputed PSNR beyond `tolerance_db` is
+    Returns (headers, rows, warnings). A gap between logged and recomputed values beyond the tolerances is
     flagged: it usually means the logged number was computed on a different image, crop or data range."""
     by_id = {r.get("run_id"): r for r in records if r.get("run_id") is not None}
     by_title = {(r.get("method_label") or r.get("method")): r for r in records}
-    headers = ["Panel"] + [f"{m} (logged)" for m in metrics] + (["PSNR (from image)", "Δ (dB)"] if reference is not None else [])
+    want_ssim = reference is not None and "ssim" in metrics
+    headers = ["Panel"] + [f"{m} (logged)" for m in metrics] + (["PSNR (from image)", "Δ (dB)"] if reference is not None else []) \
+        + (["SSIM (from image)", "Δ"] if want_ssim else [])
     rows: list[list[str]] = []
     warnings: list[str] = []
     for p in panels:
@@ -707,5 +748,21 @@ def panel_metrics_rows(
                 if abs(d) > tolerance_db:
                     warnings.append(f"{p.title}: logged PSNR {float(lv):.2f} dB vs {comp:.2f} dB recomputed from the shown image "
                                     f"(Δ {d:+.2f} dB). Different image, crop, border or data range?")
+            if want_ssim:
+                try:
+                    cs = panel_ssim(p.image, reference.image)
+                except ValueError:
+                    row += ["—", "—"]
+                else:
+                    row.append(f"{cs:.3f}")
+                    ls = logged.get("ssim")
+                    if ls is None:
+                        row.append("—")
+                    else:
+                        ds = cs - float(ls)
+                        row.append(f"{ds:+.3f}")
+                        if abs(ds) > tolerance_ssim:
+                            warnings.append(f"{p.title}: logged SSIM {float(ls):.3f} vs {cs:.3f} recomputed from the shown image "
+                                            f"(Δ {ds:+.3f}). Different implementation, window or data range?")
         rows.append(row)
     return headers, rows, warnings

@@ -49,7 +49,7 @@ def _scene(dataset: str, seed: int, n: int = 96):
     return np.clip(gt, 0, 1), np.random.default_rng(hash((dataset, seed)) % (2**32))
 
 
-def _write_artifacts(root: Path, method: str, dataset: str, seed: int, psnr: float, rng: random.Random) -> tuple[str, float]:
+def _write_artifacts(root: Path, method: str, dataset: str, seed: int, psnr: float, rng: random.Random) -> tuple[str, float, float]:
     """Reconstruction / error map / measurement / ground truth PNGs plus a log, all from one shared scene.
 
     The measurement and ground truth are identical across methods for a given dataset, so the Visual page
@@ -64,7 +64,7 @@ def _write_artifacts(root: Path, method: str, dataset: str, seed: int, psnr: flo
         from PIL import Image
     except ImportError:  # pragma: no cover
         (d / "log.txt").write_text(f"{method} on {dataset}, seed {seed}\nfinal psnr {psnr:.2f}\n")
-        return str(d), psnr
+        return str(d), psnr, 0.75 + (psnr - 27) * 0.03
 
     def save(arr, name):
         Image.fromarray((np.clip(arr, 0, 1) * 255).round().astype("uint8")).save(d / name)
@@ -83,14 +83,16 @@ def _write_artifacts(root: Path, method: str, dataset: str, seed: int, psnr: flo
     save(recon, "reconstruction.png")
     save(np.abs(recon - gt) / 0.3, "error_map.png")
     # the number we log is the one a reader can recompute from the files: 8-bit images, 10 px border dropped
-    from .export.visual import load_image, panel_psnr
+    from .export.visual import load_image, panel_psnr, panel_ssim
 
-    measured = panel_psnr(load_image(d / "reconstruction.png"), load_image(d / "ground_truth.png"))
+    rec_img, gt_img = load_image(d / "reconstruction.png"), load_image(d / "ground_truth.png")
+    measured = panel_psnr(rec_img, gt_img)
+    measured_ssim = panel_ssim(rec_img, gt_img)
     lines = [f"method={method} dataset={dataset} seed={seed}", "iter  psnr"]
     for it in range(0, 51, 10):
         lines.append(f"{it:4d}  {measured - (50 - it) * 0.05:.2f}")
     (d / "train.log").write_text("\n".join(lines) + "\n")
-    return str(d), measured
+    return str(d), measured, measured_ssim
 
 
 def seed_demo(db=None, engine=None, rng_seed: int = 0, artifacts_dir: Optional[str] = None) -> dict[str, int]:
@@ -117,12 +119,13 @@ def seed_demo(db=None, engine=None, rng_seed: int = 0, artifacts_dir: Optional[s
             for s in SEEDS:
                 psnr = base_psnr[m] + (0.4 if ds == "Set12" else -0.3) + rng.gauss(0, 0.15)
                 art = None
+                ssim_val = 0.75 + (psnr - 27) * 0.03 + rng.gauss(0, 0.005)
                 if art_root:
-                    art, psnr = _write_artifacts(art_root, m, ds, s, psnr, rng)  # log what the image on disk shows
+                    art, psnr, ssim_val = _write_artifacts(art_root, m, ds, s, psnr, rng)  # log what the image on disk shows
                 log_run(
                     "main-comparison", project=PROJECT, experiment_type="comparison",
                     method=m, dataset=ds, seed=s, config={"lambda": 0.1, "iters": 50},
-                    metrics={"psnr": psnr, "ssim": 0.75 + (psnr - 27) * 0.03 + rng.gauss(0, 0.005),
+                    metrics={"psnr": psnr, "ssim": ssim_val,
                              "runtime_s": base_time[m] * (1 + rng.uniform(-0.1, 0.1))},
                     artifacts_dir=art, **common,
                 )

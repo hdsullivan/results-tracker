@@ -154,3 +154,19 @@ def test_failed_duplicate_is_superseded_by_a_rerun(engine):
     r = log_run("e", method="A", dataset="D", seed=0, config={"k": 1}, metrics={"psnr": 30}, git_commit=None, engine=engine)
     runs = get_runs(engine=engine)
     assert len(runs) == 1 and runs[0].id == r.id and runs[0].status.value == "completed"
+
+
+def test_bool_metrics_are_rejected(engine):
+    with pytest.raises(TypeError, match="bool"):
+        log_run("e", metrics={"converged": True}, git_commit=None, engine=engine)
+    r = log_run("e", metrics={"converged": 1}, git_commit=None, engine=engine)  # explicit 0/1 is fine
+    assert r.metrics == {"converged": 1}
+
+
+def test_record_timestamps_are_timezone_aware_utc(engine):
+    from datetime import timezone
+
+    log_run("e", metrics={"x": 1}, git_commit=None, engine=engine)
+    rec = run_records(get_runs(engine=engine), engine=engine)[0]
+    assert rec["timestamp"].tzinfo is not None and rec["timestamp"].utcoffset().total_seconds() == 0
+    assert rec["timestamp"].astimezone().tzinfo is not None  # convertible to local time for display

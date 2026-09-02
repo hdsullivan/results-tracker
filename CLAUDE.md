@@ -7,7 +7,7 @@ them in a Streamlit GUI, export booktabs LaTeX tables and IEEE-sized matplotlib 
 
 ```bash
 source .venv/bin/activate            # or use .venv/bin/<tool> directly
-pytest -q                            # 100 tests, ~8 s
+pytest -q                            # 115 tests, ~9 s
 results-tracker demo --db demo.db --reset --artifacts demo_artifacts
 results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back to a free port)
 results-tracker export table -e main-comparison --db demo.db
@@ -38,6 +38,8 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 ## Conventions
 
 - Aggregation and export functions take plain record dicts so they are testable without a DB.
+- log_run deduplicates on (experiment, method, dataset, instance, seed, config); the importer passes on_duplicate='allow'.
+- Never rescale an image by its own max (shared display range); never pool rows over different dataset sets silently.
 - Metric direction lives in the `Metric` table; guessed from the name on first log, override with
   `results-tracker metric define`.
 - Streamlit widgets: use `width="stretch"` (not the deprecated `use_container_width`).

@@ -152,6 +152,12 @@ Rules of thumb:
   one instance.
 - Git commit and hostname are captured automatically. Pass `git_commit=None`
   to opt out (e.g. in tests).
+- **Re-running a script is safe.** A run with the same experiment, method,
+  dataset, instance, seed and config is a duplicate *setting*: by default
+  `log_run` keeps the existing completed run (with a `DuplicateRunWarning`) so
+  n never inflates, and replaces a failed one. Use `on_duplicate="replace"` to
+  overwrite, `"allow"` for deliberate repeats without a seed, `"error"` to be
+  strict. Booleans are not metrics; log flags in `config` or as explicit 0/1.
 
 ### Hydra / OmegaConf
 
@@ -252,17 +258,22 @@ results-tracker ui                         # uses $RESULTS_TRACKER_DB
 
 - **Overview** — is everything there? Failed runs are counted, not hidden. The
   "results at a glance" table is the paper's story in three lines.
-- **Comparison** — check the audit note on the Export page before trusting a
-  table: `7/8 cells present, 1 missing` means a method was never run on a
-  dataset.
+- **Comparison** — check the audit before trusting a table: `7/8 cells
+  present, 1 missing` means a method was never run on a dataset, and "rows
+  pooled over different datasets" means a pooled mean compares methods on
+  different data. With several datasets the page keeps dataset as a row key by
+  default for that reason.
 - **Sweep** — the sensitivity table tells you whether the chosen default sits
   on a plateau or on a knife edge.
 - **Ablation** — the effect-size verdict tells you which deltas the paper can
   claim; "within noise" means run more seeds or drop the claim.
-- **Visual** — the panel-metrics table recomputes PSNR from the images on disk
-  and flags any panel that disagrees with its logged number by more than
-  0.05 dB. A mismatch usually means a figure was regenerated from a different
-  checkpoint than the table.
+- **Visual** — the panel-metrics table recomputes PSNR and SSIM from the
+  images on disk and flags any panel that disagrees with its logged number by
+  more than 0.05 dB or 0.005. A mismatch usually means a figure was regenerated
+  from a different checkpoint than the table. Panels always show the same seed
+  and instance for every method; if no common one exists the page says so.
+  Float images are never rescaled per image: pass a data range shared by all
+  panels.
 
 Every page has a LaTeX expander and a paper-figure expander; the Export page has
 the full set of options (captions, labels, std style, widths).
@@ -347,7 +358,8 @@ many runs — useful as a supplementary artifact.
 | Symptom | Fix |
 |---|---|
 | A metric is ranked the wrong way (best is bold on the worst value) | `results-tracker metric define <name> --lower` (or without `--lower`) |
-| A swept parameter shows up as a metric column | Re-import with `--config-col <name>`, or log it inside `config` |
+| A swept parameter shows up as a metric column | The importer warns about integer columns with few distinct values; re-import with `--config-col <name>`, or log it inside `config` |
+| "ambiguous base" on the Ablation page | No run is tagged `base` and two configs are equally common; tag the full model's runs or pick the base in the sidebar |
 | Two runs of one method share a title in the Visual page | They differ only by seed/instance; pick one in the sidebar or use *Rows* |
 | "Not shown: X — no artifacts_dir" on the Visual page | X was imported without images (e.g. reported); expected |
 | Panel metrics warn about a PSNR gap | The image on disk is not the one the number was computed on; regenerate one of them |
