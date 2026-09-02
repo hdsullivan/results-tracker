@@ -1,5 +1,5 @@
 from results_tracker import aggregate as agg
-from results_tracker.ui.tables import ablation_html, comparison_html, delatex, flat_html, generic_html, sweep_html
+from results_tracker.ui.tables import ablation_html, comparison_html, delatex, figure_caption_html, flat_html, generic_html, sweep_html
 
 DEFS = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"},
         "rmse": {"unit": "", "higher_is_better": False, "fmt": ".3f"}}
@@ -81,3 +81,8 @@ def test_generic_html():
     assert "TABLE II" in h and "Cap &amp; more" in h
     assert '<td style="text-align:left">main</td>' in h and "<td>18</td>" in h and "<td>None</td>" in h  # raw column not escaped/dashed
     assert 'tr class="top head"' in h
+
+
+def test_figure_caption_html():
+    h = figure_caption_html("Sample: Set12 <b>x</b>.", number=3)
+    assert "<b>Fig. 3.</b>" in h and "&lt;b&gt;x&lt;/b&gt;" in h and 'class="ieee-figcap"' in h

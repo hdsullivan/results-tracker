@@ -10,7 +10,7 @@ from results_tracker import aggregate as agg  # noqa: E402
 from results_tracker.export.figures import figure_tex, ieee_preamble, to_grayscale_png, figure_bytes  # noqa: E402
 from results_tracker.export.visual import (  # noqa: E402
     IEEE_TEXTWIDTH_IN, Panel, PanelRow, build_panels, build_rows, crop, error_map, list_image_files, load_image,
-    guess_roles, luminance, psnr, reconstruction_figure, save_visual, zoom_region,
+    guess_roles, luminance, panel_metrics_rows, panel_psnr, psnr, reconstruction_figure, save_visual, zoom_region,
 )
 
 DEFS = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"}, "ssim": {"unit": "", "higher_is_better": True, "fmt": ".3f"}}
@@ -207,3 +207,22 @@ def test_guess_roles():
     r2 = guess_roles(["out/x_hat.png", "clean.png"])
     assert r2["reconstruction"] == "out/x_hat.png" and r2["reference"] == "clean.png" and r2["measurement"] is None
     assert guess_roles(["a.png"])["reconstruction"] == "a.png" and guess_roles([])["reconstruction"] is None
+
+
+def test_panel_psnr_and_metrics_rows(art):
+    gt, recs = art
+    panels, ref, _ = _panels(art)
+    methods = [p for p in panels if p.kind == "method"]
+    # recomputed PSNR: Ours (sigma 0.02) beats TV (sigma 0.08); identical image -> inf
+    assert panel_psnr(methods[1].image, ref.image) > panel_psnr(methods[0].image, ref.image)
+    assert panel_psnr(ref.image, ref.image) == float("inf")
+    with pytest.raises(ValueError):
+        panel_psnr(ref.image, ref.image[:10])
+    headers, rows, warns = panel_metrics_rows(recs, panels, ref, DEFS, metrics=["psnr", "ssim"])
+    assert headers == ["Panel", "psnr (logged)", "ssim (logged)", "PSNR (from image)", "Δ (dB)"]
+    assert [r[0] for r in rows] == ["TV [1]", "Ours"] and rows[0][1] == "30.00" and rows[0][2] == "0.900"
+    # the fixture's logged numbers are invented, so they must be flagged against the recomputed ones
+    assert len(warns) == 2 and all("recomputed" in w for w in warns)
+    # no reference -> no computed columns, no warnings
+    h2, r2, w2 = panel_metrics_rows(recs, panels, None, DEFS, metrics=["psnr"])
+    assert h2 == ["Panel", "psnr (logged)"] and len(r2[0]) == 2 and w2 == []

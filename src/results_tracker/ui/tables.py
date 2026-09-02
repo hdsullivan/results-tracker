@@ -36,6 +36,8 @@ table.ieee th.group span { display:block; border-bottom:.8px solid #000; margin:
 table.ieee td.base { font-weight:normal; }
 table.ieee small { font-size:12px; }
 table.ieee .std { font-size:15px; }
+.ieee-figcap { font-size:14px; line-height:1.4; text-align:justify; margin:6px auto 0 auto; max-width:900px; }
+.ieee-figcap b { font-weight:bold; }
 </style>
 """
 
@@ -312,3 +314,8 @@ def generic_html(
         body.append(f"<tr>{''.join(cells)}</tr>")
     table = f'<table class="ieee"><thead><tr class="top head">{head}</tr></thead><tbody>{"".join(body)}</tbody></table>'
     return _wrap(table, caption, number)
+
+
+def figure_caption_html(text: str, number: int = 1) -> str:
+    """IEEEtran-style figure caption ("Fig. 1. ...") in the paper look, placed under a rendered figure."""
+    return CSS + f'<div class="ieee-paper" style="display:block"><div class="ieee-figcap"><b>Fig. {number}.</b> {_esc(text)}</div></div>'

@@ -612,3 +612,66 @@ def make_visual(
                                       width=width)
     spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image = experiment, dataset, instance, seed, image
     return VisualResult(fig, spec, problems, omitted)
+
+
+# --------------------------------------------------------------------------- panel metrics audit
+
+METRIC_BORDER_CROP = 10  # lab convention (demo_utils.compute_per_image_metrics): drop a 10 px border
+
+
+def panel_psnr(img: np.ndarray, ref: np.ndarray, border: int = METRIC_BORDER_CROP, data_range: float = 1.0) -> float:
+    """PSNR of the shown image against the reference, on luminance with a border crop (lab convention)."""
+    a, b = luminance(img), luminance(ref)
+    if a.shape != b.shape:
+        raise ValueError(f"shape mismatch {a.shape} vs {b.shape}")
+    bc = border if min(a.shape) > 2 * border + 2 else 0
+    a = a[bc:a.shape[0] - bc, bc:a.shape[1] - bc]
+    b = b[bc:b.shape[0] - bc, bc:b.shape[1] - bc]
+    return psnr(a, b, data_range)
+
+
+def panel_metrics_rows(
+    records: Sequence[Mapping[str, Any]],
+    panels: Sequence[Panel],
+    reference: Optional[Panel],
+    defs: Mapping[str, Mapping[str, Any]],
+    metrics: Sequence[str] = ("psnr", "ssim"),
+    tolerance_db: float = 0.05,
+) -> tuple[list[str], list[list[str]], list[str]]:
+    """Rows for a 'panel metrics' table: logged metrics per shown run plus PSNR recomputed from the image.
+
+    Returns (headers, rows, warnings). A gap between logged and recomputed PSNR beyond `tolerance_db` is
+    flagged: it usually means the logged number was computed on a different image, crop or data range."""
+    by_title = {(r.get("method_label") or r.get("method")): r for r in records}
+    headers = ["Panel"] + [f"{m} (logged)" for m in metrics] + (["PSNR (from image)", "Δ (dB)"] if reference is not None else [])
+    rows: list[list[str]] = []
+    warnings: list[str] = []
+    for p in panels:
+        if p.kind != "method":
+            continue
+        rec = by_title.get(p.title) or next((r for r in records if p.path and r.get("artifacts_dir") and
+                                              str(Path(p.path).parent) == str(Path(r["artifacts_dir"]).expanduser())), None)
+        logged = (rec or {}).get("metrics", {})
+        row = [p.title]
+        for m in metrics:
+            v = logged.get(m)
+            row.append("—" if v is None else format(v, defs.get(m, {}).get("fmt", ".2f")))
+        if reference is not None:
+            try:
+                comp = panel_psnr(p.image, reference.image)
+            except ValueError as e:
+                row += ["—", str(e)]
+                rows.append(row)
+                continue
+            row.append(f"{comp:.2f}")
+            lv = logged.get("psnr")
+            if lv is None:
+                row.append("—")
+            else:
+                d = comp - float(lv)
+                row.append(f"{d:+.2f}")
+                if abs(d) > tolerance_db:
+                    warnings.append(f"{p.title}: logged PSNR {float(lv):.2f} dB vs {comp:.2f} dB recomputed from the shown image "
+                                    f"(Δ {d:+.2f} dB). Different image, crop, border or data range?")
+        rows.append(row)
+    return headers, rows, warnings
