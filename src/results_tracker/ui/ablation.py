@@ -99,6 +99,12 @@ def render() -> None:
     else:
         st.caption("Need a base and at least one variant to chart deltas.")
 
+    from ..export.latex import ablation_latex
+
+    with st.expander("LaTeX (booktabs)"):
+        st.code(ablation_latex(rows, metrics, defs), language="latex")
+        st.caption("More options on the Export page.")
+
     # --- export
     out = []
     for r in rows:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from results_tracker.ui import ablation, comparison, overview, run_detail, sweep
+from results_tracker.ui import ablation, comparison, export, overview, run_detail, sweep
 
 st.set_page_config(page_title="Results Tracker", page_icon="📊", layout="wide")
 
@@ -14,5 +14,6 @@ pages = [
     st.Page(sweep.render, title="Sweep", icon="📈", url_path="sweep"),
     st.Page(ablation.render, title="Ablation", icon="🧩", url_path="ablation"),
     st.Page(run_detail.render, title="Run detail", icon="🔍", url_path="run"),
+    st.Page(export.render, title="Export", icon="📤", url_path="export"),
 ]
 st.navigation(pages).run()

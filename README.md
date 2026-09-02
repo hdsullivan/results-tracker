@@ -3,9 +3,9 @@
 Track paper results — method comparisons, parameter sweeps, ablation studies —
 and export them as paper-ready tables and figures.
 
-**Status:** phase 3 — schema, logging API, CLI, aggregation, bulk import, and all
-five GUI pages (Overview, Comparison, Sweep, Ablation, Run detail). Paper exports
-(LaTeX tables, IEEE figures) come in phase 4. See [PLAN.md](PLAN.md).
+**Status:** phase 4 — schema, logging API, CLI, aggregation, bulk import, six GUI
+pages (Overview, Comparison, Sweep, Ablation, Run detail, Export) and paper
+exports: booktabs LaTeX tables and IEEE-sized vector figures. See [PLAN.md](PLAN.md).
 
 ## Install
 
@@ -47,6 +47,36 @@ Pages:
   any run you pick.
 - **Run detail** — config, metrics, config and metric diff against any other
   run, image gallery and log tail from the run's `artifacts_dir`.
+- **Export** — LaTeX tables (comparison, ablation, sweep) and IEEE figures
+  (sweep lines, ablation deltas, grouped comparison bars) with preview and
+  download. The comparison export audits the grid first and lists missing or
+  failed method × dataset cells.
+
+## Paper exports
+
+```bash
+# booktabs table: methods as rows, dataset groups x metrics as columns
+results-tracker export table -e main-comparison --label tab:main -o paper/tab_main.tex
+results-tracker export table -e main-comparison --cols none --env none      # bare tabular to stdout
+results-tracker export ablation-table -e ablation -o paper/tab_ablation.tex
+results-tracker export sweep-table -e lambda-sweep --param lambda --metric psnr --param-label '$\lambda$'
+
+# vector figures at IEEE column width (3.5 in single, 7.16 in double)
+results-tracker export sweep-fig -e lambda-sweep --param lambda --metric psnr \
+    --xlabel '$\lambda$' --ylabel 'PSNR (dB)' -o paper/fig_lambda.pdf --png
+results-tracker export ablation-fig -e ablation --metric psnr -o paper/fig_ablation.pdf
+results-tracker export comparison-fig -e main-comparison --metric psnr --emphasize Ours --width double -o paper/fig_main.pdf
+
+results-tracker export runs-csv -e main-comparison -o all_runs.csv
+```
+
+Conventions baked in: rankings are computed on unrounded means, best is bold and
+second best underlined per column, units and direction arrows sit in the header,
+missing cells render as `--` and are listed in a comment, and every `.tex` starts
+with a provenance comment (database, experiment, run count, timestamp). Method
+row labels come from `define_method(name, label="TV~\cite{rudin}")`. Figures use
+serif 8 pt text with embedded fonts, a fixed colour + line style + marker per
+method, and hatching on bars so they survive grayscale printing.
 
 ## Importing existing results
 

@@ -20,7 +20,10 @@ from .db import get_engine, resolve_db_path
 app = typer.Typer(help="Track paper results: comparisons, sweeps, ablations.", no_args_is_help=True)
 metric_app = typer.Typer(help="Define how metrics are displayed and ranked.")
 app.add_typer(metric_app, name="metric")
+export_app = typer.Typer(help="Paper-ready exports: booktabs LaTeX tables, IEEE-sized figures, CSV.", no_args_is_help=True)
+app.add_typer(export_app, name="export")
 console = Console()
+err_console = Console(stderr=True)
 
 DbOpt = typer.Option(None, "--db", help="SQLite file (default: $RESULTS_TRACKER_DB or ./results.db).")
 
@@ -336,6 +339,248 @@ def ui(
     except KeyboardInterrupt:
         proc.terminate()
         raise typer.Exit(code=0)
+
+
+
+# --------------------------------------------------------------------------- export
+
+def _load_experiment(experiment: str, project: Optional[str], db: Optional[Path]):
+    engine = get_engine(db)
+    recs = run_records(get_runs(experiment=experiment, project=project, engine=engine), engine=engine)
+    if not recs:
+        console.print(f"[red]no runs found for experiment {experiment!r}[/]")
+        raise typer.Exit(code=1)
+    defs = {k: {"unit": m.unit, "higher_is_better": m.higher_is_better, "fmt": m.fmt}
+            for k, m in get_metric_defs(engine=engine).items()}
+    return recs, defs
+
+
+def _emit(text: str, out: Optional[Path]) -> None:
+    if out is None:
+        typer.echo(text, nl=False)
+        return
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text)
+    console.print(f"[green]wrote[/] {out}")
+
+
+def _env(env: str) -> Optional[str]:
+    return None if env in ("none", "tabular") else env
+
+
+def _save_fig(fig, out: Path, png: bool) -> None:
+    from .export.figures import save_figure
+
+    for pth in save_figure(fig, out, also_png=png):
+        console.print(f"[green]wrote[/] {pth}")
+
+
+ExpOpt = typer.Option(..., "--experiment", "-e")
+ProjOpt = typer.Option(None, "--project", "-p")
+OutOpt = typer.Option(None, "--out", "-o", help="Output file; prints to stdout when omitted.")
+EnvOpt = typer.Option("table", "--env", help="table | table* | none (bare tabular)")
+StdOpt = typer.Option("pm", "--std", help="pm | small | none")
+FontOpt = typer.Option(None, "--font", help="e.g. small, footnotesize")
+WidthOpt = typer.Option("single", "--width", help="single (3.5 in) | double (7.16 in) | inches")
+PngOpt = typer.Option(False, "--png", help="Also write a 300-dpi PNG next to the PDF.")
+
+
+def _width(w: str):
+    try:
+        return float(w)
+    except ValueError:
+        return w
+
+
+@export_app.command("table")
+def export_table(
+    experiment: str = ExpOpt,
+    project: Optional[str] = ProjOpt,
+    rows: str = typer.Option("method", "--rows", help="Row key: method, dataset, config.<k>"),
+    cols: str = typer.Option("dataset", "--cols", help="Column-group key, or 'none'."),
+    metric: list[str] = typer.Option([], "--metric", help="Metrics (repeatable). Default: all."),
+    caption: Optional[str] = typer.Option(None, "--caption"),
+    label: Optional[str] = typer.Option(None, "--label"),
+    env: str = EnvOpt,
+    font: Optional[str] = FontOpt,
+    std: str = StdOpt,
+    no_underline: bool = typer.Option(False, "--no-underline", help="Don't underline second best."),
+    out: Optional[Path] = OutOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Comparison table: rows x (column group x metric), best bold, second underlined."""
+    from . import aggregate as agg
+    from .export.latex import comparison_latex, provenance_note, width_hint
+
+    recs, defs = _load_experiment(experiment, project, db)
+    col_key = None if cols == "none" else cols
+    pt = agg.pivot_table(recs, rows, col_key, metrics=metric or None,
+                         higher_is_better={k: v["higher_is_better"] for k, v in defs.items()})
+    audit = agg.audit_grid(recs, [rows] + ([col_key] if col_key else []))
+    if audit.missing or audit.failed or audit.uneven:
+        err_console.print(f"[yellow]audit:[/] {audit.summary()}")
+    hint = width_hint(pt, std, _env(env), font)
+    if hint:
+        err_console.print(f"[yellow]width:[/] {hint}")
+    text = comparison_latex(
+        pt, defs, caption=caption, label=label, env=_env(env), font=font, std=std,
+        underline_second=not no_underline, row_labels=agg.method_labels(recs) if rows == "method" else None,
+        audit=audit, provenance=provenance_note(resolve_db_path(db), experiment, len(recs)),
+    )
+    _emit(text, out)
+
+
+@export_app.command("ablation-table")
+def export_ablation_table(
+    experiment: str = ExpOpt,
+    project: Optional[str] = ProjOpt,
+    metric: list[str] = typer.Option([], "--metric"),
+    caption: Optional[str] = typer.Option(None, "--caption"),
+    label: Optional[str] = typer.Option(None, "--label"),
+    env: str = EnvOpt,
+    font: Optional[str] = FontOpt,
+    std: str = StdOpt,
+    no_delta: bool = typer.Option(False, "--no-delta"),
+    no_settings: bool = typer.Option(False, "--no-settings", help="Omit the per-setting ✓/✗ columns."),
+    out: Optional[Path] = OutOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Ablation table: variants x (settings, metrics with deltas vs the full model)."""
+    from . import aggregate as agg
+    from .export.latex import ablation_latex, provenance_note
+
+    recs, defs = _load_experiment(experiment, project, db)
+    rows = agg.ablation_table(recs, metrics=metric or None)
+    metrics = metric or (list(rows[0].stats) if rows else [])
+    text = ablation_latex(rows, metrics, defs, caption=caption, label=label, env=_env(env), font=font, std=std,
+                          show_delta=not no_delta, setting_columns=not no_settings,
+                          provenance=provenance_note(resolve_db_path(db), experiment, len(recs)))
+    _emit(text, out)
+
+
+@export_app.command("sweep-table")
+def export_sweep_table(
+    experiment: str = ExpOpt,
+    param: str = typer.Option(..., "--param"),
+    metric: str = typer.Option(..., "--metric"),
+    project: Optional[str] = ProjOpt,
+    by: list[str] = typer.Option([], "--by"),
+    param_label: Optional[str] = typer.Option(None, "--param-label", help=r"LaTeX label, e.g. '$\lambda$'"),
+    caption: Optional[str] = typer.Option(None, "--caption"),
+    label: Optional[str] = typer.Option(None, "--label"),
+    env: str = EnvOpt,
+    std: str = StdOpt,
+    out: Optional[Path] = OutOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Sweep table: swept values x groups, best per column in bold."""
+    from . import aggregate as agg
+    from .export.latex import provenance_note, sweep_latex
+
+    recs, defs = _load_experiment(experiment, project, db)
+    series = agg.sweep_series(recs, param, metric, group_by=by)
+    text = sweep_latex(series, param, metric, defs, caption=caption, label=label, env=_env(env), std=std,
+                       param_label=param_label, provenance=provenance_note(resolve_db_path(db), experiment, len(recs)))
+    _emit(text, out)
+
+
+@export_app.command("sweep-fig")
+def export_sweep_fig(
+    experiment: str = ExpOpt,
+    param: str = typer.Option(..., "--param"),
+    metric: str = typer.Option(..., "--metric"),
+    out: Path = typer.Option(..., "--out", "-o", help=".pdf (vector) or .png"),
+    project: Optional[str] = ProjOpt,
+    by: list[str] = typer.Option([], "--by", help="One line per group (method, dataset)."),
+    xlabel: Optional[str] = typer.Option(None, "--xlabel", help=r"e.g. '$\lambda$'"),
+    ylabel: Optional[str] = typer.Option(None, "--ylabel", help="e.g. 'PSNR (dB)'"),
+    width: str = WidthOpt,
+    height: Optional[float] = typer.Option(None, "--height", help="inches"),
+    no_band: bool = typer.Option(False, "--no-band", help="Error bars instead of a shaded band."),
+    emphasize: list[str] = typer.Option([], "--emphasize", help="Group label(s) drawn thicker, e.g. Ours"),
+    png: bool = PngOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Metric vs swept parameter (IEEE single/double column, PDF)."""
+    from . import aggregate as agg
+    from .export.figures import sweep_figure
+
+    recs, defs = _load_experiment(experiment, project, db)
+    series = agg.sweep_series(recs, param, metric, group_by=by)
+    hib = defs.get(metric, {}).get("higher_is_better", True)
+    best = {g: agg.best_sweep_value(s, hib) for g, s in series.items()}
+    unit = defs.get(metric, {}).get("unit", "")
+    fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
+                       band=not no_band, best_by_group=best, width=_width(width), height=height, emphasize=emphasize)
+    _save_fig(fig, out, png)
+
+
+@export_app.command("ablation-fig")
+def export_ablation_fig(
+    experiment: str = ExpOpt,
+    metric: str = typer.Option(..., "--metric"),
+    out: Path = typer.Option(..., "--out", "-o"),
+    project: Optional[str] = ProjOpt,
+    xlabel: Optional[str] = typer.Option(None, "--xlabel"),
+    width: str = WidthOpt,
+    height: Optional[float] = typer.Option(None, "--height"),
+    png: bool = PngOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Horizontal bars of each variant's change vs the full model."""
+    from . import aggregate as agg
+    from .export.figures import ablation_figure
+
+    recs, defs = _load_experiment(experiment, project, db)
+    rows = agg.ablation_table(recs, metrics=[metric])
+    d = defs.get(metric, {})
+    fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
+                          xlabel=xlabel, width=_width(width), height=height)
+    _save_fig(fig, out, png)
+
+
+@export_app.command("comparison-fig")
+def export_comparison_fig(
+    experiment: str = ExpOpt,
+    metric: str = typer.Option(..., "--metric"),
+    out: Path = typer.Option(..., "--out", "-o"),
+    project: Optional[str] = ProjOpt,
+    rows: str = typer.Option("method", "--rows"),
+    cols: str = typer.Option("dataset", "--cols"),
+    ylabel: Optional[str] = typer.Option(None, "--ylabel"),
+    width: str = WidthOpt,
+    height: Optional[float] = typer.Option(None, "--height"),
+    emphasize: list[str] = typer.Option([], "--emphasize"),
+    png: bool = PngOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Grouped bars: x = column key, one bar per row entity, error bar = std."""
+    from . import aggregate as agg
+    from .export.figures import comparison_figure
+
+    recs, defs = _load_experiment(experiment, project, db)
+    pt = agg.pivot_table(recs, rows, None if cols == "none" else cols, metrics=[metric],
+                         higher_is_better={k: v["higher_is_better"] for k, v in defs.items()})
+    unit = defs.get(metric, {}).get("unit", "")
+    fig = comparison_figure(pt, metric, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
+                            width=_width(width), height=height, emphasize=emphasize,
+                            row_labels=agg.method_labels(recs) if rows == "method" else None)
+    _save_fig(fig, out, png)
+
+
+@export_app.command("runs-csv")
+def export_runs_csv(
+    experiment: str = ExpOpt,
+    project: Optional[str] = ProjOpt,
+    out: Optional[Path] = OutOpt,
+    db: Optional[Path] = DbOpt,
+):
+    """Every run as one CSV row (config keys and metrics as columns)."""
+    from .export.csv import runs_csv
+
+    recs, _ = _load_experiment(experiment, project, db)
+    _emit(runs_csv(recs), out)
+
 
 
 if __name__ == "__main__":  # pragma: no cover

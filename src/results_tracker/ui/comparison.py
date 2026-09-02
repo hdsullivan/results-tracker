@@ -102,3 +102,14 @@ def render() -> None:
 
     with st.expander("Raw numbers"):
         st.dataframe(df, width="stretch", hide_index=True)
+
+    if 1 <= len(group_by) <= 2:
+        from ..export.latex import comparison_latex
+
+        with st.expander("LaTeX (booktabs)"):
+            pt = agg.pivot_table(pool, group_by[0], group_by[1] if len(group_by) == 2 else None, metrics=metrics,
+                                 higher_is_better=hib_map(defs))
+            tex = comparison_latex(pt, defs, std="pm" if show_std else "none",
+                                   row_labels=agg.method_labels(pool) if group_by[0] == "method" else None)
+            st.code(tex, language="latex")
+            st.caption("More options (captions, labels, audit, figures) on the Export page.")

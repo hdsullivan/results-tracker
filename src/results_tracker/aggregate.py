@@ -69,6 +69,15 @@ def group_records(records: Iterable[Record], keys: Sequence[str]) -> dict[GroupK
     return groups
 
 
+def method_labels(records: Iterable[Record]) -> dict[Any, str]:
+    """method name -> display label (from Method.label), for table row labels."""
+    out: dict[Any, str] = {}
+    for r in records:
+        if r.get("method") is not None and r.get("method_label"):
+            out.setdefault(r["method"], r["method_label"])
+    return out
+
+
 def completed(records: Iterable[Record]) -> list[Record]:
     return [r for r in records if r.get("status", "completed") == "completed"]
 
@@ -95,6 +104,21 @@ def aggregate_metrics(
     out: dict[GroupKey, dict[str, Optional[Stat]]] = {}
     for key, rs in group_records(recs, group_by).items():
         out[key] = {m: summarize(r["metrics"].get(m) for r in rs) for m in names}
+    return out
+
+
+# --------------------------------------------------------------------------- ranking
+
+def rank_values(scored: Sequence[tuple[float, Hashable]], higher_is_better: bool = True) -> dict[Hashable, int]:
+    """1 = best. Ties share a rank (1, 1, 3). Uses the unrounded values passed in."""
+    ordered = sorted(scored, key=lambda t: t[0], reverse=higher_is_better)
+    out: dict[Hashable, int] = {}
+    last, pos = None, 0
+    for i, (val, key) in enumerate(ordered):
+        if val != last:
+            pos = i + 1
+            last = val
+        out[key] = pos
     return out
 
 
@@ -138,16 +162,127 @@ def comparison_table(
         rows.sort(key=row_order)
     rank: dict[str, dict[GroupKey, int]] = {}
     for m in names:
-        scored = [(agg[r][m].mean, r) for r in rows if agg[r].get(m) is not None]
-        scored.sort(key=lambda t: t[0], reverse=hib[m])
-        rank[m] = {}
-        last, pos = None, 0
-        for i, (val, r) in enumerate(scored):
-            if val != last:  # ties share a rank
-                pos = i + 1
-                last = val
-            rank[m][r] = pos
+        rank[m] = rank_values([(agg[r][m].mean, r) for r in rows if agg[r].get(m) is not None], hib[m])
     return ComparisonTable(tuple(group_by), rows, names, agg, rank, hib)
+
+
+# --------------------------------------------------------------------------- pivot (paper layout)
+
+@dataclass
+class PivotTable:
+    """rows = one key (methods), column groups = another key (datasets), metrics under each group.
+
+    Ranks are computed within each (column, metric) from unrounded means.
+    """
+
+    row_key: str
+    col_key: Optional[str]
+    rows: list[Any]
+    cols: list[Any]  # [None] when col_key is None
+    metrics: list[str]
+    cells: dict[tuple[Any, Any], dict[str, Optional[Stat]]]
+    rank: dict[tuple[Any, str], dict[Any, int]]
+    higher_is_better: dict[str, bool]
+
+    def stat(self, row: Any, col: Any, metric: str) -> Optional[Stat]:
+        return self.cells.get((row, col), {}).get(metric)
+
+    def is_best(self, row: Any, col: Any, metric: str) -> bool:
+        return self.rank.get((col, metric), {}).get(row) == 1
+
+    def is_second(self, row: Any, col: Any, metric: str) -> bool:
+        return self.rank.get((col, metric), {}).get(row) == 2
+
+    def n_values(self) -> set[int]:
+        return {st.n for cell in self.cells.values() for st in cell.values() if st is not None}
+
+
+def pivot_table(
+    records: Iterable[Record],
+    row_key: str = "method",
+    col_key: Optional[str] = "dataset",
+    metrics: Optional[Sequence[str]] = None,
+    higher_is_better: Optional[Mapping[str, bool]] = None,
+    row_order: Optional[Sequence[Any]] = None,
+    col_order: Optional[Sequence[Any]] = None,
+) -> PivotTable:
+    recs = completed(records)
+    keys = [row_key] + ([col_key] if col_key else [])
+    agg = aggregate_metrics(recs, keys, metrics)
+    names = list(metrics) if metrics else metric_names(recs)
+    hib = {m: (higher_is_better or {}).get(m, True) for m in names}
+    rows_seen: list[Any] = []
+    cols_seen: list[Any] = []
+    cells: dict[tuple[Any, Any], dict[str, Optional[Stat]]] = {}
+    for key, stats in agg.items():
+        r = key[0]
+        c = key[1] if col_key else None
+        if r not in rows_seen:
+            rows_seen.append(r)
+        if c not in cols_seen:
+            cols_seen.append(c)
+        cells[(r, c)] = stats
+    rows = [r for r in row_order if r in rows_seen] + [r for r in rows_seen if not row_order or r not in row_order] if row_order else rows_seen
+    cols = [c for c in col_order if c in cols_seen] + [c for c in cols_seen if not col_order or c not in col_order] if col_order else cols_seen
+    if col_key:
+        cols = sorted(cols, key=lambda c: cols.index(c)) if col_order else sorted(cols, key=_sort_key)
+    rank: dict[tuple[Any, str], dict[Any, int]] = {}
+    for c in cols:
+        for m in names:
+            scored = [(cells[(r, c)][m].mean, r) for r in rows if (r, c) in cells and cells[(r, c)].get(m) is not None]
+            rank[(c, m)] = rank_values(scored, hib[m])
+    return PivotTable(row_key, col_key, rows, cols, names, cells, rank, hib)
+
+
+# --------------------------------------------------------------------------- audit
+
+@dataclass
+class GridAudit:
+    keys: tuple[str, ...]
+    expected: int
+    present: int
+    missing: list[tuple]  # combinations with no completed run
+    failed: dict[tuple, int]  # combinations with failed runs (count)
+    n_per_cell: dict[tuple, int]
+
+    @property
+    def uneven(self) -> bool:
+        return len(set(self.n_per_cell.values())) > 1
+
+    def summary(self) -> str:
+        parts = [f"{self.present}/{self.expected} cells present"]
+        if self.missing:
+            parts.append(f"{len(self.missing)} missing")
+        if self.failed:
+            parts.append(f"{sum(self.failed.values())} failed run(s) in {len(self.failed)} cell(s)")
+        if self.uneven:
+            ns = sorted(set(self.n_per_cell.values()))
+            parts.append(f"n varies ({ns[0]}–{ns[-1]})")
+        return ", ".join(parts)
+
+
+def audit_grid(records: Iterable[Record], keys: Sequence[str]) -> GridAudit:
+    """Check that every combination of observed key values has completed runs.
+
+    E.g. keys=("method", "dataset"): every method should have been run on every dataset.
+    """
+    from itertools import product
+
+    recs = list(records)
+    values = [sorted({get_field(r, k) for r in recs if get_field(r, k) is not None}, key=_sort_key) for k in keys]
+    n_per: dict[tuple, int] = {}
+    failed: dict[tuple, int] = {}
+    for r in recs:
+        combo = tuple(get_field(r, k) for k in keys)
+        if any(v is None for v in combo):
+            continue
+        if r.get("status", "completed") == "completed":
+            n_per[combo] = n_per.get(combo, 0) + 1
+        elif r.get("status") == "failed":
+            failed[combo] = failed.get(combo, 0) + 1
+    expected = list(product(*values)) if values and all(values) else []
+    missing = [c for c in expected if c not in n_per]
+    return GridAudit(tuple(keys), len(expected), len(n_per), missing, failed, n_per)
 
 
 # --------------------------------------------------------------------------- sweeps

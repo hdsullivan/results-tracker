@@ -146,3 +146,45 @@ def test_ablation_relative_delta():
     assert math.isclose(var.delta["psnr"], -2.0)
     assert math.isclose(var.rel_delta("psnr"), -0.1)
     assert rows[0].rel_delta("psnr") == 0.0
+
+
+def test_pivot_table_ranks_within_each_column():
+    recs = []
+    for s in range(2):
+        recs += [
+            rec("A", s, psnr=30.0), rec("B", s, psnr=31.0),
+        ]
+    for r in recs:
+        r["dataset"] = "D1"
+    recs += [{**rec("A", 0, psnr=35.0), "dataset": "D2"}, {**rec("B", 0, psnr=20.0), "dataset": "D2"}]
+    pt = agg.pivot_table(recs, "method", "dataset", metrics=["psnr"])
+    assert pt.rows == ["A", "B"] and pt.cols == ["D1", "D2"]
+    assert pt.is_best("B", "D1", "psnr") and pt.is_second("A", "D1", "psnr")
+    assert pt.is_best("A", "D2", "psnr") and not pt.is_best("B", "D2", "psnr")
+    assert pt.stat("A", "D1", "psnr").n == 2 and pt.n_values() == {1, 2}
+    pt2 = agg.pivot_table(recs, "method", None, metrics=["psnr"], row_order=["B", "A"])
+    assert pt2.rows == ["B", "A"] and pt2.cols == [None]
+    assert pt2.is_best("A", None, "psnr")  # A mean over everything = (30+30+35)/3 > B
+
+
+def test_audit_grid():
+    recs = [rec("A", 0, psnr=1), rec("A", 1, psnr=1), rec("B", 0, psnr=1), rec("B", 1, psnr=1, status="failed")]
+    for r in recs:
+        r["dataset"] = "D1"
+    recs.append({**rec("A", 0, psnr=1), "dataset": "D2"})
+    a = agg.audit_grid(recs, ["method", "dataset"])
+    assert a.expected == 4 and a.present == 3
+    assert a.missing == [("B", "D2")]
+    assert a.failed == {("B", "D1"): 1}
+    assert a.uneven and a.n_per_cell[("A", "D1")] == 2
+    assert "1 missing" in a.summary() and "1 failed run" in a.summary()
+
+
+def test_rank_values_ties():
+    assert agg.rank_values([(1.0, "a"), (2.0, "b"), (2.0, "c"), (0.5, "d")]) == {"b": 1, "c": 1, "a": 3, "d": 4}
+    assert agg.rank_values([(1.0, "a"), (2.0, "b")], higher_is_better=False) == {"a": 1, "b": 2}
+
+
+def test_method_labels():
+    recs = [{"method": "TV", "method_label": "TV [1]"}, {"method": "Ours", "method_label": "Ours"}, {"method": None}]
+    assert agg.method_labels(recs) == {"TV": "TV [1]", "Ours": "Ours"}

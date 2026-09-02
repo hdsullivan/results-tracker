@@ -99,3 +99,28 @@ def test_ablation_page(demo_db):
     assert not at.exception
     md = "\n".join(m.value for m in at.markdown)
     assert "%)" in md
+
+
+def test_export_page_latex_and_figure(demo_db):
+    at = _run("export")
+    # default experiment "ablation" -> ablation table kind preselected
+    code = "\n".join(c.value for c in at.code)
+    assert "\\begin{tabular}" in code and "\\checkmark" in code
+    assert at.sidebar.radio[0].value == "Ablation table (LaTeX)"
+    at.sidebar.radio[0].set_value("Ablation figure").run()
+    assert not at.exception
+    assert not at.warning and not at.error
+    at.sidebar.radio[0].set_value("Runs (CSV)").run()
+    assert not at.exception
+    assert any("runs (including failed)" in c.value for c in at.caption)
+
+
+def test_export_page_comparison_audit(demo_db):
+    at = _run("export")
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    assert not at.exception
+    assert at.sidebar.radio[0].value == "Comparison table (LaTeX)"
+    assert any("6/6 cells present" in s.value for s in at.success)
+    code = "\n".join(c.value for c in at.code)
+    assert "\\multicolumn{3}{c}{Set12}" in code and "TV [1]" in code
