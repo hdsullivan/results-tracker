@@ -9,7 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from .. import aggregate as agg
-from .common import fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from ..api import delete_runs
+from .common import db_path, engine_for, fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 LOG_EXT = {".log", ".txt", ".out", ".err"}
@@ -104,6 +105,8 @@ def show_artifacts(run: dict, other: Optional[dict], defs: dict) -> None:
 def render() -> None:
     st.title("Run detail")
     sidebar_db()
+    if "flash" in st.session_state:
+        st.success(st.session_state.pop("flash"))
     project, experiment = select_project_experiment(prefer="comparison")
     if experiment is None:
         return
@@ -177,3 +180,15 @@ def render() -> None:
         show_artifacts(run, other if others else None, defs)
     else:
         st.caption("No artifacts directory recorded for this run.")
+
+    with st.expander("Delete this run"):
+        st.warning("Removes the run from the database only; files in the artifacts folder are kept. "
+                   "Tables, sweeps and ablations that used this run will change. This cannot be undone.")
+        armed = st.checkbox(f"Yes, delete run #{run['run_id']} ({run_label(run)})", key="del_confirm")
+        if st.button(f"Delete run #{run['run_id']}", type="primary", disabled=not armed, key="del_btn"):
+            n = delete_runs([run["run_id"]], engine=engine_for(db_path()))
+            st.cache_data.clear()
+            for k in ("run_pick", "run_other", "del_confirm"):
+                st.session_state.pop(k, None)
+            st.session_state["flash"] = f"Deleted run #{run['run_id']} ({run_label(run)})." if n else "Run was already gone."
+            st.rerun()

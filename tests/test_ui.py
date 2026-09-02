@@ -190,3 +190,19 @@ def test_export_page_visual_and_bundle(demo_db):
     assert not at.exception and not at.error
     md = "\n".join(m.value for m in at.markdown)
     assert "Contents of the paper bundle" in md and "comparison-table" in md and "visual-figure" in md
+
+
+def test_run_detail_delete_button(demo_db):
+    at = _run("run_detail")
+    n_runs = len(at.selectbox[0].options)
+    first = at.selectbox[0].value
+    # button is disabled until the confirmation box is ticked
+    btn = [b for b in at.button if b.label.startswith("Delete run")][0]
+    assert btn.disabled
+    [cb for cb in at.checkbox if cb.label.startswith("Yes, delete run")][0].check().run()
+    btn = [b for b in at.button if b.label.startswith("Delete run")][0]
+    assert not btn.disabled
+    btn.click().run()
+    assert not at.exception
+    assert any("Deleted run #" in s.value for s in at.success)
+    assert len(at.selectbox[0].options) == n_runs - 1 and first not in at.selectbox[0].options

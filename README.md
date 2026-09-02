@@ -87,7 +87,8 @@ Pages:
 - **Run detail** — config, metrics, config and metric diff against any other
   run; the run's `artifacts_dir` rendered as a lab-style figure strip (ground
   truth, measurement, this run and optionally the compared run, zoom inset or
-  error map) plus the remaining images and a log tail.
+  error map) plus the remaining images and a log tail; a guarded *Delete this
+  run* action.
 - **Export** — LaTeX tables (comparison, ablation, sweep) with a compiled-look
   preview, IEEE figures (sweep lines, ablation deltas, grouped comparison bars,
   qualitative image grids) with grayscale check and `figure` snippets, the runs

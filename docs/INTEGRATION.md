@@ -352,7 +352,7 @@ many runs — useful as a supplementary artifact.
 | "Not shown: X — no artifacts_dir" on the Visual page | X was imported without images (e.g. reported); expected |
 | Panel metrics warn about a PSNR gap | The image on disk is not the one the number was computed on; regenerate one of them |
 | The comparison table overflows the column | Follow the width hint: `--std small`, `--font footnotesize`, drop a metric, or `--env 'table*'` |
-| Wrong run logged | `results-tracker delete 42` (or `delete -e exp --status failed`); it shows the rows and asks first. Note the deletion in the commit message |
+| Wrong run logged | `results-tracker delete 42` (or `delete -e exp --status failed`), or the *Delete this run* expander on the Run detail page; both show what goes and ask first. Note the deletion in the commit message |
 | GUI shows stale data | Click *Refresh* in the sidebar (results are cached per database modification time) |
 | Port 8501 busy | `results-tracker ui` picks the next free port and prints it |
 
