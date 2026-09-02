@@ -544,6 +544,10 @@ def describe_diff(diff: Mapping[str, tuple[Any, Any]]) -> str:
     return "; ".join(parts)
 
 
+class AmbiguousBaseError(ValueError):
+    """No run is tagged 'base', no base was given, and the most common config is not unique."""
+
+
 @dataclass
 class AblationRow:
     label: str
@@ -599,7 +603,13 @@ def ablation_table(
                 sig = tuple((k, repr(v)) for k, v in sig)
                 n, _ = counts.get(sig, (0, r["config"]))
                 counts[sig] = (n + 1, r["config"])
-            base_config = max(counts.values(), key=lambda t: t[0])[1]
+            top = max(n for n, _ in counts.values())
+            leaders = [cfg for n, cfg in counts.values() if n == top]
+            if len(leaders) > 1:
+                raise AmbiguousBaseError(
+                    f"{len(leaders)} configs share the highest run count ({top}); tag the full model's runs with "
+                    "'base' or pass base_run_id/base_config — the base cannot be guessed")
+            base_config = leaders[0]
 
     names = list(metrics) if metrics else metric_names(recs)
     groups: dict[tuple, tuple[dict, list[Record]]] = {}

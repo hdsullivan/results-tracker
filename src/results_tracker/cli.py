@@ -271,7 +271,11 @@ def ablation(
     engine = get_engine(db)
     recs = run_records(get_runs(experiment=experiment, project=project, engine=engine), engine=engine)
     defs = get_metric_defs(engine=engine)
-    rows = agg.ablation_table(recs, metrics=metrics or None)
+    try:
+        rows = agg.ablation_table(recs, metrics=metrics or None)
+    except agg.AmbiguousBaseError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
     names = rows[0].stats.keys() if rows else []
     t = Table("variant", *[f"{m} (Δ)" for m in names], "n")
     for r in rows:
@@ -347,11 +351,15 @@ def import_cmd(
             console.print_json(json.dumps(normalize(raws[0], spec), default=str))
         res = import_path(path, spec, db=db, dry_run=True)
         console.print(f"would import {res.imported}, skip {res.skipped}")
+        for w in res.warnings:
+            err_console.print(f"[yellow]{w}[/]", soft_wrap=True)
         return
     res = import_path(path, spec, db=db)
     console.print(f"[green]{res}[/] -> {project}/{experiment}")
     for e in res.errors[:10]:
         console.print(f"[red]{e}[/]")
+    for w in res.warnings:
+        err_console.print(f"[yellow]{w}[/]", soft_wrap=True)
 
 
 def _free_port(start: int, tries: int = 50) -> int:
@@ -536,7 +544,11 @@ def export_ablation_table(
     from .export.latex import ablation_latex, provenance_note
 
     recs, defs = _load_experiment(experiment, project, db)
-    rows = agg.ablation_table(recs, metrics=metric or None)
+    try:
+        rows = agg.ablation_table(recs, metrics=metric or None)
+    except agg.AmbiguousBaseError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
     metrics = metric or (list(rows[0].stats) if rows else [])
     text = ablation_latex(rows, metrics, defs, caption=caption, label=label, env=_env(env), font=font, std=std,
                           show_delta=not no_delta, setting_columns=not no_settings,
@@ -623,7 +635,11 @@ def export_ablation_fig(
     from .export.figures import ablation_figure
 
     recs, defs = _load_experiment(experiment, project, db)
-    rows = agg.ablation_table(recs, metrics=[metric])
+    try:
+        rows = agg.ablation_table(recs, metrics=[metric])
+    except agg.AmbiguousBaseError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
     d = defs.get(metric, {})
     fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
                           xlabel=xlabel, width=_width(width), height=height, caption=panel_label)
@@ -688,6 +704,7 @@ def export_visual(
     crop: Optional[str] = typer.Option(None, "--crop", help="Explicit x,y,w,h zoom box (overrides fraction/centre)."),
     rows: Optional[str] = typer.Option(None, "--rows", help="One row per value of: seed | instance | config.<key>"),
     width: str = typer.Option("double", "--width", help="double (IEEE text width 7.16 in) | single (3.5 in) | inches"),
+    data_range: Optional[float] = typer.Option(None, "--data-range", help="Divisor for float/32-bit images (same for all panels)."),
     tex: bool = TexOpt,
     db: Optional[Path] = DbOpt,
 ):
@@ -704,7 +721,7 @@ def export_visual(
         vr = make_visual(recs, defs, experiment=experiment, dataset=dataset, seed=seed, instance=instance, image=image,
                          reference=reference, measurement=measurement, kernel=kernel, methods=method or None, metrics=metric,
                          mode=mode, zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=(cx, cy), crop_box=box, rows=rows,
-                         width=_width(width))
+                         width=_width(width), data_range=data_range)
     except ValueError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(code=1)

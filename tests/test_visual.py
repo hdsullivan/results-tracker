@@ -40,6 +40,27 @@ def art(tmp_path):
     return gt, recs
 
 
+def test_float_images_are_not_rescaled_per_image(tmp_path):
+    Image.fromarray(np.full((8, 8), 2.0, np.float32), mode="F").save(tmp_path / "a.tiff")
+    Image.fromarray(np.full((8, 8), 4.0, np.float32), mode="F").save(tmp_path / "b.tiff")
+    with pytest.raises(ValueError, match="data_range"):
+        load_image(tmp_path / "a.tiff")
+    a = load_image(tmp_path / "a.tiff", data_range=4.0)
+    b = load_image(tmp_path / "b.tiff", data_range=4.0)
+    assert a.max() == pytest.approx(0.5) and b.max() == pytest.approx(1.0)  # same scale, different brightness
+    Image.fromarray(np.full((8, 8), 0.25, np.float32), mode="F").save(tmp_path / "c.tiff")
+    assert load_image(tmp_path / "c.tiff").max() == pytest.approx(0.25)  # already in [0, 1]: untouched
+
+
+def test_panel_metrics_match_runs_by_id():
+    recs = [{"run_id": 1, "method": "A", "method_label": "A", "metrics": {"psnr": 10.0}, "artifacts_dir": "/x1"},
+            {"run_id": 2, "method": "A", "method_label": "A", "metrics": {"psnr": 20.0}, "artifacts_dir": "/x2"}]
+    panels = [Panel("A", np.zeros((4, 4)), path="/x1/reconstruction.png", run_id=1),
+              Panel("A", np.zeros((4, 4)), path="/x2/reconstruction.png", run_id=2)]
+    _, rows, _ = panel_metrics_rows(recs, panels, None, {"psnr": {"fmt": ".1f"}}, metrics=["psnr"])
+    assert [r[1] for r in rows] == ["10.0", "20.0"]
+
+
 def test_image_helpers(tmp_path):
     arr = np.linspace(0, 1, 16 * 16, dtype=np.float32).reshape(16, 16)
     _png(tmp_path / "a.png", arr)

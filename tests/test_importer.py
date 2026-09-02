@@ -95,3 +95,16 @@ def test_row_errors_are_collected(tmp_path, engine):
     csv.write_text("method,seed,psnr\nA,notanint,1\nB,0,2\n")
     res = import_path(csv, ImportSpec(experiment="e"), engine=engine)
     assert res.imported == 1 and len(res.errors) == 1 and "row 0" in res.errors[0]
+
+
+def test_parameter_like_metric_columns_are_flagged(tmp_path, engine):
+    csv = tmp_path / "r.csv"
+    lines = ["method,seed,K,psnr"] + [f"m,{s},{k},{30 + 0.1 * s + k}" for k in (1, 5, 20) for s in range(4)]
+    csv.write_text("\n".join(lines) + "\n")
+    res = import_path(csv, ImportSpec(experiment="e"), engine=engine)
+    assert res.imported == 12
+    assert len(res.warnings) == 1 and "'K'" in res.warnings[0] and "--config-col K" in res.warnings[0]
+    assert "psnr" not in res.warnings[0] and "1 warning" in str(res)
+    # listed explicitly as a metric -> trusted, no warning
+    res2 = import_path(csv, ImportSpec(experiment="e2", metric_cols=["K", "psnr"]), engine=engine)
+    assert res2.warnings == []

@@ -41,7 +41,11 @@ def render() -> None:
     if not metrics:
         st.warning("Pick at least one metric.")
         return
-    rows = agg.ablation_table(recs, base_run_id=base_opts[base_choice], metrics=metrics)
+    try:
+        rows = agg.ablation_table(recs, base_run_id=base_opts[base_choice], metrics=metrics)
+    except agg.AmbiguousBaseError as e:
+        st.error(f"{e}. Pick the full model in the sidebar.")
+        return
     if not rows:
         st.warning("Nothing to show.")
         return

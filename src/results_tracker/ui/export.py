@@ -127,7 +127,11 @@ def render() -> None:
         if not metrics:
             st.warning("Pick at least one metric.")
             return
-        rows = agg.ablation_table(recs, metrics=metrics)
+        try:
+            rows = agg.ablation_table(recs, metrics=metrics)
+        except agg.AmbiguousBaseError as e:
+            st.error(str(e))
+            return
         if not any(r.is_base for r in rows):
             st.warning("No run matches the base config; deltas will be missing. Tag a run `base`.")
         tex = ablation_latex(rows, metrics, defs, caption=caption, label=label, env=env, font=font, std=std,
@@ -181,7 +185,11 @@ def render() -> None:
         xlabel = c2.text_input("x label", value=f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else ""))
         width = c3.selectbox("Width", ["single", "double", "ieee-single", "ieee-double"])
         cap = st.text_input("Panel caption (bold, below)", value="", placeholder="b. Ablation", key="abl_cap")
-        rows = agg.ablation_table(recs, metrics=[metric])
+        try:
+            rows = agg.ablation_table(recs, metrics=[metric])
+        except agg.AmbiguousBaseError as e:
+            st.error(str(e))
+            return
         if not any(r.is_base for r in rows):
             st.warning("No run matches the base config; nothing to plot. Tag a run `base`.")
             return

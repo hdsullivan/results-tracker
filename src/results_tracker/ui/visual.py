@@ -67,6 +67,10 @@ def render() -> None:
         kernel = st.selectbox("Kernel / PSF thumbnail", [NONE] + files, index=_opt(files, roles["kernel"]))
         metrics_all = agg.metric_names(pool)
         metrics = st.multiselect("Metrics stamped on panels", metrics_all, default=[m for m in metrics_all if m in ("psnr", "ssim")][:2])
+        dr = st.number_input("Data range for float images", min_value=0.0, value=0.0, step=1.0,
+                             help="Divisor applied to float/32-bit images, the same for every panel. 0 = images are already in [0, 1]. "
+                                  "8-/16-bit images are scaled by their dtype range automatically.")
+        data_range = dr if dr > 0 else None
 
     pool_sel = [r for r in pool if seed is None or r.get("seed") == seed]
     method_names = list(dict.fromkeys(r["method"] for r in agg.select_runs(pool_sel)))
@@ -100,7 +104,7 @@ def render() -> None:
             reference=None if reference == NONE else reference, measurement=None if measurement == NONE else measurement,
             kernel=None if kernel == NONE else kernel, methods=methods or None, metrics=metrics,
             mode="error" if mode == "Error maps" else "image", zoom=zoom, zoom_fraction=zoom_fraction,
-            zoom_center=zoom_center, crop_box=crop_box, rows=row_key, width=width, auto_roles=False,
+            zoom_center=zoom_center, crop_box=crop_box, rows=row_key, width=width, auto_roles=False, data_range=data_range,
         )
     except ValueError as e:
         st.error(str(e))
@@ -130,7 +134,7 @@ def render() -> None:
     if not row_key:
         chosen = agg.select_runs(pool_sel, methods=methods or None)
         panels, ref_panel, _ = build_panels(chosen, image, defs, metrics=metrics,
-                                            reference=None if reference == NONE else reference)
+                                            reference=None if reference == NONE else reference, data_range=data_range)
         headers, rows, warns = panel_metrics_rows(chosen, panels, ref_panel, defs, metrics=metrics or ("psnr",))
         st.subheader("Panel metrics")
         st.markdown(generic_html(headers, rows, number=1, left_cols=1,

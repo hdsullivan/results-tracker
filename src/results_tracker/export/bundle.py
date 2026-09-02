@@ -113,7 +113,11 @@ def build_bundle(
                         "figure-tex", name, len(done))
 
             elif etype == "ablation":
-                rows = agg.ablation_table(done)
+                try:
+                    rows = agg.ablation_table(done)
+                except agg.AmbiguousBaseError as e:
+                    manifest.append({"file": "", "kind": "ablation-table", "experiment": name, "runs": 0, "note": f"skipped: {e}"})
+                    continue
                 metrics = list(rows[0].stats) if rows else []
                 if rows and metrics:
                     add(zf, f"tables/{slug}.tex", ablation_latex(rows, metrics, defs, label=f"tab:{slug}", provenance=prov),

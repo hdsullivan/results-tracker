@@ -77,7 +77,11 @@ def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
                             _val(name, fmt_stat(st_, fmt), unit)])
                 continue
         if e["type"] == "ablation":
-            rows = agg.ablation_table(rs, metrics=[primary])
+            try:
+                rows = agg.ablation_table(rs, metrics=[primary])
+            except agg.AmbiguousBaseError:
+                out.append([e["experiment"], "ablation", "base ambiguous", "tag the full model's runs with 'base'"])
+                continue
             variants = [r for r in rows if not r.is_base and r.delta.get(primary) is not None]
             base = next((r for r in rows if r.is_base), None)
             if variants and base:

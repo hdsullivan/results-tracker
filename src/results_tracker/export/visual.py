@@ -30,8 +30,12 @@ Box = tuple[int, int, int, int]  # x, y, w, h
 
 # --------------------------------------------------------------------------- images
 
-def load_image(path: Union[str, Path]) -> np.ndarray:
-    """Float32 array in [0, 1], HxW (gray) or HxWx3 (RGB). 16-bit and float inputs are scaled by dtype range."""
+def load_image(path: Union[str, Path], data_range: Optional[float] = None) -> np.ndarray:
+    """Float32 array in [0, 1], HxW (gray) or HxWx3 (RGB).
+
+    8-bit and 16-bit images are divided by their dtype range. Float / 32-bit images are divided by
+    `data_range` when given; without it they must already lie in [0, 1] — an image is never rescaled by
+    its own maximum, because every panel of a comparison has to share one display range."""
     from PIL import Image
 
     img = Image.open(path)
@@ -39,8 +43,11 @@ def load_image(path: Union[str, Path]) -> np.ndarray:
         arr = np.asarray(img, dtype=np.float32) / 65535.0
     elif img.mode in ("I", "F"):
         arr = np.asarray(img, dtype=np.float32)
-        if arr.max() > 1.0:
-            arr = arr / arr.max()
+        if data_range:
+            arr = arr / float(data_range)
+        elif arr.max() > 1.0 + 1e-6 or arr.min() < -1e-6:
+            raise ValueError(f"{path}: float image values span [{arr.min():.3g}, {arr.max():.3g}]; pass data_range "
+                             "(the same for every panel) instead of relying on per-image scaling")
     else:
         if img.mode not in ("L", "RGB"):
             img = img.convert("RGB") if "RGB" in img.mode or img.mode == "P" else img.convert("L")
@@ -183,6 +190,7 @@ def build_panels(
     measurement: Optional[str] = None,
     kernel: Optional[str] = None,
     titles: Optional[Mapping[str, str]] = None,
+    data_range: Optional[float] = None,
 ) -> tuple[list[Panel], Optional[Panel], list[str]]:
     """One panel per record (in the given order) plus optional reference/measurement panels found
     in the first record directory that has them. The measurement panel is inserted first with
@@ -210,12 +218,12 @@ def build_panels(
     if reference and rp is None:
         problems.append(f"reference image {reference!r} not found")
     elif rp is not None:
-        ref_panel = Panel("Reference", load_image(rp), path=str(rp), kind="reference")
+        ref_panel = Panel("Reference", load_image(rp, data_range), path=str(rp), kind="reference")
     mp = find(measurement)
     if measurement and mp is None:
         problems.append(f"measurement image {measurement!r} not found")
     elif mp is not None:
-        meas_panel = Panel("Measurement", load_image(mp), path=str(mp), kind="measurement")
+        meas_panel = Panel("Measurement", load_image(mp, data_range), path=str(mp), kind="measurement")
 
     for r in records:
         title = (titles or {}).get(r.get("method"), r.get("method_label") or str(r.get("method")))
@@ -224,7 +232,7 @@ def build_panels(
         if p is None or not p.is_file():
             problems.append(f"{title}: {image!r} missing" + (f" in {d}" if d else " (no artifacts_dir)"))
             continue
-        panels.append(Panel(title, load_image(p), metric_subtitle(r.get("metrics", {}), defs, metrics), str(p),
+        panels.append(Panel(title, load_image(p, data_range), metric_subtitle(r.get("metrics", {}), defs, metrics), str(p),
                             run_id=r.get("run_id"), seed=r.get("seed"), instance=r.get("instance")))
     if meas_panel is not None:
         panels.insert(0, meas_panel)
@@ -233,7 +241,7 @@ def build_panels(
     if kernel and kp is None:
         problems.append(f"kernel image {kernel!r} not found")
     elif kp is not None:
-        panels.append(Panel("Kernel", load_image(kp), path=str(kp), kind="kernel"))
+        panels.append(Panel("Kernel", load_image(kp, data_range), path=str(kp), kind="kernel"))
     if len(shapes) > 1:
         problems.append(f"image sizes differ across panels: {sorted(shapes)}")
     return panels, ref_panel, problems
@@ -249,6 +257,7 @@ def build_rows(
     methods: Optional[Sequence[Any]] = None,
     titles: Optional[Mapping[str, str]] = None,
     reference: Optional[str] = None,
+    data_range: Optional[float] = None,
 ) -> tuple[list[PanelRow], list[str]]:
     """One PanelRow per distinct value of `row_key` ('seed', 'instance' or 'config.<k>'), methods as columns.
 
@@ -265,7 +274,8 @@ def build_rows(
     for v in values:
         subset = [r for r in records if agg.get_field(r, row_key) == v]
         chosen = agg.select_runs(subset, methods=methods)
-        panels, ref_panel, probs = build_panels(chosen, image, defs, metrics=metrics, titles=titles, reference=reference)
+        panels, ref_panel, probs = build_panels(chosen, image, defs, metrics=metrics, titles=titles, reference=reference,
+                                                data_range=data_range)
         problems += [f"{name}={v}: {pr}" for pr in probs]
         label = f"${name} = {v:g}$" if isinstance(v, (int, float)) and not isinstance(v, bool) else f"{name} = {v}"
         rows.append(PanelRow([p for p in panels if p.kind == "method"], label, reference=ref_panel))
@@ -568,6 +578,7 @@ def make_visual(
     rows: Optional[str] = None,
     width: Union[str, float] = "double",
     auto_roles: bool = True,
+    data_range: Optional[float] = None,
 ) -> VisualResult:
     """Everything from records to a finished lab-style figure. File roles are guessed from the artifact
     folders when not given (`auto_roles`). Raises ValueError when nothing can be drawn."""
@@ -608,14 +619,16 @@ def make_visual(
         if len(insts) == 1:
             instance = insts.pop()
     if rows:
-        aux, ref_panel, problems = build_panels(shown[:1], image, defs, reference=reference, measurement=measurement, kernel=kernel)
+        aux, ref_panel, problems = build_panels(shown[:1], image, defs, reference=reference, measurement=measurement, kernel=kernel,
+                                                data_range=data_range)
         problems = [pr for pr in problems if pr.startswith(("reference", "measurement", "kernel"))]
-        row_specs, probs = build_rows(pool, rows, image, defs, metrics=metrics, methods=methods, reference=reference)
+        row_specs, probs = build_rows(pool, rows, image, defs, metrics=metrics, methods=methods, reference=reference,
+                                      data_range=data_range)
         problems += probs
         panel_arg: Any = row_specs
     else:
         aux, ref_panel, problems = build_panels(chosen, image, defs, metrics=metrics, reference=reference,
-                                                measurement=measurement, kernel=kernel)
+                                                measurement=measurement, kernel=kernel, data_range=data_range)
         panel_arg = [p for p in aux if p.kind == "method"]
     problems += fairness
     meas_panel = next((p for p in aux if p.kind == "measurement"), None)
@@ -657,6 +670,7 @@ def panel_metrics_rows(
 
     Returns (headers, rows, warnings). A gap between logged and recomputed PSNR beyond `tolerance_db` is
     flagged: it usually means the logged number was computed on a different image, crop or data range."""
+    by_id = {r.get("run_id"): r for r in records if r.get("run_id") is not None}
     by_title = {(r.get("method_label") or r.get("method")): r for r in records}
     headers = ["Panel"] + [f"{m} (logged)" for m in metrics] + (["PSNR (from image)", "Δ (dB)"] if reference is not None else [])
     rows: list[list[str]] = []
@@ -664,8 +678,13 @@ def panel_metrics_rows(
     for p in panels:
         if p.kind != "method":
             continue
-        rec = by_title.get(p.title) or next((r for r in records if p.path and r.get("artifacts_dir") and
-                                              str(Path(p.path).parent) == str(Path(r["artifacts_dir"]).expanduser())), None)
+        # match by run id (set by build_panels); fall back to the artifacts folder, then the title
+        rec = by_id.get(p.run_id) if p.run_id is not None else None
+        if rec is None and p.path:
+            rec = next((r for r in records if r.get("artifacts_dir") and
+                        str(Path(p.path).parent) == str(Path(r["artifacts_dir"]).expanduser())), None)
+        if rec is None:
+            rec = by_title.get(p.title)
         logged = (rec or {}).get("metrics", {})
         row = [p.title]
         for m in metrics:

@@ -263,3 +263,16 @@ def test_coverage_audit_flags_unequal_pooling():
     assert a.coverage and not a.ok and "rows pooled over different datasets" in a.summary()
     b = agg.audit_grid([rec("A", 0, psnr=1), rec("B", 0, psnr=2)], ["method"])
     assert b.ok and b.coverage == []
+
+
+def test_ablation_base_tie_is_an_error_not_a_guess():
+    recs = []
+    for s in range(3):
+        recs += [rec("m", s, cfg={"a": False, "b": True}, psnr=30.0), rec("m", s, cfg={"a": True, "b": True}, psnr=31.0)]
+    with pytest.raises(agg.AmbiguousBaseError):
+        agg.ablation_table(recs)
+    # a clear majority, a tag, or an explicit base all resolve it
+    assert agg.ablation_table(recs + [rec("m", 9, cfg={"a": True, "b": True}, psnr=31.0)])[0].label == "full model"
+    recs[1]["tags"] = ["base"]
+    assert agg.ablation_table(recs)[0].is_base
+    assert agg.ablation_table(recs, base_config={"a": False, "b": True})[0].diff == {}

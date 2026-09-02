@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass, field
 from numbers import Number
 from pathlib import Path
-from typing import Any, Iterable, Optional, Union
+from typing import Any, Iterable, Optional, Sequence, Union
 
 from sqlmodel import Session, select
 
@@ -56,12 +56,33 @@ class ImportResult:
     skipped: int = 0
     errors: list[str] = field(default_factory=list)
     run_ids: list[int] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         s = f"imported {self.imported}, skipped {self.skipped} duplicate(s)"
         if self.errors:
             s += f", {len(self.errors)} error(s)"
+        if self.warnings:
+            s += f", {len(self.warnings)} warning(s)"
         return s
+
+
+def parameter_like_metrics(rows: Sequence[dict[str, Any]], explicit: Sequence[str] = (), max_distinct: int = 10) -> list[str]:
+    """Metric columns that look like swept parameters: integer-valued with few distinct values across many rows.
+
+    Only metrics the heuristic invented are checked (not ones listed in `metric_cols`)."""
+    values: dict[str, set] = {}
+    for kw in rows:
+        for k, v in (kw.get("metrics") or {}).items():
+            if k in explicit or v is None:
+                continue
+            values.setdefault(k, set()).add(v)
+    out = []
+    for k, vals in values.items():
+        if len(rows) >= 2 * max(len(vals), 1) and len(vals) <= max_distinct and all(float(v).is_integer() for v in vals):
+            out.append(f"'{k}' has only {len(vals)} distinct integer value(s) across {len(rows)} rows — a parameter, not a metric? "
+                       f"If so re-import with --config-col {k}")
+    return out
 
 
 # --------------------------------------------------------------------------- readers
@@ -196,9 +217,11 @@ def import_records(
     engine = _resolve_engine(engine, db)
     result = ImportResult()
     seen = _existing_fingerprints(engine, spec.project, spec.experiment) if spec.skip_duplicates else set()
+    normalized: list[dict[str, Any]] = []
     for i, raw in enumerate(raws):
         try:
             kw = normalize(raw, spec)
+            normalized.append(kw)
         except Exception as e:  # noqa: BLE001
             result.errors.append(f"row {i}: {e}")
             continue
@@ -221,6 +244,7 @@ def import_records(
             continue
         result.imported += 1
         result.run_ids.append(run.id)
+    result.warnings = parameter_like_metrics(normalized, explicit=spec.metric_cols)
     return result
 
 
