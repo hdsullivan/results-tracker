@@ -75,14 +75,14 @@ against the base config rather than hand-labeled.
 
 ## 6. Build phases (about one working week)
 
-| Phase | Deliverable | Est. |
-|---|---|---|
-| 0 | Confirm scope, pick stack, write 3 demo experiments as fixtures | 0.5 day |
-| 1 | Schema, SQLite setup, `log_run` API, CLI, tests for aggregation | 1 day |
-| 2 | Bulk import + Comparison page + Run detail page | 1 day |
-| 3 | Sweep page + Ablation page (config-diff logic) | 1 day |
-| 4 | Export: LaTeX tables, IEEE figures, CSV | 1 day |
-| 5 | Demo dataset, README with GIF, polish, 5-minute pitch | 0.5 day |
+| Phase | Deliverable | Est. | Status |
+|---|---|---|---|
+| 0 | Confirm scope, pick stack, write 3 demo experiments as fixtures | 0.5 day | done |
+| 1 | Schema, SQLite setup, `log_run` API, CLI, tests for aggregation | 1 day | done |
+| 2 | Bulk import + Comparison page + Run detail page | 1 day | done |
+| 3 | Sweep page + Ablation page (config-diff logic) | 1 day | next |
+| 4 | Export: LaTeX tables, IEEE figures, CSV | 1 day | |
+| 5 | Demo dataset, README with GIF, polish, 5-minute pitch | 0.5 day | |
 
 Stop-early rule: if time runs short, ship phases 0–2 plus LaTeX table export.
 A comparison table that goes straight into a paper is the strongest single

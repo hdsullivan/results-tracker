@@ -3,14 +3,15 @@
 Track paper results — method comparisons, parameter sweeps, ablation studies —
 and export them as paper-ready tables and figures.
 
-**Status:** phase 1 (schema, logging API, CLI, aggregation). GUI comes in phase 2.
-See [PLAN.md](PLAN.md).
+**Status:** phase 2 — schema, logging API, CLI, aggregation, bulk import, and the
+first GUI pages (Overview, Comparison, Run detail). Sweep and Ablation pages come
+in phase 3, paper exports in phase 4. See [PLAN.md](PLAN.md).
 
 ## Install
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,ui]"
 ```
 
 ## Quick start
@@ -24,6 +25,35 @@ results-tracker ablation -e ablation --db results.db
 ```
 
 Set `RESULTS_TRACKER_DB=/path/to/results.db` to avoid passing `--db` every time.
+
+## GUI
+
+```bash
+results-tracker ui --db results.db        # opens http://localhost:8501
+```
+
+Pages: **Overview** (what is in the database), **Comparison** (methods × metrics,
+mean ± std, best in bold, second underlined, bar chart, CSV download) and
+**Run detail** (config, metrics, config diff against any other run, image
+gallery and log tail from the run's `artifacts_dir`).
+
+## Importing existing results
+
+```bash
+# CSV: one row per run. Numeric columns become metrics unless listed as config.
+results-tracker import old_results.csv -e main-comparison -p my-paper \
+    --config-col lambda --config-col iters
+
+# Directory of JSON run files ({"method":..., "config": {...}, "metrics": {...}})
+results-tracker import runs/ -e lambda-sweep --type sweep
+
+# Numbers copied from another paper
+results-tracker import baselines.csv -e main-comparison --source reported
+
+results-tracker import old_results.csv -e main-comparison --dry-run   # show the mapping first
+```
+
+Re-importing the same file is safe: identical runs are skipped.
 
 ## Logging from your own code
 

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -228,11 +231,68 @@ def demo(db: Optional[Path] = DbOpt):
     console.print("try:  results-tracker table -e main-comparison --by method --by dataset")
 
 
+@app.command("import")
+def import_cmd(
+    path: Path = typer.Argument(..., help="CSV file, JSON file, or directory of JSON run files."),
+    experiment: str = typer.Option(..., "--experiment", "-e"),
+    project: str = typer.Option("default", "--project", "-p"),
+    experiment_type: str = typer.Option("comparison", "--type", help="comparison | sweep | ablation"),
+    method: Optional[str] = typer.Option(None, "--method", "-m", help="Constant method for every row."),
+    dataset: Optional[str] = typer.Option(None, "--dataset", "-d", help="Constant dataset for every row."),
+    method_col: str = typer.Option("method", "--method-col"),
+    dataset_col: str = typer.Option("dataset", "--dataset-col"),
+    seed_col: str = typer.Option("seed", "--seed-col"),
+    instance_col: str = typer.Option("instance", "--instance-col"),
+    metric_col: list[str] = typer.Option([], "--metric-col", help="Columns that are metrics (repeatable). Default: numeric columns."),
+    config_col: list[str] = typer.Option([], "--config-col", help="Columns that are config (repeatable). Default: the rest."),
+    tag: list[str] = typer.Option([], "--tag"),
+    source: str = typer.Option("imported", "--source", help="imported | reported"),
+    keep_duplicates: bool = typer.Option(False, "--keep-duplicates", help="Import rows even if an identical run exists."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Parse and count, write nothing."),
+    db: Optional[Path] = DbOpt,
+):
+    """Bulk-import existing results from CSV or JSON."""
+    from .importer import ImportSpec, import_path, normalize, read_records
+
+    spec = ImportSpec(
+        experiment=experiment, project=project, experiment_type=experiment_type, method=method, dataset=dataset,
+        method_col=method_col, dataset_col=dataset_col, seed_col=seed_col, instance_col=instance_col,
+        metric_cols=metric_col, config_cols=config_col, tags=tag, source=source, skip_duplicates=not keep_duplicates,
+    )
+    if dry_run:
+        raws = read_records(path)
+        console.print(f"[cyan]{len(raws)} rows[/] in {path}. First row maps to:")
+        if raws:
+            console.print_json(json.dumps(normalize(raws[0], spec), default=str))
+        res = import_path(path, spec, db=db, dry_run=True)
+        console.print(f"would import {res.imported}, skip {res.skipped}")
+        return
+    res = import_path(path, spec, db=db)
+    console.print(f"[green]{res}[/] -> {project}/{experiment}")
+    for e in res.errors[:10]:
+        console.print(f"[red]{e}[/]")
+
+
 @app.command()
-def ui(db: Optional[Path] = DbOpt):
-    """Launch the GUI (phase 2)."""
-    console.print("[yellow]The Streamlit UI arrives in phase 2.[/] Use `table`, `sweep`, `ablation` for now.")
-    raise typer.Exit(code=1)
+def ui(
+    db: Optional[Path] = DbOpt,
+    port: int = typer.Option(8501, "--port"),
+    headless: bool = typer.Option(False, "--headless", help="Don't open a browser tab."),
+):
+    """Launch the Streamlit GUI."""
+    try:
+        import streamlit  # noqa: F401
+    except ImportError:
+        console.print("[red]Streamlit is not installed.[/] Run: pip install 'results-tracker[ui]'")
+        raise typer.Exit(code=1)
+    app_path = Path(__file__).parent / "ui" / "app.py"
+    env = {**os.environ, "RESULTS_TRACKER_DB": resolve_db_path(db)}
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port),
+           "--browser.gatherUsageStats", "false"]
+    if headless:
+        cmd += ["--server.headless", "true"]
+    console.print(f"[green]opening GUI[/] on http://localhost:{port}  (db: {env['RESULTS_TRACKER_DB']})")
+    raise typer.Exit(code=subprocess.call(cmd, env=env))
 
 
 if __name__ == "__main__":  # pragma: no cover

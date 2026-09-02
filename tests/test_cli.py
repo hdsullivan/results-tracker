@@ -40,6 +40,22 @@ def test_log_from_shell(tmp_path):
     assert r.exit_code == 0 and "ours" in r.output and "30.1" in r.output and "abc" in r.output
 
 
-def test_ui_stub(tmp_path):
-    r = runner.invoke(app, ["ui", "--db", str(tmp_path / "r.db")])
-    assert r.exit_code == 1
+def test_ui_help():
+    r = runner.invoke(app, ["ui", "--help"])
+    assert r.exit_code == 0 and "Streamlit" in r.output
+
+
+def test_import_csv_cli(tmp_path):
+    db = str(tmp_path / "r.db")
+    csv = tmp_path / "r.csv"
+    csv.write_text("method,dataset,seed,lambda,psnr\nTV,Set12,0,0.1,27.5\nOurs,Set12,0,0.1,31.2\n")
+    r = runner.invoke(app, ["import", str(csv), "-e", "cmp", "--config-col", "lambda", "--dry-run", "--db", db])
+    assert r.exit_code == 0, r.output
+    assert "2 rows" in r.output and "would import 2" in r.output
+    r = runner.invoke(app, ["import", str(csv), "-e", "cmp", "--config-col", "lambda", "--db", db])
+    assert r.exit_code == 0, r.output
+    assert "imported 2" in r.output
+    r = runner.invoke(app, ["import", str(csv), "-e", "cmp", "--config-col", "lambda", "--db", db])
+    assert "imported 0, skipped 2" in r.output
+    r = runner.invoke(app, ["table", "-e", "cmp", "--db", db])
+    assert r.exit_code == 0 and "Ours" in r.output and "31.20" in r.output
