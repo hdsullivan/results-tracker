@@ -31,7 +31,13 @@ def test_overview_page(demo_db):
     assert "Projects" in labels and "Runs" in labels
     values = {m.label: m.value for m in at.metric}
     assert values["Runs"] == "46"
-    assert len(at.dataframe) == 2
+    md = "\n".join(m.value for m in at.markdown)
+    assert md.count('class="ieee-paper"') == 3  # experiments, at a glance, recent runs
+    assert "TABLE I" in md and "TABLE II" in md and "TABLE III" in md
+    assert "best method: Ours" in md and "best lambda = 0.1" in md and "largest drop: w/o adaptive" in md
+    assert "(+1 failed)" in md  # the diverged sweep run is counted, not hidden
+    assert "&lt;span" not in md and '<span class="std">' in md  # std markup rendered, not escaped
+    assert len(at.dataframe) == 2  # sortable grids still available in the expander
 
 
 def test_comparison_page_table_and_chart(demo_db):

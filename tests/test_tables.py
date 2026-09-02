@@ -1,5 +1,5 @@
 from results_tracker import aggregate as agg
-from results_tracker.ui.tables import ablation_html, comparison_html, delatex, flat_html, sweep_html
+from results_tracker.ui.tables import ablation_html, comparison_html, delatex, flat_html, generic_html, sweep_html
 
 DEFS = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"},
         "rmse": {"unit": "", "higher_is_better": False, "fmt": ".3f"}}
@@ -73,3 +73,11 @@ def test_sweep_html():
                                "lambda", "psnr", group_by=["method"])
     h2 = sweep_html(grouped, "lambda", "psnr", DEFS)
     assert 'colspan="2"' in h2 and "<th>Ours</th>" in h2 and "<th>TV</th>" in h2
+
+
+def test_generic_html():
+    h = generic_html(["Experiment", "Type", "Runs"], [["main", "comparison", 18], ["abl", "ablation", None]],
+                     caption="Cap & more", number=2, left_cols=2, raw_html_cols=[2])
+    assert "TABLE II" in h and "Cap &amp; more" in h
+    assert '<td style="text-align:left">main</td>' in h and "<td>18</td>" in h and "<td>None</td>" in h  # raw column not escaped/dashed
+    assert 'tr class="top head"' in h

@@ -29,7 +29,7 @@ non-trivial:
 
 | Page | What you see |
 |---|---|
-| ![](docs/screenshots/overview.png) | **Overview** — projects, experiments, recent runs, failed-run count. |
+| ![](docs/screenshots/overview.png) | **Overview** — experiments with run counts, methods, datasets and metrics; a "results at a glance" table that reads each experiment's headline off the data (best method, best swept value, costliest ablation); recent runs. All in the paper look. |
 | ![](docs/screenshots/sweep.png) | **Sweep** — PSNR vs λ on a log axis, ± std band, best value ringed. The diverged run shows up as n = 2, not as a silently smoother curve. |
 | ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts. |
 | ![](docs/screenshots/visual.png) | **Visual** — qualitative comparison: reference, measurement, baselines, proposed. One crop box, one display range and one error-map scale for every method; metrics under each panel; provenance JSON with every source path. |
@@ -66,7 +66,8 @@ results-tracker ui --db results.db        # opens http://localhost:8501
 
 Pages:
 
-- **Overview** — what is in the database.
+- **Overview** — what is in the database, plus a results-at-a-glance table
+  (best method per comparison, best swept value, costliest ablation setting).
 - **Comparison** — methods × metrics, mean ± std, best in bold, second
   underlined, bar chart, CSV download. Rows can be grouped by method, dataset,
   instance, seed, or any config key.

@@ -75,7 +75,8 @@ def main() -> None:
         ws_url = next(t["webSocketDebuggerUrl"] for t in targets if t["type"] == "page")
         for page in pages:
             out = outdir / f"{page}.png"
-            shoot(ws_url, f"{base}/{page}", out, wait=7.0, width=1400, height=900)
+            url = base if page == "overview" else f"{base}/{page}"  # the default page is served at the root
+            shoot(ws_url, url, out, wait=7.0, width=1400, height=900)
             print("wrote", out)
     finally:
         chrome.terminate()

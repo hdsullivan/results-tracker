@@ -286,3 +286,29 @@ def sweep_html(
         caption = (f"{delatex(header(metric, defs, arrows=False))} as a function of {param_label or param}. "
                    f"Mean{' ± std' if show_std else ''} over {n_txt} runs per value. Best in bold ({'higher' if hib else 'lower'} is better).")
     return _wrap(table, caption, number)
+
+
+# --------------------------------------------------------------------------- generic
+
+def generic_html(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    *,
+    caption: Optional[str] = None,
+    number: Optional[int] = None,
+    left_cols: int = 1,
+    raw_html_cols: Sequence[int] = (),
+) -> str:
+    """Any small table in the same booktabs look: first `left_cols` columns left-aligned, rest centred.
+    Cells are escaped unless their column index is in `raw_html_cols`."""
+    head = "".join(f"<th>{_esc(h)}</th>" for h in headers)
+    body = []
+    for r in rows:
+        cells = []
+        for i, v in enumerate(r):
+            txt = str(v) if i in raw_html_cols else _esc("—" if v is None else v)
+            style = ' style="text-align:left"' if i < left_cols else ""
+            cells.append(f"<td{style}>{txt}</td>")
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    table = f'<table class="ieee"><thead><tr class="top head">{head}</tr></thead><tbody>{"".join(body)}</tbody></table>'
+    return _wrap(table, caption, number)

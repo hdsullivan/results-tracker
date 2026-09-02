@@ -9,7 +9,7 @@ from results_tracker.ui import ablation, comparison, export, overview, run_detai
 st.set_page_config(page_title="Results Tracker", page_icon="📊", layout="wide")
 
 pages = [
-    st.Page(overview.render, title="Overview", icon="🏠", url_path="overview", default=True),
+    st.Page(overview.render, title="Overview", icon="🏠", default=True),  # served at "/"
     st.Page(comparison.render, title="Comparison", icon="📋", url_path="comparison"),
     st.Page(sweep.render, title="Sweep", icon="📈", url_path="sweep"),
     st.Page(ablation.render, title="Ablation", icon="🧩", url_path="ablation"),
