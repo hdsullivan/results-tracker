@@ -60,7 +60,7 @@ def render() -> None:
         st.caption(f"{experiment} · {len(recs)} runs · {metric} {arrow} over {param_x} × {param_y} · "
                    f"best at {param_x}={best[0]}, {param_y}={best[1]}: {grid.cells[best].format(fmt)}")
         st.plotly_chart(sweep_heatmap(grid.xs, grid.ys, grid.matrix(), param_x, param_y, metric, fmt, hib, best),
-                        width="stretch")
+                        theme=None, width="stretch")
         df = pd.DataFrame(
             [{param_y: y, **{str(x): (grid.cells[(x, y)].mean if (x, y) in grid.cells else None) for x in grid.xs}}
              for y in grid.ys]
@@ -89,7 +89,7 @@ def render() -> None:
                    ", ".join(f"{' / '.join(map(str, g))} → {b}" for g, b in best.items()))
 
     st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best),
-                    width="stretch")
+                    theme=None, width="stretch")
 
     # table: rows = x values, one column per group
     cols = {(" / ".join(map(str, g)) if g else metric): dict(s) for g, s in series.items()}

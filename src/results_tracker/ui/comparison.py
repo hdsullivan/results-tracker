@@ -98,7 +98,7 @@ def render() -> None:
     st.subheader("Chart")
     metric = st.selectbox("Metric", metrics, key="chart_metric")
     fig = comparison_bars(ct, metric, fmt=fmt_for(defs, metric), unit=defs.get(metric, {}).get("unit", ""))
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, theme=None, width="stretch")
 
     with st.expander("Raw numbers"):
         st.dataframe(df, width="stretch", hide_index=True)

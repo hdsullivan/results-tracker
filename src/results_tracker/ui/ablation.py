@@ -92,7 +92,7 @@ def render() -> None:
             metric, higher_is_better=hib.get(metric, True), fmt=fmt_for(defs, metric),
             unit=defs.get(metric, {}).get("unit", ""),
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, theme=None, width="stretch")
         worst = min(variants, key=lambda r: (r.delta.get(metric) or 0) * (1 if hib.get(metric, True) else -1))
         if worst.delta.get(metric) is not None:
             st.caption(f"Largest drop: **{worst.label}** ({worst.delta[metric]:+{fmt_for(defs, metric)}} {metric}).")

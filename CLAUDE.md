@@ -7,7 +7,7 @@ them in a Streamlit GUI, export booktabs LaTeX tables and IEEE-sized matplotlib 
 
 ```bash
 source .venv/bin/activate            # or use .venv/bin/<tool> directly
-pytest -q                            # 76 tests, ~5 s
+pytest -q                            # 78 tests, ~5 s
 results-tracker demo --db demo.db --reset --artifacts demo_artifacts
 results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back to a free port)
 results-tracker export table -e main-comparison --db demo.db
@@ -33,8 +33,8 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 - Metric direction lives in the `Metric` table; guessed from the name on first log, override with
   `results-tracker metric define`.
 - Streamlit widgets: use `width="stretch"` (not the deprecated `use_container_width`).
-- Categorical colours: the GUI (`ui/charts.py`) uses the bright dataviz palette; print exports
-  (`export/figures.py`) follow the lab's paper style ported from
+- Colours and chart style: both the GUI (`ui/charts.py`, Plotly) and the print exports
+  (`export/figures.py`, matplotlib) follow the lab's paper style ported from
   `adaptivePnP-paper-workspace/.../utils/ablation_utils.py::set_paper_style` (tab10 colours, filled
   circles, boxed axes, inward ticks, top bordered legend, bold panel captions, 5.0/10.5 in widths).
   Keep the two in sync if the lab style changes. Assign hues in fixed first-seen order; never cycle by rank.
