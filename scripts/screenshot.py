@@ -41,9 +41,12 @@ def shoot(ws_url: str, url: str, out: Path, wait: float, width: int, height: int
     time.sleep(wait)
     if full_page:
         # grow the viewport to the document height so the whole page is captured
-        h = call("Runtime.evaluate", expression="document.documentElement.scrollHeight", returnByValue=True)["result"]["value"]
-        call("Emulation.setDeviceMetricsOverride", width=width, height=max(height, min(int(h), 3000)), deviceScaleFactor=2, mobile=False)
-        time.sleep(1.0)
+        # Streamlit scrolls inside its main container, so measure that rather than the document
+        expr = ("(() => { const m = document.querySelector('[data-testid=\"stMain\"]') || document.documentElement;"
+                " return Math.max(m.scrollHeight, document.documentElement.scrollHeight); })()")
+        h = call("Runtime.evaluate", expression=expr, returnByValue=True)["result"]["value"]
+        call("Emulation.setDeviceMetricsOverride", width=width, height=max(height, min(int(h) + 40, 2400)), deviceScaleFactor=2, mobile=False)
+        time.sleep(1.5)
     shot = call("Page.captureScreenshot", format="png")
     out.write_bytes(base64.b64decode(shot["data"]))
     ws.close()
