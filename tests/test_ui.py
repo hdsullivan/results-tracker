@@ -115,6 +115,9 @@ def test_ablation_page(demo_db):
     at = _run("ablation")
     md = "\n".join(m.value for m in at.markdown)
     assert "<td>Full model</td>" in md and "w/o adaptive" in md and "<td>×</td>" in md
+    assert "<b>Fig. 1.</b>" in md and "Clearly needed" in md  # caption with verdicts
+    assert "TABLE II" in md and "Cohen" in md and "hurts · clear" in md  # effect-size table
+    assert any("\\toprule" in c.value for c in at.code) and any("figure" in c.value for c in at.code)
     caption = "\n".join(c.value for c in at.caption)
     assert "Largest drop" in caption and "w/o adaptive" in caption
     # relative deltas

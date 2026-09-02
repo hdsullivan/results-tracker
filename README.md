@@ -31,7 +31,7 @@ non-trivial:
 |---|---|
 | ![](docs/screenshots/overview.png) | **Overview** — experiments with run counts, methods, datasets and metrics; a "results at a glance" table that reads each experiment's headline off the data (best method, best swept value, costliest ablation); recent runs. All in the paper look. |
 | ![](docs/screenshots/sweep.png) | **Sweep** — PSNR vs λ on a log axis, ± std band, best value ringed, with an IEEE-style caption that states the plateau (the range of values within one std of the best) and the cost of the worst choice; a sensitivity table; the booktabs table; LaTeX and a paper-style PDF in expanders. The diverged run shows up as n = 2, not as a silently smoother curve. |
-| ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts. |
+| ![](docs/screenshots/ablation.png) | **Ablation** — settings matrix computed from config diffs, deltas vs the full model, blue helps / red hurts; an IEEE-style caption that names which components are clearly needed and which changes are within run-to-run noise; an effect-size table (Cohen's d against the full model); LaTeX and a paper-style PDF in expanders. |
 | ![](docs/screenshots/visual.png) | **Visual** — qualitative comparison in the lab's figure layout: ground truth, measurement, baselines, proposed, with the same zoom inset or one error-map scale on every panel and metrics stamped per panel. Below it an IEEE-style caption, a panel-metrics table that recomputes PSNR from the displayed images and flags any gap to the logged numbers, and the source files. |
 | ![](docs/screenshots/run.png) | **Run detail** — config, metrics, config diff against any run, and the run's artifacts rendered as a lab-style figure strip (ground truth, measurement, this run stamped with its metrics, optionally the compared run), with zoom inset or error-map mode and PDF download. |
 | ![](docs/screenshots/export.png) | **Export** — booktabs LaTeX with a compiled-look preview and provenance comment; figures and qualitative grids as vector PDF with `figure` snippets; the comparison export audits the grid first (7/8 cells present, 1 missing); and a one-click paper bundle that regenerates every asset for the project into one zip with a manifest. |
@@ -78,8 +78,10 @@ Pages:
   std of the best, i.e. how forgiving the choice of default is.
 - **Ablation** — every config variant vs the full model: which settings changed
   (✓ / ✗ / value), mean ± std with Δ (absolute or %), and a bar chart of the
-  deltas. The base is the run tagged `base`, else the most common config, or
-  any run you pick.
+  deltas. An effect-size table standardises each Δ by the pooled std (Cohen's
+  d) and labels it clear, likely or within noise, so the caption can say which
+  components the paper can actually claim. The base is the run tagged `base`,
+  else the most common config, or any run you pick.
 - **Run detail** — config, metrics, config and metric diff against any other
   run; the run's `artifacts_dir` rendered as a lab-style figure strip (ground
   truth, measurement, this run and optionally the compared run, zoom inset or

@@ -561,3 +561,51 @@ def ablation_table(
         ))
     rows.sort(key=lambda r: (not r.is_base, len(r.diff), r.label))
     return rows
+
+
+# --------------------------------------------------------------------------- ablation effect sizes
+
+@dataclass
+class AblationEffect:
+    label: str
+    n: int
+    delta: float            # variant mean − base mean
+    rel: Optional[float]    # delta / |base mean|
+    pooled_std: float       # sqrt((s_base² + s_variant²)/2), 0 when both n == 1
+    d: Optional[float]      # delta / pooled_std (Cohen's d against the full model); None when pooled_std == 0
+    improves: bool          # the change moves the metric in the "better" direction
+    verdict: str            # 'clear' | 'likely' | 'within noise' | 'n = 1'
+
+
+def ablation_effects(rows: Sequence[AblationRow], metric: str, higher_is_better: bool = True) -> list[AblationEffect]:
+    """Per variant: absolute and relative delta against the full model and a standardised effect size.
+
+    Verdict thresholds on |d|: >= 2 'clear', >= 1 'likely', else 'within noise'; single runs cannot be judged.
+    Sorted with the most harmful change first."""
+    base = next((r for r in rows if r.is_base), None)
+    if base is None or base.stats.get(metric) is None:
+        return []
+    bs = base.stats[metric]
+    out: list[AblationEffect] = []
+    for r in rows:
+        if r.is_base or r.delta.get(metric) is None or r.stats.get(metric) is None:
+            continue
+        vs = r.stats[metric]
+        delta = r.delta[metric]
+        pooled = ((bs.std**2 + vs.std**2) / 2) ** 0.5
+        d = (delta / pooled) if pooled > 0 else None
+        improves = (delta > 0) if higher_is_better else (delta < 0)
+        if bs.n < 2 and vs.n < 2:
+            verdict = "n = 1"
+        elif d is None:
+            verdict = "clear" if delta != 0 else "within noise"
+        elif abs(d) >= 2:
+            verdict = "clear"
+        elif abs(d) >= 1:
+            verdict = "likely"
+        else:
+            verdict = "within noise"
+        out.append(AblationEffect(r.label, r.n, delta, r.rel_delta(metric), pooled, d, improves, verdict))
+    sign = 1 if higher_is_better else -1
+    out.sort(key=lambda e: e.delta * sign)
+    return out

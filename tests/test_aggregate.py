@@ -204,3 +204,25 @@ def test_sweep_plateau():
     lower = agg.sweep_plateau([(1, agg.summarize([0.2])), (2, agg.summarize([0.1])), (3, agg.summarize([0.3]))], higher_is_better=False)
     assert lower.best == 2 and lower.members == [2] and lower.tolerance == pytest.approx(0.002)  # std 0 -> 1% of range
     assert agg.sweep_plateau([]) is None
+
+
+def test_ablation_effects():
+    base = {"a": True, "b": True, "c": True}
+    recs = []
+    for s in range(3):
+        recs.append(rec("m", s, cfg=base, tags=["base"], psnr=31.0 + 0.05 * s))            # tight base
+        recs.append(rec("m", s, cfg={**base, "a": False}, psnr=30.0 + 0.05 * s))           # clear drop
+        recs.append(rec("m", s, cfg={**base, "b": False}, psnr=31.0 + 0.3 * (s - 1)))       # noisy, no real change
+        recs.append(rec("m", s, cfg={**base, "c": False}, psnr=31.3 + 0.05 * s))           # removing c helps
+    rows = agg.ablation_table(recs, metrics=["psnr"])
+    eff = agg.ablation_effects(rows, "psnr", higher_is_better=True)
+    by = {e.label: e for e in eff}
+    assert [e.label for e in eff][0] == "w/o a"  # most harmful first
+    assert by["w/o a"].verdict == "clear" and not by["w/o a"].improves and by["w/o a"].delta == pytest.approx(-1.0)
+    assert by["w/o b"].verdict == "within noise"
+    assert by["w/o c"].improves and by["w/o c"].verdict == "clear"
+    assert by["w/o a"].rel == pytest.approx(-1.0 / 31.05)
+    # single runs cannot be judged
+    one = agg.ablation_table([rec("m", 0, cfg=base, tags=["base"], psnr=31.0), rec("m", 0, cfg={**base, "a": False}, psnr=30.0)])
+    assert agg.ablation_effects(one, "psnr")[0].verdict == "n = 1"
+    assert agg.ablation_effects([], "psnr") == []
