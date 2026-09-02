@@ -87,15 +87,22 @@ def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
                 out.append([e["experiment"], "ablation", f"largest drop: {worst.label}",
                             _val(f"{name} {delta}", "", unit).rstrip() + " vs full model " + fmt_stat(base.stats.get(primary), fmt)])
                 continue
-        pt = agg.pivot_table(rs, "method", None, metrics=[primary], higher_is_better=hib)
-        best = next((r for r in pt.rows if pt.is_best(r, None, primary)), None)
-        if best is None:
+        labels = agg.method_labels(rs)
+        datasets = list(dict.fromkeys(r["dataset"] for r in rs if r.get("dataset") is not None))
+        col_key = "dataset" if len(datasets) > 1 else None  # never pool across datasets a method was not run on
+        pt = agg.pivot_table(rs, "method", col_key, metrics=[primary], higher_is_better=hib)
+        heads, vals = [], []
+        for c in pt.cols:
+            best = next((r for r in pt.rows if pt.is_best(r, c, primary)), None)
+            if best is None:
+                continue
+            heads.append(f"{labels.get(best, best)}" + (f" on {c}" if c is not None else ""))
+            vals.append(fmt_stat(pt.stat(best, c, primary), fmt))
+        if not heads:
             out.append([e["experiment"], e["type"], "—", ""])
             continue
-        labels = agg.method_labels(rs)
-        st_ = pt.stat(best, None, primary)
-        out.append([e["experiment"], e["type"], f"best method: {labels.get(best, best)}",
-                    _val(name, fmt_stat(st_, fmt), unit, f"over {len(pt.rows)} methods")])
+        out.append([e["experiment"], e["type"], "best method: " + "; ".join(heads),
+                    " · ".join(_val(name, v, unit) for v in vals) + html.escape(f" · {len(pt.rows)} methods")])
     return out
 
 

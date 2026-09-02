@@ -112,7 +112,10 @@ class Panel:
     image: np.ndarray
     subtitle: str = ""
     path: Optional[str] = None
-    kind: str = "method"  # reference | measurement | method
+    kind: str = "method"  # reference | measurement | method | kernel
+    run_id: Optional[int] = None
+    seed: Optional[Any] = None
+    instance: Optional[Any] = None
 
 
 @dataclass
@@ -221,7 +224,8 @@ def build_panels(
         if p is None or not p.is_file():
             problems.append(f"{title}: {image!r} missing" + (f" in {d}" if d else " (no artifacts_dir)"))
             continue
-        panels.append(Panel(title, load_image(p), metric_subtitle(r.get("metrics", {}), defs, metrics), str(p)))
+        panels.append(Panel(title, load_image(p), metric_subtitle(r.get("metrics", {}), defs, metrics), str(p),
+                            run_id=r.get("run_id"), seed=r.get("seed"), instance=r.get("instance")))
     if meas_panel is not None:
         panels.insert(0, meas_panel)
     shapes = {p.image.shape[:2] for p in panels} | ({ref_panel.image.shape[:2]} if ref_panel else set())
@@ -510,7 +514,8 @@ def reconstruction_figure(
         mode=mode, kernel=kernel.path if kernel else None,
         rows=[r.label for r in rows] if n_rows > 1 else [],
         panels=[{"title": p.title, "path": p.path, "kind": p.kind} for p in left]
-               + [{"title": p.title, "path": p.path, "kind": p.kind, "row": r.label} for r in rows for p in r.panels],
+               + [{"title": p.title, "path": p.path, "kind": p.kind, "row": r.label, "run_id": p.run_id, "seed": p.seed,
+                   "instance": p.instance} for r in rows for p in r.panels],
     )
     return fig, spec
 
@@ -593,6 +598,15 @@ def make_visual(
     chosen = agg.select_runs(with_art, methods=methods)
     shown = with_art if rows else chosen
     omitted = agg.omitted_methods(records, shown, dataset=dataset)
+    fairness = [] if rows else agg.selection_notes(chosen)
+    if not rows and seed is None:
+        seeds = {r.get("seed") for r in chosen if r.get("seed") is not None}
+        if len(seeds) == 1:
+            seed = seeds.pop()  # record the realisation actually shown
+    if not rows and instance is None:
+        insts = {r.get("instance") for r in chosen if r.get("instance") is not None}
+        if len(insts) == 1:
+            instance = insts.pop()
     if rows:
         aux, ref_panel, problems = build_panels(shown[:1], image, defs, reference=reference, measurement=measurement, kernel=kernel)
         problems = [pr for pr in problems if pr.startswith(("reference", "measurement", "kernel"))]
@@ -603,6 +617,7 @@ def make_visual(
         aux, ref_panel, problems = build_panels(chosen, image, defs, metrics=metrics, reference=reference,
                                                 measurement=measurement, kernel=kernel)
         panel_arg = [p for p in aux if p.kind == "method"]
+    problems += fairness
     meas_panel = next((p for p in aux if p.kind == "measurement"), None)
     ker_panel = next((p for p in aux if p.kind == "kernel"), None)
     if not panel_arg or (rows and not any(r.panels for r in panel_arg)):

@@ -501,8 +501,10 @@ def export_table(
     pt = agg.pivot_table(recs, rows, col_key, metrics=metric or None,
                          higher_is_better={k: v["higher_is_better"] for k, v in defs.items()})
     audit = agg.audit_grid(recs, [rows] + ([col_key] if col_key else []))
-    if audit.missing or audit.failed or audit.uneven:
+    if audit.missing or audit.failed or audit.uneven or audit.coverage:
         err_console.print(f"[yellow]audit:[/] {audit.summary()}")
+        for c in audit.coverage:
+            err_console.print(f"[yellow]  rows pooled over different {c}[/]", soft_wrap=True)
     hint = width_hint(pt, std, _env(env), font)
     if hint:
         err_console.print(f"[yellow]width:[/] {hint}")

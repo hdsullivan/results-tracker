@@ -99,10 +99,12 @@ def render() -> None:
         ck = None if col_key == "none" else col_key
         pt = agg.pivot_table(recs, row_key, ck, metrics=metrics, higher_is_better=hib)
         audit = agg.audit_grid(recs_all, [row_key] + ([ck] if ck else []))
-        if audit.missing or audit.failed or audit.uneven:
+        if audit.missing or audit.failed or audit.uneven or audit.coverage:
             st.warning("Audit: " + audit.summary() + (". Missing cells are rendered as `--`." if audit.missing else "."))
             if audit.missing:
                 st.write([" · ".join(f"{k}={v}" for k, v in zip(audit.keys, m)) for m in audit.missing[:20]])
+            for c in audit.coverage:
+                st.warning("Rows are pooled over different " + c)
         else:
             st.success("Audit: " + audit.summary())
         hint = width_hint(pt, std, env, font)

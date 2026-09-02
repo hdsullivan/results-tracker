@@ -47,7 +47,10 @@ def render() -> None:
 
     with st.sidebar:
         st.markdown("**Table**")
-        group_by = st.multiselect("Rows grouped by", options, default=[o for o in ["method"] if o in options] or options[:1])
+        n_datasets = len({r.get("dataset") for r in recs if r.get("dataset") is not None})
+        default_keys = [o for o in (["method", "dataset"] if n_datasets > 1 else ["method"]) if o in options] or options[:1]
+        group_by = st.multiselect("Rows grouped by", options, default=default_keys,
+                                  help="With several datasets the default keeps dataset as a key: pooling over datasets a method was not run on is not a fair comparison.")
         metrics = st.multiselect("Metrics", all_metrics, default=all_metrics)
         show_std = st.checkbox("Show ± std", value=True)
         show_n = st.checkbox("Show n", value=True)
@@ -65,6 +68,8 @@ def render() -> None:
 
     n_runs = len(pool)
     st.caption(f"{experiment} · {n_runs} runs · mean ± std over everything not in the row key · **bold** best, <u>underlined</u> second", unsafe_allow_html=True)
+    for msg in agg.coverage_audit(pool, group_by):
+        st.warning("Rows are pooled over different " + msg)
     if len(group_by) <= 2:
         pt = agg.pivot_table(pool, group_by[0], group_by[1] if len(group_by) == 2 else None, metrics=metrics,
                              higher_is_better=hib_map(defs))

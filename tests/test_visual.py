@@ -226,3 +226,18 @@ def test_panel_psnr_and_metrics_rows(art):
     # no reference -> no computed columns, no warnings
     h2, r2, w2 = panel_metrics_rows(recs, panels, None, DEFS, metrics=["psnr"])
     assert h2 == ["Panel", "psnr (logged)"] and len(r2[0]) == 2 and w2 == []
+
+
+def test_make_visual_records_the_seed_and_flags_mixed_seeds(art, tmp_path):
+    from results_tracker.export.visual import make_visual
+    gt, recs = art
+    two = [r for r in recs if r.get("artifacts_dir")]
+    # both methods have seed 0 only -> seed recorded on the spec and on every method panel
+    vr = make_visual(two, DEFS, dataset="D")
+    assert vr.spec.seed == 0 and all(p.get("seed") == 0 for p in vr.spec.panels if p["kind"] == "method")
+    assert all(p.get("run_id") is not None for p in vr.spec.panels if p["kind"] == "method")
+    assert vr.problems == [] and "seed 0" in vr.spec.caption_stub()
+    # give the second method only seed 1 -> no common seed -> flagged
+    two[1] = {**two[1], "seed": 1}
+    vr2 = make_visual(two, DEFS, dataset="D")
+    assert vr2.spec.seed is None and any("different seeds" in p for p in vr2.problems)

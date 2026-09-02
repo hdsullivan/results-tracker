@@ -179,10 +179,12 @@ def comparison_latex(
     if caption is None:
         caption = default_comparison_caption(pt, defs, std, underline_second)
     notes = []
-    if audit and (audit.missing or audit.failed):
-        notes.append("Audit: " + audit.summary() + ". Missing cells rendered as --.")
+    if audit and (audit.missing or audit.failed or audit.coverage):
+        notes.append("Audit: " + audit.summary() + ("." if not audit.missing else ". Missing cells rendered as --."))
         for m in audit.missing[:20]:
             notes.append("  missing: " + ", ".join(f"{k}={v}" for k, v in zip(audit.keys, m)))
+        for c in audit.coverage:
+            notes.append("  WARNING rows pooled over different " + c)
     prov = provenance + ("\n" + "\n".join(notes) if notes else "") if provenance else ("\n".join(notes) or None)
     return _wrap("\n".join(out), env=env, caption=caption, label=label, font=font, position=position, provenance=prov)
 

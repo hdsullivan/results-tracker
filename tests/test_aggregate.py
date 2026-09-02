@@ -226,3 +226,40 @@ def test_ablation_effects():
     one = agg.ablation_table([rec("m", 0, cfg=base, tags=["base"], psnr=31.0), rec("m", 0, cfg={**base, "a": False}, psnr=30.0)])
     assert agg.ablation_effects(one, "psnr")[0].verdict == "n = 1"
     assert agg.ablation_effects([], "psnr") == []
+
+
+def test_select_runs_uses_a_common_seed_and_instance():
+    def r(m, seed, inst="i0", base=False, rid=None):
+        return {"run_id": rid or hash((m, seed, inst)) % 1000, "method": m, "method_label": m, "method_is_baseline": base,
+                "seed": seed, "instance": inst, "status": "completed", "artifacts_dir": "/x", "config": {}, "metrics": {}}
+    recs = [r("A", 1, base=True), r("A", 0, base=True), r("B", 0), r("B", 1), r("B", 2)]
+    sel = agg.select_runs(recs)
+    assert [(x["method"], x["seed"]) for x in sel] == [("A", 0), ("B", 0)]  # smallest common seed, not first logged
+    assert agg.selection_notes(sel) == []
+    # no common seed -> each method's smallest, and a note
+    recs2 = [r("A", 1, base=True), r("B", 2)]
+    sel2 = agg.select_runs(recs2)
+    assert [(x["method"], x["seed"]) for x in sel2] == [("A", 1), ("B", 2)]
+    notes = agg.selection_notes(sel2)
+    assert len(notes) == 1 and "different seeds" in notes[0] and "A: seed 1" in notes[0]
+    # explicit seed still wins
+    assert [(x["method"], x["seed"]) for x in agg.select_runs(recs, seed=1)] == [("A", 1), ("B", 1)]
+    # instances too
+    recs3 = [r("A", 0, "img2", base=True), r("A", 0, "img1", base=True), r("B", 0, "img1"), r("B", 0, "img3")]
+    assert [x["instance"] for x in agg.select_runs(recs3)] == ["img1", "img1"]
+
+
+def test_coverage_audit_flags_unequal_pooling():
+    recs = []
+    for s in range(3):
+        recs += [rec("Ours", s, psnr=31.3), rec("TV", s, psnr=27.0)]
+    for r_ in recs:
+        r_["dataset"] = "Set12" if r_["seed"] != 2 else "CBSD68"
+    recs.append({**rec("DPIR", 0, psnr=31.0), "dataset": "Set12"})
+    msgs = agg.coverage_audit(recs, ["method"])
+    assert len(msgs) == 1 and msgs[0].startswith("datasets:") and "DPIR: Set12" in msgs[0] and "Ours: CBSD68, Set12" in msgs[0]
+    assert agg.coverage_audit(recs, ["method", "dataset"]) == []  # dataset is a key -> nothing pooled
+    a = agg.audit_grid(recs, ["method"])
+    assert a.coverage and not a.ok and "rows pooled over different datasets" in a.summary()
+    b = agg.audit_grid([rec("A", 0, psnr=1), rec("B", 0, psnr=2)], ["method"])
+    assert b.ok and b.coverage == []

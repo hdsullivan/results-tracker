@@ -86,7 +86,11 @@ def select_runs(
     methods: Optional[Sequence[Any]] = None,
 ) -> list[Record]:
     """One completed run per method for a visual comparison: baselines first, proposed last,
-    or in the order of `methods` when given. The first matching run per method wins."""
+    or in the order of `methods` when given.
+
+    Fairness: when `seed` (or `instance`) is not given and several exist, the smallest value shared by
+    *every* shown method is used, so all panels show the same realisation. If no common value exists,
+    each method falls back to its own smallest value; `selection_notes` reports that."""
     recs = completed(records)
     if dataset is not None:
         recs = [r for r in recs if r.get("dataset") == dataset]
@@ -94,6 +98,22 @@ def select_runs(
         recs = [r for r in recs if r.get("seed") == seed]
     if instance is not None:
         recs = [r for r in recs if r.get("instance") == instance]
+    if methods:
+        recs = [r for r in recs if r.get("method") in set(methods)]
+    for key, given in (("seed", seed), ("instance", instance)):
+        if given is not None:
+            continue
+        per_method = {}
+        for r in recs:
+            per_method.setdefault(r.get("method"), set()).add(r.get(key))
+        if per_method and any(len(v) > 1 for v in per_method.values()):
+            common = set.intersection(*per_method.values()) - {None}
+            if common:
+                pick = min(common, key=_sort_key)
+                recs = [r for r in recs if r.get(key) == pick]
+    recs.sort(key=lambda r: (r.get("seed") is None, _sort_key(r.get("seed")) if r.get("seed") is not None else (),
+                             r.get("instance") is None, _sort_key(r.get("instance")) if r.get("instance") is not None else (),
+                             r.get("run_id") or 0))
     by_method: dict[Any, Record] = {}
     for r in recs:
         by_method.setdefault(r.get("method"), r)
@@ -101,6 +121,17 @@ def select_runs(
         return [by_method[m] for m in methods if m in by_method]
     ordered = sorted(by_method.values(), key=lambda r: (not r.get("method_is_baseline", False)))
     return ordered
+
+
+def selection_notes(chosen: Sequence[Record]) -> list[str]:
+    """Warn when the runs shown side by side are not the same realisation (different seeds or instances)."""
+    notes = []
+    for key in ("seed", "instance"):
+        vals = {r.get(key) for r in chosen if r.get(key) is not None}
+        if len(vals) > 1:
+            who = ", ".join(f"{r.get('method_label') or r.get('method')}: {key} {r.get(key)}" for r in chosen if r.get(key) is not None)
+            notes.append(f"panels show different {key}s ({who}); pick one {key} for a fair comparison")
+    return notes
 
 
 def omitted_methods(records: Iterable[Record], chosen: Sequence[Record], dataset: Optional[Any] = None) -> dict[Any, str]:
@@ -287,10 +318,15 @@ class GridAudit:
     missing: list[tuple]  # combinations with no completed run
     failed: dict[tuple, int]  # combinations with failed runs (count)
     n_per_cell: dict[tuple, int]
+    coverage: list[str] = field(default_factory=list)  # rows pooled over different hidden-key sets
 
     @property
     def uneven(self) -> bool:
         return len(set(self.n_per_cell.values())) > 1
+
+    @property
+    def ok(self) -> bool:
+        return not self.missing and not self.failed and not self.coverage
 
     def summary(self) -> str:
         parts = [f"{self.present}/{self.expected} cells present"]
@@ -301,7 +337,33 @@ class GridAudit:
         if self.uneven:
             ns = sorted(set(self.n_per_cell.values()))
             parts.append(f"n varies ({ns[0]}–{ns[-1]})")
+        if self.coverage:
+            parts.append("rows pooled over different " + " / ".join(c.split(":")[0] for c in self.coverage))
         return ", ".join(parts)
+
+
+def coverage_audit(records: Iterable[Record], keys: Sequence[str], hidden: Sequence[str] = ("dataset", "instance")) -> list[str]:
+    """For each hidden key with several values that is *not* in `keys`, check every row covers the same set.
+
+    A row pooled over fewer datasets (e.g. a baseline reported on one dataset) is not comparable to rows
+    pooled over all of them; the messages say who covers what."""
+    recs = completed(records)
+    out: list[str] = []
+    for h in hidden:
+        if h in keys:
+            continue
+        all_vals = {get_field(r, h) for r in recs if get_field(r, h) is not None}
+        if len(all_vals) < 2:
+            continue
+        per_row: dict[tuple, set] = {}
+        for r in recs:
+            v = get_field(r, h)
+            if v is not None:
+                per_row.setdefault(tuple(get_field(r, k) for k in keys), set()).add(v)
+        if len({frozenset(v) for v in per_row.values()}) > 1:
+            who = "; ".join(f"{' / '.join(map(str, row))}: {', '.join(sorted(map(str, vals)))}" for row, vals in per_row.items())
+            out.append(f"{h}s: {who} — pooled means are not comparable across rows; group by {h} or restrict to common {h}s")
+    return out
 
 
 def audit_grid(records: Iterable[Record], keys: Sequence[str]) -> GridAudit:
@@ -325,7 +387,7 @@ def audit_grid(records: Iterable[Record], keys: Sequence[str]) -> GridAudit:
             failed[combo] = failed.get(combo, 0) + 1
     expected = list(product(*values)) if values and all(values) else []
     missing = [c for c in expected if c not in n_per]
-    return GridAudit(tuple(keys), len(expected), len(n_per), missing, failed, n_per)
+    return GridAudit(tuple(keys), len(expected), len(n_per), missing, failed, n_per, coverage_audit(recs, keys))
 
 
 # --------------------------------------------------------------------------- sweeps
