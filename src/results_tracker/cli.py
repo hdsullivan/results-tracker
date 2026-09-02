@@ -273,26 +273,69 @@ def import_cmd(
         console.print(f"[red]{e}[/]")
 
 
+def _free_port(start: int, tries: int = 50) -> int:
+    import socket
+
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise typer.BadParameter(f"no free port in {start}-{start + tries}")
+
+
+def _wait_for_port(port: int, timeout: float = 20.0) -> bool:
+    import socket
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                return True
+        time.sleep(0.25)
+    return False
+
+
 @app.command()
 def ui(
     db: Optional[Path] = DbOpt,
-    port: int = typer.Option(8501, "--port"),
+    port: int = typer.Option(8501, "--port", help="Preferred port; the next free one is used if busy."),
     headless: bool = typer.Option(False, "--headless", help="Don't open a browser tab."),
 ):
     """Launch the Streamlit GUI."""
+    import webbrowser
+
     try:
         import streamlit  # noqa: F401
     except ImportError:
         console.print("[red]Streamlit is not installed.[/] Run: pip install 'results-tracker[ui]'")
         raise typer.Exit(code=1)
+    chosen = _free_port(port)
+    if chosen != port:
+        console.print(f"[yellow]port {port} is busy, using {chosen}[/]")
     app_path = Path(__file__).parent / "ui" / "app.py"
     env = {**os.environ, "RESULTS_TRACKER_DB": resolve_db_path(db)}
-    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port),
-           "--browser.gatherUsageStats", "false"]
-    if headless:
-        cmd += ["--server.headless", "true"]
-    console.print(f"[green]opening GUI[/] on http://localhost:{port}  (db: {env['RESULTS_TRACKER_DB']})")
-    raise typer.Exit(code=subprocess.call(cmd, env=env))
+    # Always run headless: it skips Streamlit's first-run email prompt. We open the browser ourselves.
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", str(app_path),
+        "--server.port", str(chosen), "--server.headless", "true",
+        "--browser.gatherUsageStats", "false",
+    ]
+    url = f"http://localhost:{chosen}"
+    console.print(f"[green]starting GUI[/] at {url}  (db: {env['RESULTS_TRACKER_DB']})  Ctrl-C to stop")
+    proc = subprocess.Popen(cmd, env=env)
+    try:
+        if not headless and _wait_for_port(chosen):
+            webbrowser.open(url)
+        raise typer.Exit(code=proc.wait())
+    except KeyboardInterrupt:
+        proc.terminate()
+        raise typer.Exit(code=0)
 
 
 if __name__ == "__main__":  # pragma: no cover
