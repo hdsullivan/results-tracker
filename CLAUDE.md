@@ -15,6 +15,11 @@ results-tracker export bundle -p demo-paper -o /tmp/bundle.zip --db demo.db   # 
 python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Chrome + websocket-client
 ```
 
+## Docs
+
+- `docs/INTEGRATION.md` — how a lab repo adopts the tracker (instrumentation, import, Makefile, conventions).
+- `docs/PITCH.md` — competition demo script. `PLAN.md` — original design and phase status.
+
 ## Layout
 
 - `src/results_tracker/models.py` — SQLModel schema. Everything is a `Run` (config JSON + metrics JSON).
