@@ -9,6 +9,7 @@ them in a Streamlit GUI, export booktabs LaTeX tables and IEEE-sized matplotlib 
 source .venv/bin/activate            # or use .venv/bin/<tool> directly
 pytest -q                            # 115 tests, ~9 s
 results-tracker demo --db demo.db --reset --artifacts demo_artifacts
+results-tracker recipe demo --db toy.db --reset --artifacts toy_artifacts --write-specs specs   # recipe-layer demo
 results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back to a free port)
 results-tracker export table -e main-comparison --db demo.db
 results-tracker export bundle -p demo-paper -o /tmp/bundle.zip --db demo.db   # all paper assets at once
@@ -19,6 +20,7 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 
 - `docs/INTEGRATION.md` — how a lab repo adopts the tracker (instrumentation, import, Makefile, conventions).
 - `docs/PITCH.md` — competition demo script. `PLAN.md` — original design and phase status.
+- `docs/RECIPES.md` — the recipe layer: declare a `Method` and a `Problem`, run comparison/sweep/ablation studies from JSON specs.
 
 ## Layout
 
@@ -32,12 +34,17 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
   `visual.py` ports `adaptivePnP/.../utils/deblur_figures.py` (zoom inset, metric stamp, error colour bar, GT block).
 - `ui/` — Streamlit pages; `ui/common.py` holds cached loaders and sidebar selectors; `ui/charts.py` (Plotly)
   and `ui/tables.py` (HTML in the IEEEtran/booktabs look) mirror the export styling on screen.
-- `cli.py` — Typer app; `export` and `metric` are sub-apps.
+- `recipe/` — `knobs.py` (declared parameter spaces), `core.py` (`Method`, `Problem`, `Instance`, `Estimate`, registry),
+  `study.py` (`Study` spec, `expand`, resumable `run_study` that calls `log_run`), `toy.py` (numpy phantom deblurring,
+  the recipe demo). Core is array-library agnostic; only `toy.py` imports numpy.
+- `cli.py` — Typer app; `export`, `metric` and `recipe` are sub-apps.
 - `demo.py` — deterministic synthetic paper used by tests and the pitch.
 
 ## Conventions
 
 - Aggregation and export functions take plain record dicts so they are testable without a DB.
+- Recipe runs put the condition (kernel, noise, ...) in `config` next to the method knobs; `ablation_table` treats
+  keys that vary among `base`-tagged runs as conditions and pools over them. Re-running a study is a resume (`has_run`).
 - log_run deduplicates on (experiment, method, dataset, instance, seed, config); the importer passes on_duplicate='allow'.
 - Never rescale an image by its own max (shared display range); never pool rows over different dataset sets silently.
 - Metric direction lives in the `Metric` table; guessed from the name on first log, override with

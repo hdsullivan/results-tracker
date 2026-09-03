@@ -76,6 +76,16 @@ def test_export_commands(tmp_path):
     assert "n varies" in r.output  # the reported-only DPIR row has n=1 -> audit warning on stderr
     r = runner.invoke(app, ["export", "ablation-table", "-e", "ablation", "--db", db])
     assert r.exit_code == 0 and "\\checkmark" in r.output and "Full model" in r.output
+    # --where restricts every export to matching runs; an empty match is an error, not an empty table
+    r = runner.invoke(app, ["export", "table", "-e", "main-comparison", "--where", "dataset=Set12", "--db", db])
+    assert r.exit_code == 0, r.output
+    assert r.output.count("\\multicolumn") == 1 and "Set12" in r.output
+    r = runner.invoke(app, ["export", "table", "-e", "main-comparison", "--where", "dataset=nope", "--db", db])
+    assert r.exit_code == 1
+    r = runner.invoke(app, ["export", "table", "-e", "main-comparison", "--where", "junk", "--db", db])
+    assert r.exit_code != 0
+    r = runner.invoke(app, ["table", "-e", "main-comparison", "--where", "dataset=Set12", "--db", db])
+    assert r.exit_code == 0, r.output
     r = runner.invoke(app, ["export", "sweep-table", "-e", "lambda-sweep", "--param", "lambda", "--metric", "psnr",
                             "--param-label", "$\\lambda$", "--db", db])
     assert r.exit_code == 0 and "$\\lambda$ & PSNR" in r.output

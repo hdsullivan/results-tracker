@@ -38,10 +38,13 @@ metric_app = typer.Typer(help="Define how metrics are displayed and ranked.")
 app.add_typer(metric_app, name="metric")
 export_app = typer.Typer(help="Paper-ready exports: booktabs LaTeX tables, IEEE-sized figures, CSV.", no_args_is_help=True)
 app.add_typer(export_app, name="export")
+recipe_app = typer.Typer(help="Study recipes: declare methods and problems once, run comparisons, sweeps and ablations from a spec.", no_args_is_help=True)
+app.add_typer(recipe_app, name="recipe")
 console = Console()
 err_console = Console(stderr=True)
 
 DbOpt = typer.Option(None, "--db", help="SQLite file (default: $RESULTS_TRACKER_DB or ./results.db).")
+WhereOpt = typer.Option([], "--where", help="Keep only runs with field=value, e.g. config.K=5 or method=dpir (repeatable; numbers compare numerically).")
 
 
 def _parse_kv(items: list[str]) -> dict:
@@ -209,11 +212,14 @@ def table(
     project: Optional[str] = typer.Option(None, "--project", "-p"),
     by: list[str] = typer.Option(["method"], "--by", help="Row grouping (repeatable): method, dataset, config.<k>"),
     metrics: list[str] = typer.Option([], "--metric", help="Metrics to show (default: all)."),
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Comparison table: rows grouped by --by, mean ± std over the rest. Best is bold."""
     engine = get_engine(db)
     recs = run_records(get_runs(experiment=experiment, project=project, engine=engine), engine=engine)
+    if where:
+        recs = agg.filter_records(recs, _where(where))
     defs = get_metric_defs(engine=engine)
     ct = agg.comparison_table(
         recs, group_by=by, metrics=metrics or None,
@@ -362,17 +368,44 @@ def import_cmd(
         err_console.print(f"[yellow]{w}[/]", soft_wrap=True)
 
 
-def _free_port(start: int, tries: int = 50) -> int:
+def _port_free(port: int) -> bool:
+    """Nothing listens on `port` over IPv4 or IPv6.
+
+    A bind test on 127.0.0.1 alone is not enough: Streamlit (uvicorn) listens on the dual-stack `[::]`
+    socket, and macOS happily lets a second process bind 127.0.0.1 next to it, so the launcher used to
+    call a busy port free and the new server then died with "port is not available"."""
     import socket
 
-    for port in range(start, start + tries):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
+    from .instances import port_open
+
+    if port_open(port):
+        return False
+    for family, host in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                if s.connect_ex((host, port)) == 0:
+                    return False
+        except OSError:  # no IPv6 on this host
+            continue
+    for family, addr in ((socket.AF_INET6, ("::", port)), (socket.AF_INET, ("127.0.0.1", port))):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if family == socket.AF_INET6:
+                    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)  # dual stack, like uvicorn
+                s.bind(addr)
+        except OSError as e:
+            if family == socket.AF_INET6 and e.errno not in (48, 98):  # EADDRINUSE (mac, linux): busy; else no IPv6
                 continue
+            return False
+    return True
+
+
+def _free_port(start: int, tries: int = 50) -> int:
+    for port in range(start, start + tries):
+        if _port_free(port):
+            return port
     raise typer.BadParameter(f"no free port in {start}-{start + tries}")
 
 
@@ -404,11 +437,25 @@ def ui(
     except ImportError:
         console.print("[red]Streamlit is not installed.[/] Run: pip install 'results-tracker[ui]'")
         raise typer.Exit(code=1)
+    from . import instances
+
+    target = resolve_db_path(db)
+    live = instances.running()
+    for inst in live:
+        if instances.same_db(inst.db, target):
+            console.print(f"[green]a GUI is already running[/] at {inst.url} on {inst.db}; opening it instead of a second one "
+                          f"(stop it with Ctrl-C in its terminal, or kill pid {inst.pid}).")
+            if not headless:
+                webbrowser.open(inst.url)
+            raise typer.Exit(code=0)
+    for inst in live:
+        console.print(f"[yellow]another GUI is already running[/] at {inst.url} on a different database ({inst.db}). "
+                      f"Make sure the tab you look at is the one printed below; the tab title names the database.")
     chosen = _free_port(port)
     if chosen != port:
         console.print(f"[yellow]port {port} is busy, using {chosen}[/]")
     app_path = Path(__file__).parent / "ui" / "app.py"
-    env = {**os.environ, "RESULTS_TRACKER_DB": resolve_db_path(db)}
+    env = {**os.environ, "RESULTS_TRACKER_DB": target}
     # Always run headless: it skips Streamlit's first-run email prompt. We open the browser ourselves.
     cmd = [
         sys.executable, "-m", "streamlit", "run", str(app_path),
@@ -418,6 +465,12 @@ def ui(
     url = f"http://localhost:{chosen}"
     console.print(f"[green]starting GUI[/] at {url}  (db: {env['RESULTS_TRACKER_DB']})  Ctrl-C to stop")
     proc = subprocess.Popen(cmd, env=env)
+    instances.register(chosen, target, pid=proc.pid)
+    # A SIGTERM to this launcher (kill, a supervisor, a closing terminal) must take the server down with it,
+    # or an orphaned Streamlit keeps the port and the registry entry goes stale.
+    import signal
+
+    signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
     try:
         if not headless and _wait_for_port(chosen):
             webbrowser.open(url)
@@ -425,17 +478,31 @@ def ui(
     except KeyboardInterrupt:
         proc.terminate()
         raise typer.Exit(code=0)
+    finally:
+        instances.unregister(chosen)
 
 
 
 # --------------------------------------------------------------------------- export
 
-def _load_experiment(experiment: str, project: Optional[str], db: Optional[Path]):
+def _where(where: list[str]) -> dict:
+    try:
+        return agg.parse_where(where)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+
+def _load_experiment(experiment: str, project: Optional[str], db: Optional[Path], where: list[str] = ()):
     engine = get_engine(db)
     recs = run_records(get_runs(experiment=experiment, project=project, engine=engine), engine=engine)
     if not recs:
         console.print(f"[red]no runs found for experiment {experiment!r}[/]")
         raise typer.Exit(code=1)
+    if where:
+        recs = agg.filter_records(recs, _where(list(where)))
+        if not recs:
+            console.print(f"[red]no runs in {experiment!r} match {' '.join(where)}[/]")
+            raise typer.Exit(code=1)
     defs = {k: {"unit": m.unit, "higher_is_better": m.higher_is_better, "fmt": m.fmt}
             for k, m in get_metric_defs(engine=engine).items()}
     return recs, defs
@@ -498,13 +565,14 @@ def export_table(
     std: str = StdOpt,
     no_underline: bool = typer.Option(False, "--no-underline", help="Don't underline second best."),
     out: Optional[Path] = OutOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Comparison table: rows x (column group x metric), best bold, second underlined."""
     from . import aggregate as agg
     from .export.latex import comparison_latex, provenance_note, width_hint
 
-    recs, defs = _load_experiment(experiment, project, db)
+    recs, defs = _load_experiment(experiment, project, db, where)
     col_key = None if cols == "none" else cols
     pt = agg.pivot_table(recs, rows, col_key, metrics=metric or None,
                          higher_is_better={k: v["higher_is_better"] for k, v in defs.items()})
@@ -537,13 +605,14 @@ def export_ablation_table(
     no_delta: bool = typer.Option(False, "--no-delta"),
     no_settings: bool = typer.Option(False, "--no-settings", help="Omit the per-setting ✓/✗ columns."),
     out: Optional[Path] = OutOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Ablation table: variants x (settings, metrics with deltas vs the full model)."""
     from . import aggregate as agg
     from .export.latex import ablation_latex, provenance_note
 
-    recs, defs = _load_experiment(experiment, project, db)
+    recs, defs = _load_experiment(experiment, project, db, where)
     try:
         rows = agg.ablation_table(recs, metrics=metric or None)
     except agg.AmbiguousBaseError as e:
@@ -569,13 +638,14 @@ def export_sweep_table(
     env: str = EnvOpt,
     std: str = StdOpt,
     out: Optional[Path] = OutOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Sweep table: swept values x groups, best per column in bold."""
     from . import aggregate as agg
     from .export.latex import provenance_note, sweep_latex
 
-    recs, defs = _load_experiment(experiment, project, db)
+    recs, defs = _load_experiment(experiment, project, db, where)
     series = agg.sweep_series(recs, param, metric, group_by=by)
     text = sweep_latex(series, param, metric, defs, caption=caption, label=label, env=_env(env), std=std,
                        param_label=param_label, provenance=provenance_note(resolve_db_path(db), experiment, len(recs)))
@@ -599,13 +669,14 @@ def export_sweep_fig(
     panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
     tex: bool = TexOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Metric vs swept parameter (IEEE single/double column, PDF)."""
     from . import aggregate as agg
     from .export.figures import sweep_figure
 
-    recs, defs = _load_experiment(experiment, project, db)
+    recs, defs = _load_experiment(experiment, project, db, where)
     series = agg.sweep_series(recs, param, metric, group_by=by)
     hib = defs.get(metric, {}).get("higher_is_better", True)
     best = {g: agg.best_sweep_value(s, hib) for g, s in series.items()}
@@ -628,13 +699,14 @@ def export_ablation_fig(
     panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
     tex: bool = TexOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Horizontal bars of each variant's change vs the full model."""
     from . import aggregate as agg
     from .export.figures import ablation_figure
 
-    recs, defs = _load_experiment(experiment, project, db)
+    recs, defs = _load_experiment(experiment, project, db, where)
     try:
         rows = agg.ablation_table(recs, metrics=[metric])
     except agg.AmbiguousBaseError as e:
@@ -664,13 +736,14 @@ def export_comparison_fig(
     panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
     tex: bool = TexOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Grouped bars: x = column key, one bar per row entity, error bar = std. Missing cells stay empty."""
     from . import aggregate as agg
     from .export.figures import comparison_figure
 
-    recs, defs = _load_experiment(experiment, project, db)
+    recs, defs = _load_experiment(experiment, project, db, where)
     pt = agg.pivot_table(recs, rows, None if cols == "none" else cols, metrics=[metric],
                          higher_is_better={k: v["higher_is_better"] for k, v in defs.items()})
     unit = defs.get(metric, {}).get("unit", "")
@@ -706,13 +779,14 @@ def export_visual(
     width: str = typer.Option("double", "--width", help="double (IEEE text width 7.16 in) | single (3.5 in) | inches"),
     data_range: Optional[float] = typer.Option(None, "--data-range", help="Divisor for float/32-bit images (same for all panels)."),
     tex: bool = TexOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Qualitative comparison in the lab's IEEE style: GT | Measurement | baselines | proposed (+ zoom / error)."""
     from .export.figures import figure_tex
     from .export.visual import make_visual, save_visual
 
-    recs, defs = _load_experiment(experiment, project, db)
+    recs, defs = _load_experiment(experiment, project, db, where)
     box = tuple(int(v) for v in crop.split(",")) if crop else None
     if box is not None and len(box) != 4:
         raise typer.BadParameter("--crop expects x,y,w,h")
@@ -783,14 +857,120 @@ def export_runs_csv(
     experiment: str = ExpOpt,
     project: Optional[str] = ProjOpt,
     out: Optional[Path] = OutOpt,
+    where: list[str] = WhereOpt,
     db: Optional[Path] = DbOpt,
 ):
     """Every run as one CSV row (config keys and metrics as columns)."""
     from .export.csv import runs_csv
 
-    recs, _ = _load_experiment(experiment, project, db)
+    recs, _ = _load_experiment(experiment, project, db, where)
     _emit(runs_csv(recs), out)
 
+
+
+# --------------------------------------------------------------------------- recipes
+
+ImportOpt = typer.Option([], "--import", "-i", help="Module to import first so its Method/Problem classes register (repeatable).")
+
+
+def _import_all(modules: list[str]) -> None:
+    import importlib
+
+    for m in modules:
+        importlib.import_module(m)
+
+
+@recipe_app.command("demo")
+def recipe_demo(
+    db: Optional[Path] = DbOpt,
+    reset: bool = typer.Option(False, "--reset", help="Delete the database file first."),
+    artifacts: Optional[Path] = typer.Option(None, "--artifacts", help="Write reconstruction images here (for the Visual page)."),
+    write_specs: Optional[Path] = typer.Option(None, "--write-specs", help="Also write the three study specs as JSON into this directory."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Only print the per-study summary."),
+):
+    """Run the toy paper (phantom deblurring: comparison + sweep + ablation) through the recipe runner."""
+    from .recipe.toy import PROJECT, run_toy_demo, toy_studies
+
+    path = resolve_db_path(db)
+    if reset and path != ":memory:" and Path(path).exists():
+        Path(path).unlink()
+        console.print(f"[yellow]deleted[/] {path}")
+    if write_specs:
+        for study in toy_studies(str(artifacts) if artifacts else None):
+            study.save(write_specs / f"{study.name}.json")
+        console.print(f"[green]wrote[/] study specs to {write_specs}")
+    reports = run_toy_demo(engine=get_engine(db), artifacts_dir=str(artifacts) if artifacts else None,
+                           log=(lambda _s: None) if quiet else typer.echo)
+    for r in reports:
+        console.print(f"[green]{r}[/]")
+    console.print(f"project [bold]{PROJECT}[/] in {path}")
+
+
+@recipe_app.command("run")
+def recipe_run(
+    spec: Path = typer.Argument(..., help="Study spec (.json) written by hand, by the GUI, or by `recipe demo --write-specs`."),
+    db: Optional[Path] = DbOpt,
+    artifacts: Optional[Path] = typer.Option(None, "--artifacts", help="Override the spec's artifacts_dir."),
+    no_resume: bool = typer.Option(False, "--no-resume", help="Recompute settings that are already logged (they are then duplicates)."),
+    imports: list[str] = ImportOpt,
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+):
+    """Run one study spec and log every run."""
+    from .recipe import Study, run_study
+
+    _import_all(imports)
+    study = Study.load(spec)
+    try:
+        report = run_study(study, db=db, resume=not no_resume, artifacts_dir=str(artifacts) if artifacts else None,
+                           log=(lambda _s: None) if quiet else typer.echo)
+    except (KeyError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]{report}[/]")
+
+
+@recipe_app.command("validate")
+def recipe_validate(spec: Path, imports: list[str] = ImportOpt):
+    """Check a study spec against the declared knobs and list the jobs it expands to."""
+    from .recipe import Study, expand, load_study_classes
+
+    _import_all(imports)
+    study = Study.load(spec)
+    try:
+        problem_cls, methods = load_study_classes(study)
+        jobs = expand(study, problem_cls, methods)
+    except (KeyError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+    t = Table("method", "arm", "condition", "seed", "tags", title=f"{study.name} ({study.kind}): {len(jobs)} jobs × {study.n_instances} instances")
+    for j in jobs:
+        t.add_row(j.method, j.arm, ", ".join(f"{k}={v}" for k, v in j.condition.items()), str(j.seed), " ".join(j.tags))
+    console.print(t)
+
+
+@recipe_app.command("knobs")
+def recipe_knobs(ref: str = typer.Argument(..., help="Method or problem: registry key or module:Class."), imports: list[str] = ImportOpt):
+    """Show the declared parameter space of a method (knobs) or a problem (conditions)."""
+    from .recipe import registry
+
+    _import_all(imports)
+    try:
+        cls = registry.resolve_method(ref)
+        knobs, kind = cls.space(), "method"
+    except KeyError:
+        try:
+            cls = registry.resolve_problem(ref)
+            knobs, kind = cls.condition_space(), "problem"
+        except KeyError as e:
+            console.print(f"[red]{e}[/]")
+            raise typer.Exit(code=1)
+    t = Table("knob", "kind", "default", "choices / bounds", "log", "doc", title=f"{kind} {cls.key!r}: {cls.label or cls.key}")
+    for k in knobs:
+        t.add_row(k.name, k.kind, repr(k.default), str(list(k.choices)) if k.choices else (str(list(k.bounds)) if k.bounds else ""),
+                  "yes" if k.log else "", k.doc)
+    console.print(t)
+    if kind == "problem":
+        console.print(f"splits: {', '.join(cls.splits)} · metrics: {', '.join(cls.metric_definitions) or '—'}")
 
 
 if __name__ == "__main__":  # pragma: no cover

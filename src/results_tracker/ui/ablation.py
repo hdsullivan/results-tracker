@@ -49,6 +49,10 @@ def render() -> None:
     if not rows:
         st.warning("Nothing to show.")
         return
+    conditions = agg.condition_keys(recs)
+    if conditions:
+        st.caption("Every arm is pooled over the conditions the full model was repeated on: "
+                   + ", ".join(f"`{k}`" for k in conditions) + ".")
     base_row = next((r for r in rows if r.is_base), None)
     if base_row is None:
         st.warning("No run matches the base config exactly; deltas are unavailable. Pick a base run in the sidebar.")

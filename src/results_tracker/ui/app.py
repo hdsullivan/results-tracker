@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from results_tracker.ui import ablation, comparison, export, overview, run_detail, sweep, visual
+from results_tracker.ui.common import db_path
 
-st.set_page_config(page_title="Results Tracker", page_icon="📊", layout="wide")
+# The database name leads the tab title, so two GUIs on two files are told apart at a glance.
+st.set_page_config(page_title=f"{Path(db_path()).name} · Results Tracker", page_icon="📊", layout="wide")
 
 pages = [
     st.Page(overview.render, title="Overview", icon="🏠", default=True),  # served at "/"

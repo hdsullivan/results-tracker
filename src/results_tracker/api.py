@@ -233,6 +233,41 @@ def log_run(
         return run
 
 
+def has_run(
+    experiment: str,
+    *,
+    project: str = "default",
+    method: Optional[str] = None,
+    dataset: Optional[str] = None,
+    instance: Optional[str] = None,
+    seed: Optional[int] = None,
+    config: Optional[dict] = None,
+    completed_only: bool = True,
+    db=None,
+    engine=None,
+) -> bool:
+    """Is this exact setting (experiment, method, dataset, instance, seed, config) already logged?
+
+    The question a resumable runner asks before recomputing anything. With `completed_only` (default)
+    a failed or running duplicate does not count, so a crashed setting is re-run."""
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        proj = s.exec(select(Project).where(Project.name == project)).first()
+        if proj is None:
+            return False
+        exp = s.exec(select(Experiment).where(Experiment.project_id == proj.id, Experiment.name == experiment)).first()
+        if exp is None:
+            return False
+        meth = s.exec(select(Method).where(Method.name == method)).first() if method else None
+        ds = s.exec(select(Dataset).where(Dataset.name == dataset)).first() if dataset else None
+        if (method and meth is None) or (dataset and ds is None):
+            return False
+        dups = _find_duplicates(s, exp, meth.id if meth else None, ds.id if ds else None, instance, seed, _to_plain(config or {}))
+        if completed_only:
+            dups = [d for d in dups if d.status == RunStatus.completed]
+        return bool(dups)
+
+
 def define_metric(
     name: str, *, unit: str = "", higher_is_better: bool = True, fmt: str = ".2f", db=None, engine=None
 ) -> Metric:

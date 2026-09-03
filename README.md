@@ -20,6 +20,7 @@ wiring an existing repo and manuscript to the tracker**.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,ui]"
 results-tracker demo --db demo.db --artifacts demo_artifacts   # synthetic paper
+results-tracker recipe demo --db toy.db --artifacts toy_artifacts   # same idea, produced by the recipe runner (docs/RECIPES.md)
 results-tracker ui --db demo.db                                 # opens the GUI
 ```
 

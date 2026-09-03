@@ -366,6 +366,7 @@ many runs — useful as a supplementary artifact.
 | The comparison table overflows the column | Follow the width hint: `--std small`, `--font footnotesize`, drop a metric, or `--env 'table*'` |
 | Wrong run logged | `results-tracker delete 42` (or `delete -e exp --status failed`), or the *Delete this run* expander on the Run detail page; both show what goes and ask first. Note the deletion in the commit message |
 | GUI shows stale data | Click *Refresh* in the sidebar (results are cached per database modification time) |
+| GUI shows a different database than the one you launched | Another GUI was already running; the launch says so and prints its own port. The browser tab title names the database file, and the sidebar *Database* box switches it |
 | Port 8501 busy | `results-tracker ui` picks the next free port and prints it |
 
 ---

@@ -276,3 +276,30 @@ def test_ablation_base_tie_is_an_error_not_a_guess():
     recs[1]["tags"] = ["base"]
     assert agg.ablation_table(recs)[0].is_base
     assert agg.ablation_table(recs, base_config={"a": False, "b": True})[0].diff == {}
+
+
+def test_ablation_table_pools_over_conditions_the_base_was_repeated_on():
+    recs = []
+    for kernel in ("G1", "M2"):
+        recs.append(rec("m", 0, {"adaptive": True, "kernel": kernel}, tags=["base"], psnr=30.0))
+        recs.append(rec("m", 0, {"adaptive": False, "kernel": kernel}, psnr=28.0))
+    assert agg.condition_keys(recs) == ["kernel"]
+    rows = agg.ablation_table(recs)
+    assert [r.label for r in rows] == ["full model", "w/o adaptive"]
+    assert rows[0].n == 2 and rows[1].n == 2 and rows[1].delta["psnr"] == -2.0
+    # an explicit (empty) ignore list restores the literal diff: the second kernel becomes a variant
+    assert len(agg.ablation_table(recs, ignore_keys=[])) == 4
+    # a single base run cannot reveal conditions
+    assert agg.condition_keys(recs[:2]) == []
+
+
+def test_parse_where_and_filter_records():
+    recs = [rec("a", 0, {"K": 5}, psnr=1.0), rec("b", 0, {"K": 10}, psnr=2.0), rec("a", 1, {"K": 5.0}, psnr=3.0)]
+    where = agg.parse_where(["config.K=5"])
+    assert where == {"config.K": 5}
+    assert [r["method"] for r in agg.filter_records(recs, where)] == ["a", "a"]  # 5.0 matches 5
+    assert agg.filter_records(recs, agg.parse_where(["method=b"])) == [recs[1]]
+    assert agg.filter_records(recs, {"seed": 1}) == [recs[2]]
+    assert agg.filter_records(recs, {"config.K": "10"}) == [recs[1]]  # string form of a number matches too
+    with pytest.raises(ValueError):
+        agg.parse_where(["nonsense"])

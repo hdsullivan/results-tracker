@@ -5,6 +5,9 @@ No ORM, no pandas: easy to test and reusable by the GUI and the exporters.
 
 from __future__ import annotations
 
+import json
+from numbers import Number
+
 import statistics
 from dataclasses import dataclass, field
 from typing import Any, Callable, Hashable, Iterable, Mapping, Optional, Sequence
@@ -59,6 +62,41 @@ def get_field(record: Record, key: str) -> Any:
     if key.startswith("metrics."):
         return record.get("metrics", {}).get(key[len("metrics."):])
     return record.get(key)
+
+
+def parse_where(items: Iterable[str]) -> dict[str, Any]:
+    """`["config.K=5", "method=dpir"]` -> `{"config.K": 5, "method": "dpir"}`.
+
+    Values are parsed as JSON when possible (5, 0.03, true, "x"), otherwise kept as strings."""
+    out: dict[str, Any] = {}
+    for it in items:
+        if "=" not in it:
+            raise ValueError(f"expected field=value, got {it!r}")
+        k, v = it.split("=", 1)
+        try:
+            out[k] = json.loads(v)
+        except json.JSONDecodeError:
+            out[k] = v
+    return out
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b or str(a).lower() == str(b).lower()
+    if isinstance(a, Number) and isinstance(b, Number):
+        return a == b  # 5 matches 5.0
+    return a == b or str(a) == str(b)
+
+
+def filter_records(records: Iterable[Record], where: Mapping[str, Any]) -> list[Record]:
+    """Runs whose fields equal every value in `where`: method, dataset, seed, instance, status, config.<key>.
+
+    Numbers compare numerically (5 matches 5.0); everything else by equality or by string form, so a
+    value typed on a command line matches the stored one."""
+    recs = list(records)
+    for k, v in where.items():
+        recs = [r for r in recs if _same_value(get_field(r, k), v)]
+    return recs
 
 
 def group_records(records: Iterable[Record], keys: Sequence[str]) -> dict[GroupKey, list[Record]]:
@@ -515,6 +553,18 @@ def varying_config_keys(records: Iterable[Record]) -> list[str]:
     return [k for k, vals in seen.items() if len(vals) > 1]
 
 
+def condition_keys(records: Iterable[Record]) -> list[str]:
+    """Config keys that vary *among the runs tagged 'base'*.
+
+    An ablation repeated over a grid of conditions (blur kernel, noise level, scale factor, image size ...)
+    logs those conditions in `config` alongside the settings it varies. The conditions are not settings:
+    the full model was run at every one of them, so they are exactly the keys that differ between base
+    runs. `ablation_table` leaves them out of the diff so every arm pools over the same grid. With fewer
+    than two base runs nothing can vary and the list is empty."""
+    base = [r for r in records if "base" in (r.get("tags") or [])]
+    return varying_config_keys(base) if len(base) > 1 else []
+
+
 # --------------------------------------------------------------------------- ablations
 
 def config_diff(base: Mapping[str, Any], other: Mapping[str, Any]) -> dict[str, tuple[Any, Any]]:
@@ -576,17 +626,23 @@ def ablation_table(
     base_run_id: Optional[int] = None,
     metrics: Optional[Sequence[str]] = None,
     only_completed: bool = True,
+    ignore_keys: Optional[Sequence[str]] = None,
 ) -> list[AblationRow]:
     """Group variants by how their config differs from the base; report metric deltas.
 
     Base is chosen by (in order): `base_config`, `base_run_id`, a record tagged
     'base', else the config shared by the most runs.
+
+    `ignore_keys` are config keys left out of the diff. By default these are the `condition_keys`:
+    whatever varies among the runs tagged 'base' (kernel, noise level, ...) is a condition the whole
+    ablation was repeated over, not a setting, so arms pool over it instead of splitting on it.
     """
     recs = list(records)
     if only_completed:
         recs = completed(recs)
     if not recs:
         return []
+    ignored = set(ignore_keys) if ignore_keys is not None else set(condition_keys(recs))
 
     if base_config is None:
         cand = None
@@ -614,7 +670,7 @@ def ablation_table(
     names = list(metrics) if metrics else metric_names(recs)
     groups: dict[tuple, tuple[dict, list[Record]]] = {}
     for r in recs:
-        d = config_diff(base_config, r["config"])
+        d = {k: v for k, v in config_diff(base_config, r["config"]).items() if k not in ignored}
         sig = _diff_signature(d)
         groups.setdefault(sig, (d, []))[1].append(r)
 

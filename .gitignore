@@ -9,3 +9,5 @@ build/
 *.db-journal
 .DS_Store
 demo_artifacts/
+specs/
+toy_artifacts/
