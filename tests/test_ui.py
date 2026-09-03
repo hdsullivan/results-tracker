@@ -648,6 +648,9 @@ def condition_sweep_db(tmp_path, monkeypatch):
 
 
 def test_sweep_page_defaults_to_the_declared_knob_and_splits_by_condition(condition_sweep_db):
+    at0 = _run("overview")
+    md = "\n".join(m.value for m in at0.markdown)
+    assert "best beta = 0.5" in md and "best denoiser" not in md  # the Overview headline also takes the knob from the spec
     at = _run("sweep")
     param_box = [sb for sb in at.sidebar.selectbox if sb.label == "Parameter (x)"][0]
     assert param_box.value == "beta"  # from the spec, not the alphabetically first varying key (denoiser)

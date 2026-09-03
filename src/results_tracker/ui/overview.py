@@ -40,10 +40,12 @@ def experiments_rows(summaries: list[dict], project: Optional[str] = None) -> li
     rows = []
     for e in summaries:
         runs = f"{e['completed']}" + (f" (+{e['failed']} failed)" if e["failed"] else "") + (f" ({e['running']} running)" if e["running"] else "")
+        metrics = [display_metric_name(m) for m in e["metrics"]]
+        shown = metrics if len(metrics) <= 6 else metrics[:6] + [f"+{len(metrics) - 6} more"]
         rows.append([
             e["experiment"], e["type"], e.get("stage") or "—", runs,
             ", ".join(map(str, e["methods"])) or "—", ", ".join(map(str, e["datasets"])) or "—",
-            ", ".join(display_metric_name(m) for m in e["metrics"]) or "—", _fmt_ts(e["last"], with_time=False) if e["last"] else "—",
+            ", ".join(shown) or "—", _fmt_ts(e["last"], with_time=False) if e["last"] else "—",
         ])
     return rows
 
@@ -72,8 +74,10 @@ def glance_rows(cat: dict, recs: list[dict], defs: dict, records_for=None) -> li
         unit = defs.get(primary, {}).get("unit", "")
         name = display_metric_name(primary)
         if e["type"] == "sweep":
+            from .common import swept_params
+
             keys = agg.varying_config_keys(rs) or sorted({k for r in rs for k in agg.flatten(r["config"])})
-            declared = [k for k in e.get("swept_params") or [] if k in keys]
+            declared = [k for k in swept_params(e["project"], e["experiment"]) if k in keys]  # recorded, else from the spec
             keys = declared + [k for k in keys if k not in declared]  # the study's own swept knob first
             if keys:
                 series = agg.sweep_series(rs, keys[0], primary)
