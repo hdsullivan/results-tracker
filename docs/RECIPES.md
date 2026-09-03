@@ -31,9 +31,9 @@ results-tracker export table -e main-comparison -p toy-paper --cols config.blur 
 ```python
 from results_tracker.recipe import Method, Knob, Estimate
 
-class SnapPnP(Method):
-    key = "snap_pnp"                 # stable id used in runs; never changes
-    label = "SNAP-PnP"               # display label, editable in the database later
+class AdaptivePnP(Method):
+    key = "adaptive_pnp"             # stable id used in runs; never changes
+    label = "AdaptivePnP"            # display label, editable in the database later
     citation = ""                    # BibTeX key -> rendered label~\cite{key} in tables
     is_baseline = False
     knobs = (
@@ -104,7 +104,7 @@ Register both so specs can name them by key:
 
 ```python
 from results_tracker.recipe import registry
-registry.method(SnapPnP); registry.problem(Deblurring)   # or use them as decorators
+registry.method(AdaptivePnP); registry.problem(Deblurring)   # or use them as decorators
 ```
 
 ## 3. Writing a study
@@ -114,7 +114,7 @@ registry.method(SnapPnP); registry.problem(Deblurring)   # or use them as decora
   "name": "deblurring-ema-beta",  "kind": "sweep",  "project": "adaptive-pnp",
   "problem": "deblurring",  "imports": ["adaptivepnp.recipes"],
   "conditions": {"kernel": [0, 1, 2, 3], "noise": [0.03, 0.05]},
-  "methods": [{"method": "snap_pnp", "config": {"algorithm": "admm"}}],
+  "methods": [{"method": "adaptive_pnp", "config": {"algorithm": "admm"}}],
   "sweep": {"knob": "beta", "values": [0.0, 0.25, 0.5, 0.75, 1.0]},
   "split": "test",  "n_instances": 20,  "seeds": [0, 1],
   "artifacts_dir": "results/tracker_artifacts"

@@ -86,7 +86,7 @@ and mark them as baselines so qualitative figures order them before yours:
 from results_tracker import define_method
 define_method("pnp_admm", label=r"PnP-ADMM~\cite{venkatakrishnan2013}", is_baseline=True)
 define_method("dpir",     label=r"DPIR~\cite{zhang2021}",              is_baseline=True)
-define_method("snap_pnp", label="SNAP-PnP")   # ours: not a baseline
+define_method("adaptive_pnp", label="AdaptivePnP")   # ours: not a baseline
 ```
 
 Labels containing a backslash are passed to LaTeX untouched; plain labels are
@@ -179,7 +179,7 @@ matrix, the deltas, the effect sizes) is derived from the diff:
 ```python
 for variant in [{}, {"adaptive": False}, {"warm_start": False}, {"denoiser": "dncnn"}]:
     cfg = {**BASE, **variant}
-    log_run("ablation", project=PROJECT, experiment_type="ablation", method="snap_pnp",
+    log_run("ablation", project=PROJECT, experiment_type="ablation", method="adaptive_pnp",
             dataset="Set12", seed=seed, config=cfg, metrics=run(cfg),
             tags=["base"] if not variant else [])
 ```
@@ -193,7 +193,7 @@ the plateau:
 ```python
 for lam in [0.01, 0.03, 0.1, 0.3, 1.0]:
     for seed in range(3):
-        log_run("lambda-sweep", project=PROJECT, experiment_type="sweep", method="snap_pnp",
+        log_run("lambda-sweep", project=PROJECT, experiment_type="sweep", method="adaptive_pnp",
                 dataset="Set12", seed=seed, config={**BASE, "lambda": lam}, metrics=run(lam, seed))
 ```
 
@@ -226,7 +226,7 @@ How columns are treated:
 
 Re-importing the same file is safe: identical runs are skipped.
 
-**Method strings that encode a parameter** (e.g. `snap_pnp_K5`) should be split
+**Method strings that encode a parameter** (e.g. `adaptive_pnp_K5`) should be split
 before import so `K` lands in the config, where the sweep and comparison pages
 can use it. A five-line pandas script does it:
 
