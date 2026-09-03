@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -220,3 +221,58 @@ def test_run_detail_delete_button(demo_db):
     assert not at.exception
     assert any("Deleted run #" in s.value for s in at.success)
     assert len(at.selectbox[0].options) == n_runs - 1 and first not in at.selectbox[0].options
+
+
+@pytest.fixture
+def toy_studies_db(tmp_path, monkeypatch):
+    """A database holding one finished toy study and a studies folder with all three toy specs."""
+    from results_tracker import get_engine
+    from results_tracker.recipe import run_study
+    from results_tracker.recipe.toy import toy_studies
+
+    db = tmp_path / "toy.db"
+    engine = get_engine(db)
+    comparison, sweep, ablation = toy_studies(str(tmp_path / "art"))
+    run_study(comparison, engine=engine, log=None)
+    studies = tmp_path / "studies"
+    for s in (comparison, sweep, ablation):
+        s.save(studies / f"{s.name}.json")
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(db))
+    monkeypatch.setenv("RESULTS_TRACKER_STUDIES", str(studies))
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    return db, studies
+
+
+def test_studies_page_derives_progress_and_saves_new_specs(toy_studies_db):
+    db, studies = toy_studies_db
+    at = _run("studies")
+    assert not at.error
+    table = at.dataframe[0].value
+    by_name = {row["experiment"]: row for _, row in table.iterrows()}
+    assert by_name["main-comparison"]["progress"] == 1.0 and by_name["main-comparison"]["status"] == "done"
+    assert by_name["main-comparison"]["runs done"] == 96 and by_name["main-comparison"]["jobs"] == 24
+    assert by_name["reg-sweep"]["progress"] == 0.0 and by_name["reg-sweep"]["status"] == "planned"
+    assert by_name["ablation"]["jobs"] == 16 and by_name["ablation"]["expected"] == 48
+    # the grid for the selected study (first alphabetically: ablation) shows every cell missing
+    md = "\n".join(m.value for m in at.markdown)
+    assert "0/6" in md and "missing" in md and "recipe run" in "\n".join(c.value for c in at.code)
+
+    # plan a new comparison from the declared knobs and save it
+    at.text_input(key="new_name").input("smoke-plan").run()
+    at.selectbox(key="new_arm_0_method").select("adaptive-gd").run()
+    at.text_input(key="new_cond_blur").input("1.0, 2.0").run()
+    at.text_input(key="new_arm_0_reg").input("0.01").run()  # away from the default 0.003 -> written to the spec
+    assert not at.exception
+    assert any("2 jobs" in s.value for s in at.success), [s.value for s in at.success]
+    at.button(key="new_save").click().run()
+    assert not at.exception
+    spec = json.loads((studies / "smoke-plan.json").read_text())
+    assert spec["conditions"] == {"blur": [1.0, 2.0], "noise": [0.02], "size": [64]} if "size" in spec["conditions"] else spec["conditions"]["blur"] == [1.0, 2.0]
+    assert spec["methods"] == [{"method": "adaptive-gd", "config": {"reg": 0.01}}]
+    assert spec["imports"] == ["results_tracker.recipe.toy"]
+    # the saved plan shows up as planned on the next render
+    st.cache_data.clear()
+    at = _run("studies")
+    names = set(at.dataframe[0].value["experiment"])
+    assert "smoke-plan" in names

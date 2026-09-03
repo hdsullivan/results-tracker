@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from results_tracker.ui import ablation, comparison, export, overview, run_detail, sweep, visual
+from results_tracker.ui import ablation, comparison, export, overview, run_detail, studies, sweep, visual
 from results_tracker.ui.common import db_path
 
 # The database name leads the tab title, so two GUIs on two files are told apart at a glance.
@@ -19,6 +19,7 @@ pages = [
     st.Page(ablation.render, title="Ablation", icon="🧩", url_path="ablation"),
     st.Page(visual.render, title="Visual", icon="🖼️", url_path="visual"),
     st.Page(run_detail.render, title="Run detail", icon="🔍", url_path="run"),
+    st.Page(studies.render, title="Studies", icon="🗂️", url_path="studies"),
     st.Page(export.render, title="Export", icon="📤", url_path="export"),
 ]
 st.navigation(pages).run()
