@@ -77,3 +77,8 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
   Keep the two in sync if the lab style changes. Assign hues in fixed first-seen order; never cycle by rank.
 - UI tests use `AppTest.from_string("from results_tracker.ui import X; X.render()")`.
 - A long-running `streamlit run` does not reload edited *imported* modules reliably; restart it.
+- The Overview never loads all runs: `api.experiment_summaries` (SQL) for the tables, `api.recent_runs` for the recent list;
+  `load_records(project, experiment)` is cached on `api.experiment_version` (count, max id, max timestamp), so pages only
+  reload the experiment that changed. Keep new summary needs in SQL rather than in Python over records.
+- Experiments carry a `stage` (paper / exploratory / superseded); `select_project_experiment` hides superseded ones unless the
+  sidebar checkbox is on. `Note` rows are the dated decision log (Overview, Paper page per asset, `note` CLI).

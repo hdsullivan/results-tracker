@@ -45,7 +45,7 @@ def render() -> None:
         return
 
     states = {a.label: asset_staleness(a, load_records_union(project, asset_experiments(a))) for a in assets}
-    studies_dir = default_studies_dir(db_path())
+    studies_dir = default_studies_dir(db_path(), project)
     planned = load_planned(studies_dir) if studies_dir.is_dir() else []
     readiness = {a.label: _readiness(planned, project, a) for a in assets}
     counts = Counter(s for s, _ in states.values())
@@ -112,6 +112,17 @@ def _asset_detail(a, project: str, engine) -> None:
             update_asset(project, a.label, engine=engine, **fields)
             st.session_state.setdefault("_prefill", {})["paper_asset"] = fields.get("new_label", a.label)  # drawn widget: set on next run
             st.rerun()
+    from ..api import add_note, list_notes
+
+    notes = list_notes(project, asset_label=a.label, engine=engine)
+    with st.expander(f"Notes on this asset ({len(notes)})", expanded=bool(notes)):
+        for n in notes:
+            st.markdown(f"**{_fmt_ts(n.created_at)[:10]}** — {n.text}")
+        with st.form(key=f"asset_note_{a.label}", clear_on_submit=True):
+            text = st.text_input("Why this table looks the way it does", placeholder="noise = 0.01 only: the paper's main setting")
+            if st.form_submit_button("Add note") and text.strip():
+                add_note(project, text, experiment=a.experiment, asset_label=a.label, engine=engine)
+                st.rerun()
     with st.expander("Rendering options"):
         st.json({"kind": a.kind, "experiment": a.experiment, "filters": a.filters, "options": a.options})
     with st.expander("Delete asset"):

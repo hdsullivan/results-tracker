@@ -170,3 +170,41 @@ def test_record_timestamps_are_timezone_aware_utc(engine):
     rec = run_records(get_runs(engine=engine), engine=engine)[0]
     assert rec["timestamp"].tzinfo is not None and rec["timestamp"].utcoffset().total_seconds() == 0
     assert rec["timestamp"].astimezone().tzinfo is not None  # convertible to local time for display
+
+
+def test_summaries_version_recent_and_notes(engine):
+    from datetime import datetime, timezone
+
+    from results_tracker import (add_note, delete_note, experiment_summaries, experiment_version, list_notes, log_run, recent_runs,
+                                 set_experiment, set_project)
+
+    v0 = experiment_version("e", project="p", engine=engine)
+    assert v0 == (0, 0, "")
+    log_run("e", project="p", method="a", dataset="d", seed=0, metrics={"psnr": 1.0}, engine=engine, git_commit=None)
+    log_run("e", project="p", method="b", dataset="d", seed=0, metrics={"psnr": 2.0, "ssim": 0.5}, status="failed", engine=engine, git_commit=None)
+    log_run("f", project="p", method="a", dataset="d2", seed=0, metrics={"rmse": 0.1}, experiment_type="sweep", engine=engine, git_commit=None)
+    v1 = experiment_version("e", project="p", engine=engine)
+    assert v1[0] == 2 and v1[1] > 0 and v1[2] and v1 != v0
+    assert experiment_version("f", project="p", engine=engine)[0] == 1
+    s = {x["experiment"]: x for x in experiment_summaries(engine=engine)}
+    assert s["e"]["completed"] == 1 and s["e"]["failed"] == 1 and s["e"]["runs"] == 2 and s["e"]["methods"] == ["a", "b"]
+    assert s["e"]["metrics"] == ["psnr", "ssim"] and s["e"]["datasets"] == ["d"] and s["e"]["type"] == "comparison"
+    assert isinstance(s["e"]["last"], datetime) and s["e"]["last"].tzinfo == timezone.utc
+    assert s["f"]["metrics"] == ["rmse"] and s["f"]["stage"] == ""
+    assert [x["experiment"] for x in experiment_summaries("p", engine=engine)] == ["e", "f"] and experiment_summaries("nope", engine=engine) == []
+    assert [r.experiment_id for r in recent_runs(2, engine=engine)] and len(recent_runs(2, engine=engine)) == 2
+    # stage and studies dir
+    set_experiment("e", project="p", stage="superseded", engine=engine)
+    assert experiment_summaries("p", engine=engine)[0]["stage"] == "superseded"
+    with pytest.raises(ValueError):
+        set_experiment("e", project="p", stage="nonsense", engine=engine)
+    assert set_project("p", studies_dir="~/studies", engine=engine).studies_dir == "~/studies"
+    # notes
+    n1 = add_note("p", "beta = 0.5: plateau", experiment="e", engine=engine)
+    n2 = add_note("p", "main table on noise 0.01 only", asset_label="tab:main", engine=engine)
+    with pytest.raises(ValueError):
+        add_note("p", "   ", engine=engine)
+    assert [n.id for n in list_notes("p", engine=engine)] == [n2.id, n1.id]
+    assert [n.id for n in list_notes("p", asset_label="tab:main", engine=engine)] == [n2.id]
+    assert [n.id for n in list_notes("p", experiment="e", engine=engine)] == [n1.id]
+    assert delete_note(n1.id, engine=engine) and not delete_note(n1.id, engine=engine) and len(list_notes(engine=engine)) == 1

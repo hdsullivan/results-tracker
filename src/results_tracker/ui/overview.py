@@ -15,7 +15,9 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..export.latex import display_metric_name
-from .common import hib_map, load_catalog, load_metric_defs, load_records, sidebar_db
+from typing import Optional
+
+from .common import db_path, engine_for, hib_map, load_catalog, load_metric_defs, load_records, sidebar_db
 from .tables import fmt_stat, generic_html
 
 
@@ -33,31 +35,30 @@ def _val(name: str, st_html: str, unit: str = "", suffix: str = "") -> str:
     return f"{html.escape(name)} {st_html}" + (f" {html.escape(unit)}" if unit else "") + (f" {html.escape(suffix)}" if suffix else "")
 
 
-def experiments_rows(cat: dict, recs: list[dict]) -> list[list[Any]]:
+def experiments_rows(summaries: list[dict], project: Optional[str] = None) -> list[list[Any]]:
+    """From the SQL summaries (api.experiment_summaries): no run is loaded for this table."""
     rows = []
-    for e in cat["experiments"]:
-        rs = [r for r in recs if r["experiment"] == e["experiment"]]
-        done = [r for r in rs if r["status"] == "completed"]
-        failed = sum(r["status"] == "failed" for r in rs)
-        methods = list(dict.fromkeys(r["method"] for r in rs if r.get("method")))
-        datasets = list(dict.fromkeys(r["dataset"] for r in rs if r.get("dataset")))
-        metrics = agg.metric_names(rs)
-        last = max((r["timestamp"] for r in rs if r.get("timestamp")), default=None)
+    for e in summaries:
+        runs = f"{e['completed']}" + (f" (+{e['failed']} failed)" if e["failed"] else "") + (f" ({e['running']} running)" if e["running"] else "")
         rows.append([
-            e["experiment"], e["type"], f"{len(done)}" + (f" (+{failed} failed)" if failed else ""),
-            ", ".join(map(str, methods)) or "—", ", ".join(map(str, datasets)) or "—",
-            ", ".join(display_metric_name(m) for m in metrics) or "—", _fmt_ts(last, with_time=False) if last else "—",
+            e["experiment"], e["type"], e.get("stage") or "—", runs,
+            ", ".join(map(str, e["methods"])) or "—", ", ".join(map(str, e["datasets"])) or "—",
+            ", ".join(display_metric_name(m) for m in e["metrics"]) or "—", _fmt_ts(e["last"], with_time=False) if e["last"] else "—",
         ])
     return rows
 
 
-def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
-    """One line per experiment: what a reader would want to know first."""
+def glance_rows(cat: dict, recs: list[dict], defs: dict, records_for=None) -> list[list[Any]]:
+    """One line per experiment: what a reader would want to know first. `records_for(project, experiment)` loads
+    one experiment's records (cached per experiment); without it `recs` holds every run."""
     hib = hib_map(defs)
     primary_by_project = {p["name"]: p.get("primary_metric") for p in cat["projects"]}
     out = []
     for e in cat["experiments"]:
-        rs = agg.completed([r for r in recs if r["experiment"] == e["experiment"]])
+        if e.get("stage") == "superseded":
+            out.append([e["experiment"], e["type"], "superseded", ""])
+            continue
+        rs = agg.completed(records_for(e["project"], e["experiment"]) if records_for else [r for r in recs if r["experiment"] == e["experiment"]])
         if not rs:
             out.append([e["experiment"], e["type"], "no completed runs", ""])
             continue
@@ -116,7 +117,8 @@ def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
     return out
 
 
-def recent_rows(recs: list[dict], defs: dict, n: int = 15) -> tuple[list[str], list[list[Any]]]:
+def recent_rows(recs: list[dict], defs: dict, n: int = 15, link=None) -> tuple[list[str], list[list[Any]]]:
+    """`recs` are the newest runs already (api.recent_runs); `link(record) -> href` turns the id into a link to Run detail."""
     recent = sorted(recs, key=lambda r: r["timestamp"] or 0, reverse=True)[:n]
     metrics = agg.metric_names(recent)[:4]
     headers = ["#", "logged (local time)", "experiment", "method", "dataset", "seed", "status"] + [display_metric_name(m) for m in metrics]
@@ -126,78 +128,108 @@ def recent_rows(recs: list[dict], defs: dict, n: int = 15) -> tuple[list[str], l
         for m in metrics:
             v = r["metrics"].get(m)
             vals.append("—" if v is None else format(v, defs.get(m, {}).get("fmt", ".2f")).replace("-", "−"))
-        rows.append([r["run_id"], _fmt_ts(r["timestamp"]), r["experiment"], r["method"] or "—", r["dataset"] or "—",
+        rid = f'<a href="{link(r)}" target="_self">#{r["run_id"]}</a>' if link else r["run_id"]
+        rows.append([rid, _fmt_ts(r["timestamp"]), r["experiment"], r["method"] or "—", r["dataset"] or "—",
                      "—" if r["seed"] is None else r["seed"], r["status"], *vals])
     return headers, rows
 
 
-def _paper_line(recs: list[dict]) -> None:
+def _paper_line(records_for) -> None:
     """One line on the pinned paper assets: how many, how many final, how many need a re-export."""
     from collections import Counter
 
-    from ..api import list_assets
-    from ..export.paper import staleness
+    from ..api import list_assets, list_projects
+    from ..export.paper import asset_experiments, staleness
     from .common import db_path, engine_for
 
-    assets = list_assets(engine=engine_for(db_path()))
+    engine = engine_for(db_path())
+    assets = list_assets(engine=engine)
     if not assets:
         return
-    by_exp: dict[str, list[dict]] = {}
-    for r in recs:
-        by_exp.setdefault(r["experiment"], []).append(r)
-    states = Counter(staleness(a, by_exp.get(a.experiment, []))[0] for a in assets if a.status.value != "dropped")
+    projs = {p.id: p.name for p in list_projects(engine=engine)}
+    states = Counter(staleness(a, [r for e in asset_experiments(a) for r in records_for(projs.get(a.project_id), e)])[0]
+                     for a in assets if a.status.value != "dropped")
     n_final = sum(a.status.value == "final" for a in assets)
     st.caption(f"**Paper:** {sum(states.values())} pinned assets · {n_final} final · {states.get('stale', 0)} stale · "
                f"{states.get('never exported', 0)} never exported — details on the Paper page.")
 
 
 def render() -> None:
+    from ..api import add_note, delete_note, experiment_summaries, list_notes, list_projects, recent_runs, run_records
+    from .common import db_path, engine_for, page_url
+
     st.title("Results Tracker")
     sidebar_db()
     cat = load_catalog()
-    recs = load_records()
     defs = load_metric_defs()
-
-    failed = [r for r in recs if r["status"] == "failed"]
-    running = [r for r in recs if r["status"] == "running"]
+    engine = engine_for(db_path())
+    summaries = experiment_summaries(engine=engine)
+    n_runs = sum(e["runs"] for e in summaries)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Projects", len(cat["projects"]))
     c2.metric("Experiments", len(cat["experiments"]))
-    c3.metric("Runs", len(recs))
-    c4.metric("Failed / running", f"{len(failed)} / {len(running)}")
+    c3.metric("Runs", n_runs)
+    c4.metric("Failed / running", f"{sum(e['failed'] for e in summaries)} / {sum(e['running'] for e in summaries)}")
 
-    if not recs:
+    if not n_runs:
         st.info("Empty database. Seed a demo with `results-tracker demo`, or log runs with `results_tracker.log_run`.")
         return
-    _paper_line(recs)
+    recent = run_records(recent_runs(15, engine=engine), engine=engine)
+    _paper_line(records_for=load_records)
 
     st.subheader("Experiments")
     projects = ", ".join(p["name"] for p in cat["projects"])
     st.markdown(generic_html(
-        ["Experiment", "Type", "Runs", "Methods", "Datasets", "Metrics", "Last run"], experiments_rows(cat, recs),
-        caption=f"Experiments in {projects}. Run counts are completed runs; failed runs in parentheses.", number=1, left_cols=2,
+        ["Experiment", "Type", "Stage", "Runs", "Methods", "Datasets", "Metrics", "Last run"], experiments_rows(summaries),
+        caption=f"Experiments in {projects}. Run counts are completed runs; failed and running runs in parentheses. Stage (paper / "
+                "exploratory / superseded) is set on the Settings page; superseded experiments are hidden from the selectors.",
+        number=1, left_cols=3,
     ), unsafe_allow_html=True)
 
     st.subheader("Results at a glance")
     st.markdown(generic_html(
-        ["Experiment", "Type", "Headline", "Value"], glance_rows(cat, recs, defs),
+        ["Experiment", "Type", "Headline", "Value"], glance_rows(cat, [], defs, records_for=load_records),
         caption="One line per experiment, read off the completed runs: best method (mean ± std over datasets and seeds), "
                 "best swept value, or the setting whose removal costs the most. Details on the respective pages.",
         number=2, left_cols=4, raw_html_cols=[3],
     ), unsafe_allow_html=True)
 
     st.subheader("Recent runs")
-    headers, rows = recent_rows(recs, defs)
-    st.markdown(generic_html(headers, rows, caption="Most recent runs, newest first; metrics as logged.", number=3, left_cols=5),
-                unsafe_allow_html=True)
+    exp_project = {e["experiment"]: e["project"] for e in cat["experiments"]}
+    headers, rows = recent_rows(recent, defs, link=lambda r: page_url("run", project=exp_project.get(r["experiment"]),
+                                                                        experiment=r["experiment"], run=r["run_id"]))
+    st.markdown(generic_html(headers, rows, caption="Most recent runs, newest first; metrics as logged. The id opens the run.", number=3,
+                             left_cols=5, raw_html_cols=[0]), unsafe_allow_html=True)
 
     with st.expander("Sortable grids"):
-        per_exp = pd.DataFrame(cat["experiments"])
-        run_df = pd.DataFrame([{"experiment": r["experiment"]} for r in recs])
-        per_exp["runs"] = per_exp["experiment"].map(run_df["experiment"].value_counts()).fillna(0).astype(int)
-        st.dataframe(per_exp, width="stretch", hide_index=True)
-        recent = sorted(recs, key=lambda r: r["timestamp"] or 0, reverse=True)[:50]
+        st.dataframe(pd.DataFrame([{k: v for k, v in e.items() if k not in ("methods", "datasets", "metrics", "swept_params")} for e in summaries]),
+                     width="stretch", hide_index=True)
         st.dataframe(pd.DataFrame([
             {"id": r["run_id"], "time": r["timestamp"], "experiment": r["experiment"], "method": r["method"],
              "dataset": r["dataset"], "seed": r["seed"], "status": r["status"], **r["metrics"]} for r in recent
         ]), width="stretch", hide_index=True)
+
+    st.subheader("Notes")
+    notes = list_notes(engine=engine)
+    proj_names = [p["name"] for p in cat["projects"]]
+    proj_by_id = {p.id: p.name for p in list_projects(engine=engine)}
+    with st.form("note_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns([1, 1, 3])
+        note_project = c1.selectbox("Project", proj_names, key="note_project")
+        note_exp = c2.selectbox("Experiment (optional)", ["—"] + [e["experiment"] for e in cat["experiments"]], key="note_experiment")
+        text = c3.text_input("Decision or observation", key="note_text", placeholder="beta = 0.5 chosen: plateau in deblurring-ema-beta")
+        if st.form_submit_button("Add note") and text.strip():
+            add_note(note_project, text, experiment=None if note_exp == "—" else note_exp, engine=engine)
+            st.rerun()
+    if not notes:
+        st.caption("No notes yet. A dated line per decision keeps the reasoning next to the results; notes attached to a paper asset "
+                   "are shown on the Paper page.")
+    for n in notes[:20]:
+        c1, c2 = st.columns([11, 1])
+        tags = " · ".join(t for t in (proj_by_id.get(n.project_id, ""), n.experiment or "", f"`{n.asset_label}`" if n.asset_label else "") if t)
+        c1.markdown(f"**{_fmt_ts(n.created_at, with_time=False)}** · {tags} — {n.text}")
+        if c2.button("🗑", key=f"note_del_{n.id}", help="Delete this note"):
+            delete_note(n.id, engine=engine)
+            st.rerun()
+    if len(notes) > 20:
+        st.caption(f"{len(notes) - 20} older notes not shown (`results-tracker note list`).")

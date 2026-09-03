@@ -258,7 +258,15 @@ results-tracker ui                         # uses $RESULTS_TRACKER_DB
 ```
 
 - **Overview** — is everything there? Failed runs are counted, not hidden. The
-  "results at a glance" table is the paper's story in three lines.
+  "results at a glance" table is the paper's story in three lines. Counts come
+  from SQL and records are cached per experiment, so it stays quick as the
+  database grows; run ids link to Run detail; a dated **notes** log at the
+  bottom keeps decisions next to the results (`results-tracker note add`).
+- **Stages.** On Settings → Experiments, mark an experiment *paper*,
+  *exploratory* or *superseded* (or `results-tracker experiment set NAME --stage
+  superseded`). Superseded experiments disappear from every selector unless the
+  sidebar checkbox shows them, so old attempts stop cluttering the menus without
+  being deleted.
 - **One selection for every page.** Project, experiment and the *Filter* in the
   sidebar are shared: pick `deblur-main` with `config.noise = 0.01` on the
   Comparison page and the Sweep, Visual, Run detail and Export pages show the

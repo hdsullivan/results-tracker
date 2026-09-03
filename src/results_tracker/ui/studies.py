@@ -37,8 +37,15 @@ STATE_COLOURS = {"done": "#d5eed8", "running": "#cfe3f7", "partial": "#fde9b6", 
 
 # --------------------------------------------------------------------------- derivation
 
-def default_studies_dir(db: str) -> Path:
-    """$RESULTS_TRACKER_STUDIES, else `studies/` next to the database if it exists, else ./studies."""
+def default_studies_dir(db: str, project: Optional[str] = None) -> Path:
+    """The project's own studies directory (Settings → Project), else $RESULTS_TRACKER_STUDIES, else `studies/` next to
+    the database if it exists, else ./studies."""
+    if project:
+        from .common import project_studies_dir
+
+        declared = project_studies_dir(project)
+        if declared:
+            return Path(declared).expanduser()
     if os.environ.get(STUDIES_ENV):
         return Path(os.environ[STUDIES_ENV]).expanduser()
     beside = Path(db).expanduser().resolve().parent / "studies" if db != ":memory:" else None
@@ -228,9 +235,12 @@ def render() -> None:
     project = select_project()
     with st.sidebar:
         st.markdown("**Plans**")
-        studies_dir = Path(keyed(st.text_input, "Studies directory", "studies_dir", str(default_studies_dir(db)),
-                                 help="Every *.json study spec below this folder is a planned experiment. "
-                                      f"Set ${STUDIES_ENV} to change the default.")).expanduser()
+        if st.session_state.get("_studies_dir_for") != project:  # a new project: its own default directory
+            st.session_state["_studies_dir_for"] = project
+            st.session_state.pop("studies_dir", None)
+        studies_dir = Path(keyed(st.text_input, "Studies directory", "studies_dir", str(default_studies_dir(db, project)),
+                                 help="Every *.json study spec below this folder is a planned experiment. Set it once per project on "
+                                      f"the Settings page, or ${STUDIES_ENV} for every project.")).expanduser()
     if not studies_dir.is_dir():
         st.info(f"`{studies_dir}` does not exist. Point the sidebar at a folder of study specs, or plan one below.")
         planned: list[Planned] = []

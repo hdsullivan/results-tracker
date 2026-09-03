@@ -19,7 +19,8 @@ from typing import Any, Iterable, Optional, Sequence, Type, TypeVar, Union
 from sqlmodel import Session, SQLModel, select
 
 from .db import get_engine, session_scope
-from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus, ValueMap
+from .models import (EXPERIMENT_STAGES, Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Note, Project, Run,
+                     RunStatus, ValueMap)
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -301,8 +302,10 @@ def list_methods(db=None, engine=None) -> list[Method]:
         return sorted(s.exec(select(Method)).all(), key=lambda m: (int(m.position or 0), m.name))
 
 
-def set_project(name: str, *, description: Optional[str] = None, primary_metric: Optional[str] = None, db=None, engine=None) -> Project:
-    """Create or annotate a project; `primary_metric` is what the Overview headline and default figures use."""
+def set_project(name: str, *, description: Optional[str] = None, primary_metric: Optional[str] = None,
+                studies_dir: Optional[str] = None, db=None, engine=None) -> Project:
+    """Create or annotate a project; `primary_metric` is what the Overview headline and default figures use,
+    `studies_dir` where the Studies page looks for the project's specs."""
     engine = _resolve_engine(engine, db)
     with session_scope(engine) as s:
         p = get_or_create(s, Project, name)
@@ -310,8 +313,122 @@ def set_project(name: str, *, description: Optional[str] = None, primary_metric:
             p.description = description
         if primary_metric is not None:
             p.primary_metric = primary_metric
+        if studies_dir is not None:
+            p.studies_dir = str(studies_dir)
         s.flush()
         return p
+
+
+# --------------------------------------------------------------------------- notes
+
+def add_note(project: str, text: str, *, experiment: Optional[str] = None, asset_label: Optional[str] = None, db=None, engine=None) -> Note:
+    """A dated decision or observation, optionally attached to an experiment and/or a paper asset label."""
+    if not text or not text.strip():
+        raise ValueError("a note needs text")
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        proj = get_or_create(s, Project, project)
+        n = Note(project_id=proj.id, text=text.strip(), experiment=experiment or None, asset_label=asset_label or None)
+        s.add(n)
+        s.flush()
+        return n
+
+
+def list_notes(project: Optional[str] = None, *, experiment: Optional[str] = None, asset_label: Optional[str] = None,
+               db=None, engine=None) -> list[Note]:
+    """Newest first; filters narrow to one project / experiment / asset."""
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        stmt = select(Note)
+        if project:
+            stmt = stmt.join(Project, Note.project_id == Project.id).where(Project.name == project)
+        if experiment:
+            stmt = stmt.where(Note.experiment == experiment)
+        if asset_label:
+            stmt = stmt.where(Note.asset_label == asset_label)
+        return sorted(s.exec(stmt).all(), key=lambda n: (n.created_at, n.id or 0), reverse=True)
+
+
+def delete_note(note_id: int, db=None, engine=None) -> bool:
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        n = s.get(Note, int(note_id))
+        if n is None:
+            return False
+        s.delete(n)
+        return True
+
+
+# --------------------------------------------------------------------------- summaries (SQL, no records)
+
+def experiment_summaries(project: Optional[str] = None, db=None, engine=None) -> list[dict[str, Any]]:
+    """One dict per experiment computed in SQL: run counts by status, last timestamp, the methods, datasets and
+    metric names seen. What the Overview needs without loading any run into Python."""
+    from sqlalchemy import text
+
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        projs = {p.id: p for p in s.exec(select(Project)).all()}
+        exps = [e for e in s.exec(select(Experiment).order_by(Experiment.name)).all() if not project or projs[e.project_id].name == project]
+        counts: dict[int, dict[str, Any]] = {}
+        for exp_id, status, n, last in s.exec(text("SELECT experiment_id, status, COUNT(*), MAX(timestamp) FROM run GROUP BY 1, 2")).all():
+            c = counts.setdefault(exp_id, {"completed": 0, "failed": 0, "running": 0, "last": None})
+            c[str(status).lower()] = n
+            c["last"] = max(c["last"] or "", last or "")
+        methods: dict[int, list[str]] = {}
+        for exp_id, name in s.exec(text("SELECT r.experiment_id, m.name FROM run r JOIN method m ON m.id = r.method_id GROUP BY 1, 2 ORDER BY MIN(r.id)")).all():
+            methods.setdefault(exp_id, []).append(name)
+        datasets: dict[int, list[str]] = {}
+        for exp_id, name in s.exec(text("SELECT r.experiment_id, d.name FROM run r JOIN dataset d ON d.id = r.dataset_id GROUP BY 1, 2 ORDER BY MIN(r.id)")).all():
+            datasets.setdefault(exp_id, []).append(name)
+        metrics: dict[int, list[str]] = {}
+        for exp_id, key in s.exec(text("SELECT r.experiment_id, j.key FROM run r, json_each(r.metrics) j GROUP BY 1, 2 ORDER BY 1, MIN(r.id)")).all():
+            metrics.setdefault(exp_id, []).append(key)
+    out = []
+    for e in exps:
+        c = counts.get(e.id, {"completed": 0, "failed": 0, "running": 0, "last": None})
+        last = c["last"]
+        if isinstance(last, str) and last:
+            try:
+                last = datetime.fromisoformat(last).replace(tzinfo=timezone.utc)
+            except ValueError:
+                last = None
+        out.append({
+            "project": projs[e.project_id].name, "experiment": e.name, "type": e.type.value, "stage": e.stage or "",
+            "description": e.description, "swept_params": list(e.swept_params or []),
+            "completed": c["completed"], "failed": c["failed"], "running": c["running"],
+            "runs": c["completed"] + c["failed"] + c["running"], "last": last,
+            "methods": methods.get(e.id, []), "datasets": datasets.get(e.id, []), "metrics": metrics.get(e.id, []),
+        })
+    return out
+
+
+def experiment_version(experiment: str, project: Optional[str] = None, db=None, engine=None) -> tuple[int, int, str]:
+    """(run count, max run id, max timestamp) of one experiment: a cheap key that changes whenever its runs do,
+    so a cache of its records can be keyed on it instead of on the whole database file."""
+    from sqlalchemy import text
+
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        stmt = select(Experiment).where(Experiment.name == experiment)
+        if project:
+            stmt = stmt.join(Project).where(Project.name == project)
+        exp = s.exec(stmt).first()
+        if exp is None:
+            return (0, 0, "")
+        row = s.exec(text("SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(timestamp), '') FROM run WHERE experiment_id = :e"),
+                     params={"e": exp.id}).one()
+        return (int(row[0]), int(row[1]), str(row[2]))
+
+
+def recent_runs(n: int = 15, project: Optional[str] = None, db=None, engine=None) -> list[Run]:
+    """The newest `n` runs (any experiment), newest first."""
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        stmt = select(Run).join(Experiment, Run.experiment_id == Experiment.id)
+        if project:
+            stmt = stmt.join(Project, Experiment.project_id == Project.id).where(Project.name == project)
+        return list(s.exec(stmt.order_by(Run.timestamp.desc(), Run.id.desc()).limit(n)).all())  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------- value maps
@@ -379,6 +496,7 @@ def set_experiment(
     description: Optional[str] = None,
     swept_params: Optional[Sequence[str]] = None,
     base_run_id: Optional[int] = None,
+    stage: Optional[str] = None,
     db=None,
     engine=None,
 ) -> Experiment:
@@ -395,6 +513,10 @@ def set_experiment(
             exp.swept_params = list(swept_params)
         if base_run_id is not None:
             exp.base_run_id = base_run_id
+        if stage is not None:
+            if stage not in EXPERIMENT_STAGES:
+                raise ValueError(f"stage must be one of {EXPERIMENT_STAGES}, got {stage!r}")
+            exp.stage = stage
         s.flush()
         return exp
 

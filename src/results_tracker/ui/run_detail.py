@@ -121,8 +121,20 @@ def render() -> None:
 
     by_id = {r["run_id"]: r for r in recs}
     labels = {run_label(r): r["run_id"] for r in recs}
+    wanted = st.query_params.get("run")  # a link to one run: ?run=<id>
+    if wanted is not None:
+        del st.query_params["run"]
+        try:
+            label = next(lbl for lbl, rid in labels.items() if rid == int(wanted))
+            st.session_state["run_pick"] = label
+        except (StopIteration, ValueError):
+            st.warning(f"Run {wanted} is not in this experiment (or does not match the filter).")
+    if st.session_state.get("run_pick") not in labels:
+        st.session_state.pop("run_pick", None)
     chosen = st.selectbox("Run", list(labels), key="run_pick")
     run = by_id[labels[chosen]]
+    if st.query_params.get_all("run") != [str(run["run_id"])]:
+        st.query_params["run"] = str(run["run_id"])
 
     meta = st.columns(5)
     meta[0].metric("Status", run["status"])

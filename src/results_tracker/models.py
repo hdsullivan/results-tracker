@@ -39,6 +39,9 @@ class AssetStatus(str, Enum):
     dropped = "dropped"
 
 
+EXPERIMENT_STAGES = ("", "paper", "exploratory", "superseded")
+
+
 class Project(SQLModel, table=True):
     """One per paper."""
 
@@ -46,6 +49,7 @@ class Project(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     description: str = ""
     primary_metric: str = ""  # the metric headlines and default figures use ("" = guess psnr/ssim/first)
+    studies_dir: str = ""  # where this project's study specs live ("" = $RESULTS_TRACKER_STUDIES / studies/ beside the database)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -85,6 +89,7 @@ class Experiment(SQLModel, table=True):
     swept_params: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     # Ablation reference run. Plain int (not FK) to avoid a circular FK with Run.
     base_run_id: Optional[int] = None
+    stage: str = ""  # "" (unsorted) | paper | exploratory | superseded (hidden from selectors by default)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -146,3 +151,16 @@ class ValueMap(SQLModel, table=True):
     field: str  # the source field: config.<key>, method, dataset, ...
     rules: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     description: str = ""
+
+
+class Note(SQLModel, table=True):
+    """A dated, free-text decision or observation of a project: "beta = 0.5 chosen: plateau in deblurring-ema-beta".
+    Optionally attached to an experiment and/or a paper asset label, so the Paper page can show the reasoning
+    next to the table it justifies."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    text: str
+    experiment: Optional[str] = None
+    asset_label: Optional[str] = None
+    created_at: datetime = Field(default_factory=utcnow)

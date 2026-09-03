@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -783,3 +784,79 @@ def test_sweep_selection_and_materialize(condition_sweep_db, tmp_path):
     assert not at.exception and any("compare-tuned.json" in s_.value for s_ in at.success)
     tuned = Study.load(studies / "compare-tuned.json")
     assert tuned.methods[0].config == {"beta": 0.5} and tuned.methods[1].config == {"beta": 0.9} and "from ema-beta" in tuned.description
+
+
+def test_overview_notes_stage_and_run_links(demo_db, tmp_path):
+    from results_tracker import list_notes, set_experiment
+
+    at = _run("overview")
+    md = "\n".join(m.value for m in at.markdown)
+    assert "<th>Stage</th>" in md and 'href="run?project=demo-paper&experiment=' in md and "&run=" in md  # ids link to Run detail
+    assert any("No notes yet" in c.value for c in at.caption)
+    # add a note through the form
+    at.text_input(key="note_text").input("lambda = 0.1 chosen: plateau").run()
+    [b for b in at.button if b.label == "Add note"][0].click().run()
+    assert not at.exception
+    notes = list_notes("demo-paper", db=demo_db)
+    assert len(notes) == 1 and notes[0].text == "lambda = 0.1 chosen: plateau"
+    assert "lambda = 0.1 chosen: plateau" in "\n".join(m.value for m in at.markdown)
+    # a superseded experiment leaves the selectors unless asked for, and the Overview says so
+    set_experiment("ablation", project="demo-paper", stage="superseded", db=demo_db)
+    st.cache_data.clear()
+    at2 = _run("comparison")
+    exp_box = [sb for sb in at2.sidebar.selectbox if sb.label == "Experiment"][0]
+    assert not any(o.startswith("ablation") for o in exp_box.options)
+    [cb for cb in at2.sidebar.checkbox if cb.label.startswith("Show 1 superseded")][0].check().run()
+    exp_box = [sb for sb in at2.sidebar.selectbox if sb.label == "Experiment"][0]
+    assert any(o.startswith("ablation") and "superseded" in o for o in exp_box.options)
+    at3 = _run("overview")
+    md = "\n".join(m.value for m in at3.markdown)
+    assert "superseded</td>" in md
+    # the recent-databases file lives under $RESULTS_TRACKER_HOME (set by conftest), never in the real home
+    import json as _json
+    import os
+
+    recent = _json.loads((Path(os.environ["RESULTS_TRACKER_HOME"]) / "recent.json").read_text())
+    assert recent == [str(demo_db)]
+
+
+def test_run_detail_opens_the_run_in_the_url(demo_db):
+    from results_tracker import get_runs
+
+    runs = get_runs(experiment="main-comparison", db=demo_db)
+    target = runs[5]
+    at = AppTest.from_string("from results_tracker.ui import run_detail\nrun_detail.render()\n", default_timeout=30)
+    at.query_params["experiment"] = "main-comparison"
+    at.query_params["run"] = str(target.id)
+    at.run()
+    assert not at.exception
+    assert at.selectbox(key="run_pick").value.startswith(f"#{target.id} ")
+    assert at.query_params["run"] == [str(target.id)]
+    at.query_params["run"] = "999999"
+    at2 = AppTest.from_string("from results_tracker.ui import run_detail\nrun_detail.render()\n", default_timeout=30)
+    at2.query_params["experiment"] = "main-comparison"
+    at2.query_params["run"] = "999999"
+    at2.run()
+    assert any("not in this experiment" in w.value for w in at2.warning)
+
+
+def test_settings_experiments_tab_and_studies_dir(toy_studies_db, tmp_path):
+    from results_tracker import list_experiments
+
+    db, studies = toy_studies_db
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (studies / "ablation.json").rename(other / "ablation.json")
+    at = _run("settings")
+    at.selectbox(key="set_exp_main-comparison_stage").select("exploratory").run()  # the only experiment with runs so far
+    at.text_input(key="set_exp_main-comparison_desc").input("scratch: where is the plateau?").run()
+    at.button(key="set_exps_save").click().run()
+    assert not at.exception
+    e = next(x for x in list_experiments("toy-paper", db=db) if x.name == "main-comparison")
+    assert e.stage == "exploratory" and e.description == "scratch: where is the plateau?"
+    at.text_input(key="set_studies_dir").input(str(other)).run()
+    at.button(key="set_project_save").click().run()
+    assert not at.exception
+    # the Studies page now reads the project's directory instead of $RESULTS_TRACKER_STUDIES
+    at2 = _run("studies")
+    assert set(at2.dataframe[0].value["experiment"]) == {"ablation"}

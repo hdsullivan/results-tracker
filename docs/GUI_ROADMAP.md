@@ -128,6 +128,12 @@ clicking a comparison cell to drill into its runs (the per-instance table covers
   rather than retyped; "Refresh" also re-imports registered modules; Run detail reachable by run id in the
   URL.
 
+Done 2026-09-03 (step 6): Overview from SQL summaries (`experiment_summaries`, `recent_runs`) with records cached per
+experiment (`experiment_version`); experiment `stage` with superseded hidden from selectors (Settings → Experiments,
+`experiment set`); dated `Note` log on the Overview and per asset on the Paper page (`note add|list|rm`); recent
+databases dropdown (`$RESULTS_TRACKER_HOME/recent.json`); studies directory per project (Settings → Project); `?run=`
+in the Run detail URL with links from the Overview. Not done: "Refresh re-imports registered modules" (a restart does it).
+
 ## Suggested order
 
 | Step | Delivers | Size |
@@ -137,7 +143,7 @@ clicking a comparison cell to drill into its runs (the per-instance table covers
 | 3 | Study ↔ asset link, cost estimate, pending-only spec, edit / clone form, running status (§2) | done 2026-09-03 |
 | 4 | Value maps + facets, cross-experiment tables, Settings page (§3, §4) | done 2026-09-03 |
 | 5 | Curves page, two-metric scatter, distribution / instance picker, selection table (§3) | done 2026-09-03 |
-| 6 | Overview via SQL, notes, small UX items (§4) | 1 day |
+| 6 | Overview via SQL, notes, small UX items (§4) | done 2026-09-03 |
 
 Steps 1–3 make the GUI the place where the paper is planned and tracked; steps 4–5 retire the
 remaining `adaptivepnp/paper/*.py` scripts (M6 of the refactor); step 6 is polish.

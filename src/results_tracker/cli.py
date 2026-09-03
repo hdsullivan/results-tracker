@@ -237,6 +237,64 @@ def method_list(db: Optional[Path] = DbOpt):
     console.print(t)
 
 
+note_app = typer.Typer(help="Dated decisions and observations of a project, optionally attached to an experiment or paper asset.", no_args_is_help=True)
+app.add_typer(note_app, name="note")
+
+
+@note_app.command("add")
+def note_add(text: str, project: str = typer.Option(..., "--project", "-p"), experiment: Optional[str] = typer.Option(None, "--experiment", "-e"),
+             asset: Optional[str] = typer.Option(None, "--asset", help="Paper asset label the note justifies, e.g. tab:main"),
+             db: Optional[Path] = DbOpt):
+    from .api import add_note
+
+    try:
+        n = add_note(project, text, experiment=experiment, asset_label=asset, db=db)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    console.print(f"[green]note {n.id}[/] added")
+
+
+@note_app.command("list")
+def note_list(project: Optional[str] = typer.Option(None, "--project", "-p"), db: Optional[Path] = DbOpt):
+    from .api import list_notes
+
+    t = Table("#", "date", "experiment", "asset", "note")
+    for n in list_notes(project, db=db):
+        t.add_row(str(n.id), n.created_at.strftime("%Y-%m-%d"), n.experiment or "—", n.asset_label or "—", n.text)
+    console.print(t)
+
+
+@note_app.command("rm")
+def note_rm(note_id: int, db: Optional[Path] = DbOpt):
+    from .api import delete_note
+
+    if not delete_note(note_id, db=db):
+        console.print(f"[red]no note {note_id}[/]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]removed[/] note {note_id}")
+
+
+experiment_app = typer.Typer(help="Annotate experiments: stage (paper | exploratory | superseded) and description.", no_args_is_help=True)
+app.add_typer(experiment_app, name="experiment")
+
+
+@experiment_app.command("set")
+def experiment_set(name: str, project: str = typer.Option(..., "--project", "-p"),
+                   stage: Optional[str] = typer.Option(None, "--stage", help="paper | exploratory | superseded | '' (unsorted)"),
+                   description: Optional[str] = typer.Option(None, "--description"), db: Optional[Path] = DbOpt):
+    """Superseded experiments are hidden from the GUI selectors unless asked for."""
+    from .api import list_experiments, set_experiment
+
+    if name not in {e.name for e in list_experiments(project, db=db)}:
+        console.print(f"[red]no experiment {name!r} in project {project!r}[/]")
+        raise typer.Exit(code=1)
+    try:
+        set_experiment(name, project=project, stage=stage, description=description, db=db)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    console.print(f"[green]{name}[/] updated")
+
+
 valuemap_app = typer.Typer(help="Value maps: derived, labelled groupings of a field's values (kernel index -> kernel type).", no_args_is_help=True)
 app.add_typer(valuemap_app, name="valuemap")
 

@@ -3,12 +3,16 @@
 from .api import (
     DuplicateRunError,
     DuplicateRunWarning,
+    add_note,
     define_method,
     define_value_map,
     delete_asset,
+    delete_note,
     delete_value_map,
     delete_runs,
     define_metric,
+    experiment_summaries,
+    experiment_version,
     get_asset,
     get_metric_defs,
     get_runs,
@@ -16,9 +20,11 @@ from .api import (
     list_assets,
     list_experiments,
     list_methods,
+    list_notes,
     list_projects,
     list_value_maps,
     log_run,
+    recent_runs,
     run_records,
     save_asset,
     set_experiment,
@@ -26,7 +32,7 @@ from .api import (
     update_asset,
 )
 from .db import get_engine, resolve_db_path
-from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus, ValueMap
+from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Note, Project, Run, RunStatus, ValueMap
 
 __all__ = [
     "log_run",
@@ -36,6 +42,12 @@ __all__ = [
     "list_value_maps",
     "delete_value_map",
     "list_methods",
+    "add_note",
+    "list_notes",
+    "delete_note",
+    "experiment_summaries",
+    "experiment_version",
+    "recent_runs",
     "save_asset",
     "get_asset",
     "list_assets",

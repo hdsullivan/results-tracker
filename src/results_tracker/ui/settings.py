@@ -37,15 +37,50 @@ def render() -> None:
     engine = engine_for(db_path())
     if "settings_flash" in st.session_state:
         st.success(st.session_state.pop("settings_flash"))
-    tab_metrics, tab_methods, tab_maps, tab_project = st.tabs(["Metrics", "Methods", "Value maps", "Project"])
+    tab_metrics, tab_methods, tab_exps, tab_maps, tab_project = st.tabs(["Metrics", "Methods", "Experiments", "Value maps", "Project"])
     with tab_metrics:
         _metrics(engine)
     with tab_methods:
         _methods(engine)
+    with tab_exps:
+        _experiments(project, engine)
     with tab_maps:
         _value_maps(project, engine)
     with tab_project:
         _project(project, engine)
+
+
+def _experiments(project: str, engine) -> None:
+    from ..api import set_experiment
+    from ..models import EXPERIMENT_STAGES
+
+    st.caption("Stage sorts the experiments of a paper: **paper** feeds the manuscript, **exploratory** is scratch work, **superseded** "
+               "is kept for the record but hidden from every selector (a sidebar checkbox shows it). The description is what the "
+               "Overview and the study specs print.")
+    exps = [e for e in load_catalog()["experiments"] if e["project"] == project]
+    if not exps:
+        st.info("No experiments in this project.")
+        return
+    edits = {}
+    h = st.columns([2, 1, 1, 4])
+    for col, title in zip(h, ("Experiment", "Type", "Stage", "Description")):
+        col.markdown(f"**{title}**")
+    for e in exps:
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 4])
+        c1.markdown(f"`{e['experiment']}`")
+        c2.markdown(e["type"])
+        stage = c3.selectbox("stage", list(EXPERIMENT_STAGES), index=list(EXPERIMENT_STAGES).index(e.get("stage") or ""),
+                             key=f"set_exp_{e['experiment']}_stage", label_visibility="collapsed", format_func=lambda v: v or "(unsorted)")
+        desc = c4.text_input("description", value=e.get("description") or "", key=f"set_exp_{e['experiment']}_desc", label_visibility="collapsed")
+        edits[e["experiment"]] = (stage, desc)
+    if st.button("Save experiments", key="set_exps_save", type="primary"):
+        changed = 0
+        for e in exps:
+            stage, desc = edits[e["experiment"]]
+            if (stage, desc) != (e.get("stage") or "", e.get("description") or ""):
+                set_experiment(e["experiment"], project=project, experiment_type=e["type"], stage=stage, description=desc, engine=engine)
+                changed += 1
+        _saved(f"{changed} experiment(s) updated.")
 
 
 def _metrics(engine) -> None:
@@ -166,6 +201,10 @@ def _project(project: str, engine) -> None:
     current = entry.get("primary_metric") or ""
     primary = st.selectbox("Primary metric", options, index=options.index(current) if current in options else 0, key="set_primary",
                            help="What the Overview headline and default figures use for this project.")
+    studies_dir = st.text_input("Studies directory", value=entry.get("studies_dir") or "", key="set_studies_dir",
+                                placeholder="~/Documents/Research/adaptivePnP/studies",
+                                help="Where this project's study specs live; the Studies and Paper pages read it. Blank = "
+                                     "$RESULTS_TRACKER_STUDIES or studies/ beside the database.")
     if st.button("Save project", key="set_project_save", type="primary"):
-        set_project(project, primary_metric="" if primary.startswith("(") else primary, engine=engine)
-        _saved(f"Primary metric of {project}: {primary}.")
+        set_project(project, primary_metric="" if primary.startswith("(") else primary, studies_dir=studies_dir.strip(), engine=engine)
+        _saved(f"Project {project}: primary metric {primary}" + (f", studies in {studies_dir.strip()}" if studies_dir.strip() else "") + ".")

@@ -13,8 +13,10 @@ from typing import Any, Iterable, Optional, Sequence
 import streamlit as st
 
 from .. import aggregate as agg
-from ..api import get_metric_defs, get_runs, list_experiments, list_projects, run_records
+from ..api import experiment_version, get_metric_defs, get_runs, list_experiments, list_projects, run_records
 from ..db import DEFAULT_DB, ENV_VAR, get_engine, resolve_db_path
+
+HOME_ENV = "RESULTS_TRACKER_HOME"  # where the GUI keeps its own small state (recent databases)
 
 Record = dict[str, Any]
 Where = dict[str, list[Any]]  # field -> accepted values (any of)
@@ -50,7 +52,9 @@ def engine_for(path: str):
 
 
 @st.cache_data(show_spinner=False)
-def _load_records(path: str, mtime: float, project: Optional[str], experiment: Optional[str]) -> list[Record]:
+def _load_records(path: str, version: Any, project: Optional[str], experiment: Optional[str]) -> list[Record]:
+    """`version` is the experiment's (count, max id, max timestamp) when one experiment is asked for, so logging
+    a run into experiment A does not throw away the cached records of B; the file mtime otherwise."""
     engine = engine_for(path)
     runs = get_runs(experiment=experiment, project=project, engine=engine)
     return run_records(runs, engine=engine)
@@ -71,10 +75,11 @@ def _load_catalog(path: str, mtime: float) -> dict[str, list[dict[str, Any]]]:
     projs = {p.id: p.name for p in projects}
     exps = [
         {"project": projs[e.project_id], "experiment": e.name, "type": e.type.value, "description": e.description,
-         "swept_params": list(e.swept_params or [])}
+         "swept_params": list(e.swept_params or []), "stage": e.stage or ""}
         for e in list_experiments(engine=engine)
     ]
-    return {"projects": [{"name": p.name, "primary_metric": p.primary_metric or ""} for p in projects], "experiments": exps}
+    return {"projects": [{"name": p.name, "primary_metric": p.primary_metric or "", "studies_dir": p.studies_dir or ""} for p in projects],
+            "experiments": exps}
 
 
 def load_records_union(project: Optional[str], experiments: Sequence[str]) -> list[Record]:
@@ -87,7 +92,21 @@ def load_records_union(project: Optional[str], experiments: Sequence[str]) -> li
 
 def load_records(project: Optional[str] = None, experiment: Optional[str] = None) -> list[Record]:
     p = db_path()
-    return _load_records(p, _mtime(p), project, experiment)
+    if experiment and _mtime(p):
+        version = experiment_version(experiment, project, engine=engine_for(p))
+        if version[0] == 0 and _mtime(p) == 0.0:
+            version = _mtime(p)
+    else:
+        version = _mtime(p)
+    return _load_records(p, version, project, experiment)
+
+
+def project_studies_dir(project: Optional[str]) -> str:
+    """The studies directory a project declares (Settings → Project), or ""."""
+    for p in load_catalog()["projects"]:
+        if p["name"] == project:
+            return p.get("studies_dir") or ""
+    return ""
 
 
 def load_metric_defs() -> dict[str, dict[str, Any]]:
@@ -191,10 +210,49 @@ def page_url(page: str, **params: Any) -> str:
 
 # --------------------------------------------------------------------------- sidebar: database, selection
 
+def _recent_file():
+    from pathlib import Path
+
+    return Path(os.environ.get(HOME_ENV) or (Path.home() / ".results-tracker")).expanduser() / "recent.json"
+
+
+def recent_dbs() -> list[str]:
+    """Databases opened before (newest first), kept in $RESULTS_TRACKER_HOME/recent.json (default ~/.results-tracker)."""
+    import json
+
+    try:
+        return [p for p in json.loads(_recent_file().read_text()) if isinstance(p, str)]
+    except (OSError, ValueError):
+        return []
+
+
+def remember_db(path: str) -> None:
+    import json
+
+    if path == ":memory:":
+        return
+    recent = [path] + [p for p in recent_dbs() if p != path]
+    try:
+        f = _recent_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(recent[:10], indent=1))
+    except OSError:
+        pass
+
+
 def sidebar_db() -> str:
-    """Database picker in the sidebar. Returns the active path."""
+    """Database picker in the sidebar (recent databases as a dropdown, any path as text). Returns the active path."""
+    current = db_path()
+    remember_db(current)
     with st.sidebar:
-        new = st.text_input("Database", value=db_path(), help="SQLite file. Set $RESULTS_TRACKER_DB to change the default.")
+        recent = recent_dbs()
+        if len(recent) > 1:
+            pick = st.selectbox("Recent databases", recent, index=recent.index(current) if current in recent else 0,
+                                format_func=lambda p: os.path.basename(p) or p, help="Databases opened before; the full path is in the box below.")
+            if pick != current:
+                st.session_state[KEY_DB] = resolve_db_path(pick)
+                st.rerun()
+        new = st.text_input("Database", value=current, help="SQLite file. Set $RESULTS_TRACKER_DB to change the default.")
         if new != st.session_state[KEY_DB]:
             st.session_state[KEY_DB] = resolve_db_path(new)
             st.rerun()
@@ -234,14 +292,20 @@ def select_project_experiment(
     cat = load_catalog()
     with st.sidebar:
         exps = [e for e in cat["experiments"] if e["project"] == project and (types is None or e["type"] in types)]
+        current = st.session_state.get(KEY_EXPERIMENT)
+        superseded = [e for e in exps if e.get("stage") == "superseded"]
+        if superseded:
+            show_all = keyed(st.checkbox, f"Show {len(superseded)} superseded experiment(s)", "show_superseded", False,
+                             help="Stage is set on the Settings page (or `results-tracker experiment set`).")
+            if not show_all:
+                exps = [e for e in exps if e.get("stage") != "superseded" or e["experiment"] == current]
         if prefer:
             exps.sort(key=lambda e: e["type"] != prefer)
         if not exps:
             st.info("No experiments of this type in the project.")
             return project, None
         names = [e["experiment"] for e in exps]
-        labels = [f"{e['experiment']}  ({e['type']})" for e in exps]
-        current = st.session_state.get(KEY_EXPERIMENT)
+        labels = [f"{e['experiment']}  ({e['type']})" + (f" · {e['stage']}" if e.get("stage") else "") for e in exps]
         chosen = st.selectbox("Experiment", labels, index=names.index(current) if current in names else 0)
         experiment = names[labels.index(chosen)]
         st.session_state[KEY_EXPERIMENT] = experiment
@@ -470,7 +534,7 @@ def _spec_sweep_knobs(project: Optional[str], experiment: Optional[str]) -> list
 
     from .studies import default_studies_dir
 
-    studies_dir = default_studies_dir(db_path())
+    studies_dir = default_studies_dir(db_path(), project)
     if not studies_dir.is_dir():
         return []
     for path in sorted(studies_dir.rglob("*.json")):
