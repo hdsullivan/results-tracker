@@ -279,3 +279,97 @@ def ablation_deltas(labels: Sequence[str], deltas: Sequence[Optional[float]], st
     fig.update_yaxes(autorange="reversed", ticks="", minor=dict(ticks=""))
     fig.update_layout(height=max(240, 48 * len(ys) + 110), margin=dict(l=20, r=70, t=25, b=60))
     return fig
+
+
+# --------------------------------------------------------------------------- curves
+
+def curves_lines(series_by_group: dict[tuple, Any], curve: str, ylabel: Optional[str] = None, band: bool = True,
+                 log_y: bool = False, guide: Optional[float] = None, members: bool = False) -> go.Figure:
+    """One mean line per group with a shaded ± std band (`curves.CurveStat`); `members` overlays the individual
+    runs as thin lines; `guide` draws a dotted horizontal reference (1.0 for a ratio)."""
+    fig = go.Figure()
+    groups = [g for g, cs in series_by_group.items() if cs.mean]
+    colors = color_for(groups)
+    single = len(groups) == 1
+    for g in groups:
+        cs = series_by_group[g]
+        name = " / ".join(map(str, g)) if g else curve
+        c = colors[g]
+        xs = cs.x
+        if members:
+            for run in cs.members:
+                fig.add_scatter(x=list(range(len(run))), y=run, mode="lines", line=dict(color=_rgba(c, 0.25), width=0.8),
+                                hoverinfo="skip", showlegend=False, legendgroup=name)
+        if band and any(v > 0 for v in cs.std):
+            fig.add_scatter(x=xs, y=[m + s for m, s in zip(cs.mean, cs.std)], mode="lines", line=dict(width=0),
+                            hoverinfo="skip", showlegend=False, legendgroup=name)
+            fig.add_scatter(x=xs, y=[m - s for m, s in zip(cs.mean, cs.std)], mode="lines", line=dict(width=0),
+                            fill="tonexty", fillcolor=_rgba(c, 0.15), hoverinfo="skip", showlegend=False, legendgroup=name)
+        fig.add_scatter(x=xs, y=cs.mean, mode="lines+markers" if len(xs) <= 25 else "lines", name=name, legendgroup=name,
+                        showlegend=not single, line=dict(color=c, width=2.2), marker=dict(size=6, color=c),
+                        customdata=[[s, n] for s, n in zip(cs.std, cs.n)],
+                        hovertemplate=f"{name}<br>iteration %{{x}}<br>{curve}: %{{y:.4g}} ± %{{customdata[0]:.3g}}<br>n=%{{customdata[1]}}<extra></extra>")
+    if guide is not None:
+        fig.add_hline(y=guide, line=dict(color=GUIDE, width=1.2, dash="dot"), layer="below")
+    base_layout(fig, ytitle=ylabel or curve, xtitle="iteration", legend_top=not single)
+    fig.update_layout(hovermode="x unified")
+    if log_y:
+        fig.update_yaxes(type="log")
+    return fig
+
+
+# --------------------------------------------------------------------------- trade-off
+
+def tradeoff_scatter(points_by_series: dict[Any, list], x_metric: str, y_metric: str, x_fmt: str = ".2f", y_fmt: str = ".2f",
+                     xlabel: Optional[str] = None, ylabel: Optional[str] = None, log_x: bool = True,
+                     hollow: Sequence[Any] = (), labels: Optional[dict] = None) -> go.Figure:
+    """Two metrics against each other: one series per method, joined along the path key, std as error bars;
+    `hollow` series (baselines, reported) get open markers and no line."""
+    fig = go.Figure()
+    names = list(points_by_series)
+    colors = color_for(names)
+    hollow_set = set(hollow)
+    for name in names:
+        pts = points_by_series[name]
+        if not pts:
+            continue
+        c = colors[name]
+        is_open = name in hollow_set
+        fig.add_scatter(
+            x=[p.x.mean for p in pts], y=[p.y.mean for p in pts], name=(labels or {}).get(name, str(name)),
+            mode="markers" if (is_open or len(pts) == 1) else "lines+markers+text",
+            text=[str(agg_fmt(p.label)) for p in pts] if len(pts) > 1 else None, textposition="top right",
+            textfont=dict(size=SIZE_TICK - 1, color=c),
+            line=dict(color=c, width=2.0),
+            marker=dict(size=9, color="white" if is_open else c, line=dict(color=c, width=2.0), symbol="circle"),
+            error_x=dict(type="data", array=[p.x.std for p in pts], visible=any(p.x.std > 0 for p in pts), color=c, thickness=1.0, width=3),
+            error_y=dict(type="data", array=[p.y.std for p in pts], visible=any(p.y.std > 0 for p in pts), color=c, thickness=1.0, width=3),
+            customdata=[[str(p.label), p.x.n] for p in pts],
+            hovertemplate=f"{name} · %{{customdata[0]}}<br>{x_metric}: %{{x:{x_fmt}}}<br>{y_metric}: %{{y:{y_fmt}}}<br>n=%{{customdata[1]}}<extra></extra>",
+        )
+    base_layout(fig, ytitle=ylabel or y_metric, xtitle=xlabel or x_metric, legend_top=len(names) > 1)
+    if log_x:
+        fig.update_xaxes(type="log")
+    return fig
+
+
+def agg_fmt(v: Any) -> str:
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
+# --------------------------------------------------------------------------- distribution
+
+def distribution_box(values_by_method: dict[Any, Sequence[float]], metric: str, ylabel: Optional[str] = None,
+                     labels: Optional[dict] = None, points: bool = True) -> go.Figure:
+    """Per-instance values per method as box plots with the points alongside."""
+    fig = go.Figure()
+    names = [m for m, v in values_by_method.items() if len(v)]
+    colors = color_for(names)
+    for m in names:
+        fig.add_box(y=list(values_by_method[m]), name=(labels or {}).get(m, str(m)), marker=dict(color=colors[m], size=4),
+                    line=dict(color=colors[m], width=1.5), fillcolor=_rgba(colors[m], 0.35),
+                    boxpoints="all" if points else "outliers", jitter=0.35, pointpos=0, showlegend=False,
+                    hovertemplate=f"%{{x}}<br>{metric}: %{{y:.4g}}<extra></extra>")
+    base_layout(fig, ytitle=ylabel or metric, xtitle="", legend_top=False)
+    fig.update_xaxes(ticks="", minor=dict(ticks=""))
+    return fig

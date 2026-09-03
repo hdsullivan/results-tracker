@@ -139,7 +139,12 @@ def open_asset(label: str, project: Optional[str] = None) -> bool:
         from ..api import list_projects
 
         project = {p.id: p.name for p in list_projects(engine=engine)}[a.project_id]
-    from .export import prefill_from_asset
+    import importlib
+
+    from ..export.paper import KIND_PAGE
+
+    page = KIND_PAGE.get(a.kind, "export")
+    prefill_from_asset = importlib.import_module(f"results_tracker.ui.{page}").prefill_from_asset
 
     ss = st.session_state
     ss[KEY_PROJECT], ss[KEY_EXPERIMENT] = project, a.experiment
@@ -383,6 +388,20 @@ def where_items(where: Optional[Where] = None) -> list[str]:
 def where_cli() -> str:
     """`--where 'a=1' --where 'b=[2,3]'` for the active filter, or an empty string."""
     return agg.where_cli(active_where())
+
+
+def reset_on_experiment_change(prefix: str, experiment: Optional[str]) -> None:
+    """Drop every keyed widget state starting with `prefix` when the experiment differs from the one they were made
+    for, so options (metrics, keys, labels) restart from the new experiment's defaults; a pending prefill (an
+    asset being opened) is kept."""
+    marker = f"_{prefix}for_experiment"
+    ss = st.session_state
+    if ss.get(marker) == experiment:
+        return
+    ss[marker] = experiment
+    pending = ss.get("_prefill") or {}
+    for k in [k for k in ss if str(k).startswith(prefix) and k not in pending]:
+        del ss[k]
 
 
 # --------------------------------------------------------------------------- pin to paper

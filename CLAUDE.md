@@ -30,7 +30,9 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 - `api.py` — `log_run` and query helpers; `run_records` flattens ORM rows to dicts and applies the project's value maps
   (`derived.<name>` fields, see `valuemaps.py`). `db.add_missing_columns` migrates older databases when a model gains a column.
 - `aggregate.py` — pure-Python stats over record dicts: comparison/pivot tables, sweeps, ablations
-  (config diff vs base), grid audit. No ORM, no pandas. Ranking always uses unrounded means.
+  (config diff vs base), grid audit, selection tables (tuning winners with a boundary flag), trade-off points,
+  instance tables and gains. No ORM, no pandas. Ranking always uses unrounded means.
+  `curves.py` — per-iteration curves read from each run's `diagnostics.json`, pooled per group (NaN-aware, no numpy).
 - `importer.py` — CSV / JSON bulk import with a one-time column mapping and duplicate skipping.
 - `export/latex.py`, `export/figures.py`, `export/visual.py`, `export/csv.py`, `export/bundle.py` — paper exports
   (tables, quantitative figures, qualitative image grids, CSV). `figures.py` also holds `figure_tex` / `ieee_preamble`.
@@ -40,7 +42,9 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
   `visual.py` ports `adaptivePnP/.../utils/deblur_figures.py` (zoom inset, metric stamp, error colour bar, GT block).
 - `ui/` — Streamlit pages; `ui/common.py` holds cached loaders, sidebar selectors (project, experiment, pooled experiments,
   filter), the keyed-widget helpers and the `pin_to_paper` expander; `ui/paper.py` lists and exports the pinned assets;
-  `ui/settings.py` edits metrics, methods, value maps and the primary metric; `ui/charts.py` (Plotly)
+  `ui/settings.py` edits metrics, methods, value maps and the primary metric; `ui/curves.py` and `ui/tradeoff.py` are the
+  per-iteration and cost-vs-quality views; `export/paper.KIND_PAGE` says which page configures (and restores) an asset kind;
+  `ui/charts.py` (Plotly)
   and `ui/tables.py` (HTML in the IEEEtran/booktabs look) mirror the export styling on screen.
 - `recipe/` — `knobs.py` (declared parameter spaces), `core.py` (`Method`, `Problem`, `Instance`, `Estimate`, registry),
   `study.py` (`Study` spec with `feeds`, `expand`, `pending_subset`, resumable `run_study` that logs `running` rows and

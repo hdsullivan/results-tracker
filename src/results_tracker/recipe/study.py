@@ -290,6 +290,23 @@ def pending_subset(study: Study, pending: Sequence[Job], methods: Mapping[str, t
                    description=f"{study.description} · {note}" if study.description else note)
 
 
+def materialize_selection(template: Study, param: str, selections: Mapping[str, Any], *, note: str = "") -> Study:
+    """A copy of `template` whose arms carry the selected value of `param`: `selections` maps a method key (or
+    `method@label` of an arm) to the value chosen from a tuning sweep (`aggregate.selection_table`). Arms whose
+    config already sets `param` are left alone, so a committed spec says exactly what ran."""
+    arms = []
+    changed = []
+    for arm in template.methods:
+        cfg = dict(arm.config)
+        key = arm.method
+        if param not in cfg and key in selections:
+            cfg[param] = selections[key]
+            changed.append(f"{key}: {param}={_fmt(selections[key])}")
+        arms.append(Arm(arm.method, cfg))
+    stamp = f"{param} materialized {datetime.now(timezone.utc):%Y-%m-%d}" + (f" from {note}" if note else "") + (": " + ", ".join(changed) if changed else "")
+    return replace(template, methods=arms, description=f"{template.description} · {stamp}" if template.description else stamp)
+
+
 def load_study_classes(
     study: Study, registry: Optional[Registry] = None, *, import_modules: bool = True
 ) -> tuple[type[Problem], dict[str, type[Method]]]:

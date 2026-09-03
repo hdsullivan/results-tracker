@@ -23,6 +23,7 @@ from .study import (
     default_diagnostics_dir,
     expand,
     load_study_classes,
+    materialize_selection,
     pending_subset,
     run_study,
     validate_study,
@@ -32,6 +33,6 @@ __all__ = [
     "Knob", "KnobSpace", "KNOB_KINDS",
     "Instance", "Estimate", "Method", "Problem", "Registry", "registry", "import_ref",
     "Study", "Arm", "Sweep", "Ablation", "Job", "Report", "StudyObserver", "STUDY_KINDS", "arm_changes", "default_diagnostics_dir",
-    "validate_study", "condition_grid", "expand", "load_study_classes", "pending_subset", "run_study",
+    "validate_study", "condition_grid", "expand", "load_study_classes", "materialize_selection", "pending_subset", "run_study",
     "export_declarations", "declared_registry", "save_declarations", "load_declarations",
 ]

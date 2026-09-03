@@ -603,6 +603,123 @@ def _sort_key(x: Any) -> tuple:
 
 
 @dataclass
+class Selection:
+    """The winner of a swept parameter in one group, and whether it sits on the edge of the searched grid
+    (a boundary optimum means the true optimum may lie outside the range, not that the choice is settled)."""
+
+    group: GroupKey
+    best: Any
+    stat: Stat
+    grid: list[Any]
+    at_boundary: bool
+    runner_up: Optional[Any] = None
+    margin: Optional[float] = None  # best mean minus runner-up mean (signed towards "better")
+
+
+def selection_table(records: Iterable[Record], param: str, metric: str, group_by: Sequence[str] = (),
+                    higher_is_better: bool = True) -> list[Selection]:
+    """`select_best` with its evidence: per group the winning value, its stat, the grid it was chosen from, the
+    boundary flag and the margin to the runner-up. The global-parameter table of a tuning study."""
+    out = []
+    for g, series in sweep_series(records, param, metric, group_by=group_by).items():
+        if not series:
+            continue
+        ordered = sorted(series, key=lambda t: t[1].mean, reverse=higher_is_better)
+        best_x, best_st = ordered[0]
+        grid = [x for x, _ in series]
+        numeric = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in grid)
+        at_boundary = numeric and len(grid) > 1 and best_x in (min(grid), max(grid))
+        runner = ordered[1] if len(ordered) > 1 else None
+        margin = (best_st.mean - runner[1].mean) * (1 if higher_is_better else -1) if runner else None
+        out.append(Selection(g, best_x, best_st, grid, at_boundary, runner[0] if runner else None, margin))
+    return out
+
+
+@dataclass
+class TradeoffPoint:
+    label: Any  # the path value (config.K = 5) or the series label when there is no path
+    x: Stat
+    y: Stat
+
+
+def tradeoff_points(records: Iterable[Record], x_metric: str, y_metric: str, series_key: str = "method",
+                    path_key: Optional[str] = None) -> dict[Any, list[TradeoffPoint]]:
+    """Mean ± std of two metrics per (series, path value): a runtime-vs-quality plot.
+
+    One series per `series_key` value (methods); within a series one point per `path_key` value (the iteration
+    budget K), joined in sorted order. Records lacking either metric are skipped."""
+    recs = [r for r in completed(records) if r["metrics"].get(x_metric) is not None and r["metrics"].get(y_metric) is not None]
+    keys = [series_key] + ([path_key] if path_key else [])
+    out: dict[Any, list[TradeoffPoint]] = {}
+    for key, rs in group_records(recs, keys).items():
+        xs = summarize(r["metrics"].get(x_metric) for r in rs)
+        ys = summarize(r["metrics"].get(y_metric) for r in rs)
+        if xs is None or ys is None:
+            continue
+        out.setdefault(key[0], []).append(TradeoffPoint(key[1] if path_key else key[0], xs, ys))
+    for series in out.values():
+        series.sort(key=lambda p: _sort_key(p.label))
+    return out
+
+
+@dataclass
+class InstanceTable:
+    """One row per instance, one column per method: the metric averaged over seeds (n in `counts`)."""
+
+    metric: str
+    instances: list[Any]
+    methods: list[Any]
+    cells: dict[tuple[Any, Any], Stat]
+    higher_is_better: bool = True
+
+    def stat(self, instance: Any, method: Any) -> Optional[Stat]:
+        return self.cells.get((instance, method))
+
+    def best_method(self, instance: Any) -> Optional[Any]:
+        scored = [(self.cells[(instance, m)].mean, m) for m in self.methods if (instance, m) in self.cells]
+        if not scored:
+            return None
+        return (max if self.higher_is_better else min)(scored)[1]
+
+    def values(self, method: Any) -> list[float]:
+        """Per-instance means of one method: the distribution a box plot shows."""
+        return [self.cells[(i, method)].mean for i in self.instances if (i, method) in self.cells]
+
+
+def instance_table(records: Iterable[Record], metric: str, methods: Optional[Sequence[Any]] = None,
+                   higher_is_better: bool = True) -> InstanceTable:
+    recs = [r for r in completed(records) if r.get("instance") is not None and r["metrics"].get(metric) is not None]
+    cells: dict[tuple[Any, Any], Stat] = {}
+    for (inst, m), rs in group_records(recs, ["instance", "method"]).items():
+        st = summarize(r["metrics"].get(metric) for r in rs)
+        if st is not None:
+            cells[(inst, m)] = st
+    order = list(methods) if methods else method_order(recs)
+    instances = sorted({i for i, _ in cells}, key=_sort_key)
+    return InstanceTable(metric, instances, [m for m in order if any((i, m) in cells for i in instances)], cells, higher_is_better)
+
+
+@dataclass
+class InstanceGain:
+    instance: Any
+    ours: float
+    baseline: float
+
+    @property
+    def gain(self) -> float:
+        return self.ours - self.baseline
+
+
+def instance_gains(table: InstanceTable, ours: Any, baseline: Any) -> list[InstanceGain]:
+    """Per instance, `ours` minus `baseline` (sign flipped for lower-is-better metrics so positive = ours wins),
+    largest gain first: the picker for a qualitative figure's instance."""
+    sign = 1 if table.higher_is_better else -1
+    out = [InstanceGain(i, sign * table.cells[(i, ours)].mean, sign * table.cells[(i, baseline)].mean)
+           for i in table.instances if (i, ours) in table.cells and (i, baseline) in table.cells]
+    return sorted(out, key=lambda g: g.gain, reverse=True)
+
+
+@dataclass
 class Plateau:
     """Which swept values are 'as good as the best' within a tolerance."""
 

@@ -294,6 +294,21 @@ the full set of options (captions, labels, std style, widths).
   machine, and *Edit* / *Clone* into the form below. If the GUI's environment
   cannot import the repo, `results-tracker recipe export-knobs -i <module> -o
   studies/knobs.json` gives it the declarations it needs to plan.
+- **Curves** — per-iteration diagnostics from each run's `diagnostics.json`
+  (PSNR, step size, noise-level estimate ...): mean ± std over runs, one line
+  per method arm or condition, individual runs on request, normalised to the
+  first iteration if wanted. The recipe runner writes the file; a `log_run`
+  user writes `{"curves": {"psnr": [...], ...}}` into the run's `artifacts_dir`.
+- **Trade-off** — two metrics against each other (runtime vs PSNR), one series
+  per method joined along a path key such as the iteration budget `K`;
+  baselines and reported numbers get hollow markers.
+- **Comparison → Per instance** — the spread behind every mean: box plots per
+  method, the instance × method table, and instances ranked by the gain of your
+  method over a baseline, to pick the image for a qualitative figure honestly.
+- **Sweep → Selection** — the tuning rule as a table: the winning value per
+  method (or per K), the grid it was chosen from, a flag when the winner sits at
+  a grid edge, and *Write the selection into a comparison spec* to put the tuned
+  value into the arms of a committed spec.
 - **Settings** — metric direction / unit / format, method labels, baseline
   flags and **display order**, the project's primary metric, and **value maps**:
   derived, labelled groupings of a raw field (`config.kernel` 0-3 → isotropic,

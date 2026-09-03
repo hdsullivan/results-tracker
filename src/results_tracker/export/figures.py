@@ -253,6 +253,150 @@ def sweep_figure(
         return fig
 
 
+# --------------------------------------------------------------------------- curves
+
+def curves_figure(
+    series_by_group: Mapping[tuple, Any],
+    curve: str,
+    *,
+    xlabel: str = "iteration",
+    ylabel: Optional[str] = None,
+    band: bool = True,
+    log_y: bool = False,
+    width: Union[str, float] = "single",
+    height: Optional[float] = None,
+    emphasize: Iterable[Any] = (),
+    labels: Optional[Mapping[tuple, str]] = None,
+    caption: Optional[str] = None,
+    guide: Optional[float] = None,
+) -> Figure:
+    """A per-iteration curve (`curves.CurveStat`) per group: mean line, shaded ± std band, lab style.
+    `guide` draws a dotted horizontal reference (1.0 for a ratio such as sigma_hat / sigma)."""
+    with matplotlib.rc_context(IEEE_RC):
+        fig = _new_figure(width, height)
+        ax = fig.add_subplot(111)
+        groups = [g for g, cs in series_by_group.items() if cs.mean]
+        styles = style_map([_label(g, curve) for g in groups], emphasize)
+        for g in groups:
+            cs = series_by_group[g]
+            st = styles[_label(g, curve)]
+            name = (labels or {}).get(g) or _label(g, curve)
+            xs = cs.x
+            if band and any(v > 0 for v in cs.std):
+                ax.fill_between(xs, [m - s for m, s in zip(cs.mean, cs.std)], [m + s for m, s in zip(cs.mean, cs.std)],
+                                color=st["color"], alpha=0.15, linewidth=0)
+            ax.plot(xs, cs.mean, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"], zorder=st["zorder"],
+                    marker="o" if len(xs) <= 25 else None, markersize=st["markersize"], label=name)
+        if guide is not None:
+            ax.axhline(guide, color=GUIDE_COLOR, linestyle=":", linewidth=1.0, zorder=0)
+        if log_y:
+            ax.set_yscale("log")
+        ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
+        set_axis_labels(ax, xlabel, ylabel or curve)
+        if len(groups) > 1:
+            top_legend(ax, ncol=min(len(groups), 4))
+        if caption:
+            panel_label(ax, caption)
+        return fig
+
+
+# --------------------------------------------------------------------------- trade-off
+
+def tradeoff_figure(
+    points_by_series: Mapping[Any, Sequence[Any]],
+    x_metric: str,
+    y_metric: str,
+    *,
+    xlabel: Optional[str] = None,
+    ylabel: Optional[str] = None,
+    log_x: bool = True,
+    hollow: Iterable[Any] = (),
+    annotate: bool = True,
+    width: Union[str, float] = "single",
+    height: Optional[float] = None,
+    emphasize: Iterable[Any] = (),
+    labels: Optional[Mapping[Any, str]] = None,
+    caption: Optional[str] = None,
+) -> Figure:
+    """Two metrics against each other (`aggregate.tradeoff_points`): one series per method, its points joined
+    along the path key (iteration budget), error bars = std. Series in `hollow` (baselines, reported numbers)
+    get open markers and no line: the paper's filled-vs-hollow convention for parameter-free vs tuned."""
+    hollow_set = set(hollow)
+    with matplotlib.rc_context(IEEE_RC):
+        fig = _new_figure(width, height)
+        ax = fig.add_subplot(111)
+        names = list(points_by_series)
+        styles = style_map([str(n) for n in names], [str(e) for e in emphasize])
+        for name in names:
+            pts = list(points_by_series[name])
+            if not pts:
+                continue
+            st = styles[str(name)]
+            xs = [p.x.mean for p in pts]
+            ys = [p.y.mean for p in pts]
+            open_marker = name in hollow_set
+            ax.errorbar(xs, ys, xerr=[p.x.std for p in pts] if any(p.x.std > 0 for p in pts) else None,
+                        yerr=[p.y.std for p in pts] if any(p.y.std > 0 for p in pts) else None,
+                        color=st["color"], ecolor=st["color"], elinewidth=0.6, capsize=1.5, capthick=0.6,
+                        linestyle="none" if (open_marker or len(pts) == 1) else st["linestyle"], linewidth=st["linewidth"],
+                        marker="o", markersize=st["markersize"] + 1, markerfacecolor="none" if open_marker else st["color"],
+                        markeredgecolor=st["color"], markeredgewidth=1.0, zorder=st["zorder"], label=(labels or {}).get(name, str(name)))
+            if annotate and len(pts) > 1:
+                for p in pts:
+                    ax.annotate(agg.fmt_value(p.label), (p.x.mean, p.y.mean), xytext=(3, 3), textcoords="offset points",
+                                fontsize=TICK_LABEL_SIZE - 2, color=st["color"])
+        if log_x:
+            ax.set_xscale("log")
+        set_axis_labels(ax, xlabel or x_metric, ylabel or y_metric)
+        if len(names) > 1:
+            top_legend(ax, ncol=min(len(names), 4))
+        if caption:
+            panel_label(ax, caption)
+        return fig
+
+
+# --------------------------------------------------------------------------- distribution
+
+def distribution_figure(
+    values_by_method: Mapping[Any, Sequence[float]],
+    metric: str,
+    *,
+    ylabel: Optional[str] = None,
+    width: Union[str, float] = "single",
+    height: Optional[float] = None,
+    emphasize: Iterable[Any] = (),
+    labels: Optional[Mapping[Any, str]] = None,
+    show_points: bool = True,
+    caption: Optional[str] = None,
+) -> Figure:
+    """Box-and-whisker of per-instance values per method (genuine quartiles, not mean ± std), with the points
+    jittered alongside so n and outliers are visible."""
+    import random
+
+    with matplotlib.rc_context(IEEE_RC):
+        fig = _new_figure(width, height)
+        ax = fig.add_subplot(111)
+        names = [m for m, v in values_by_method.items() if len(v)]
+        styles = style_map([str(n) for n in names], [str(e) for e in emphasize])
+        data = [list(values_by_method[m]) for m in names]
+        bp = ax.boxplot(data, positions=range(1, len(names) + 1), widths=0.55, patch_artist=True, showfliers=not show_points,
+                        medianprops=dict(color="black", linewidth=1.0), whiskerprops=dict(linewidth=0.8), capprops=dict(linewidth=0.8))
+        rng = random.Random(0)
+        for i, (m, box) in enumerate(zip(names, bp["boxes"]), start=1):
+            st = styles[str(m)]
+            box.set(facecolor=st["color"], alpha=0.35, edgecolor=st["color"], linewidth=st["linewidth"])
+            if show_points:
+                ax.plot([i + rng.uniform(-0.18, 0.18) for _ in data[i - 1]], data[i - 1], linestyle="none", marker="o",
+                        markersize=2.2, color=st["color"], alpha=0.7, zorder=3)
+        ax.set_xticks(range(1, len(names) + 1))
+        ax.set_xticklabels([(labels or {}).get(m, str(m)) for m in names])
+        ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+        set_axis_labels(ax, None, ylabel or metric)
+        if caption:
+            panel_label(ax, caption)
+        return fig
+
+
 # --------------------------------------------------------------------------- ablation
 
 def ablation_figure(

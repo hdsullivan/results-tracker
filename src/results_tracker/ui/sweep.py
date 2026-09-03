@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from ..export.figures import figure_bytes, figure_tex, sweep_figure, to_grayscale_png
-from ..export.latex import sweep_latex
+from ..export.latex import selection_latex, sweep_latex
 
 from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
@@ -17,6 +17,12 @@ from .common import (active_where, fmt_for, load_metric_defs, load_records, pin_
                      sidebar_filter, swept_params, where_text)
 
 GROUP_KEYS = ["method", "dataset", "instance"]  # base fields; config.* and derived.* keys are added when they vary
+
+
+def prefill_from_asset(a) -> dict:
+    """Widget states for a `selection-table` asset."""
+    o = dict(a.options or {})
+    return {k: o[opt] for k, opt in (("sel_by", "by"), ("sel_param_label", "param_label")) if o.get(opt) is not None}
 
 
 def line_keys(records: list[dict], param_x: str) -> list[str]:
@@ -37,6 +43,9 @@ def render() -> None:
     if not recs:
         st.info("No runs in this experiment.")
         return
+    from .common import reset_on_experiment_change
+
+    reset_on_experiment_change("sel_", experiment)
     all_recs = sidebar_filter(recs)
     recs = agg.completed(all_recs)
     if not recs:
@@ -192,3 +201,80 @@ def render() -> None:
     buf = io.StringIO()
     df.to_csv(buf, index=False)
     st.download_button("Download CSV", buf.getvalue(), file_name=f"{experiment}-{param_x}-{metric}.csv", mime="text/csv")
+
+    _selection(recs, all_recs, param_x, metric, defs, hib, fmt, experiment, project)
+
+
+def _selection(recs, all_recs, param_x, metric, defs, hib, fmt, experiment, project) -> None:
+    """The tuning rule as a table: the winning value per group with its grid and a boundary flag, pinnable as a
+    `selection-table` asset, and written into a comparison spec's arms with `materialize_selection`."""
+    from ..recipe import Study, materialize_selection
+    from .common import keyed, keyed_multiselect, keyed_selectbox
+    from .studies import default_studies_dir
+
+    st.subheader("Selection")
+    by_opts = line_keys(recs, param_x)
+    by = keyed_multiselect("Select per", by_opts, "sel_by", ["method"] if "method" in by_opts else [],
+                           help="One winner per group, e.g. per method and iteration budget K; the rest is pooled.")
+    sel = agg.selection_table(recs, param_x, metric, group_by=by, higher_is_better=hib)
+    if not sel:
+        return
+    rows = []
+    for s_ in sel:
+        rows.append([*map(str, s_.group), f"{s_.best:g}" if isinstance(s_.best, float) else str(s_.best),
+                     s_.stat.format(fmt), ", ".join(f"{x:g}" if isinstance(x, float) else str(x) for x in s_.grid),
+                     "at boundary †" if s_.at_boundary else "interior",
+                     "—" if s_.margin is None else f"{s_.margin:{fmt}} over {s_.runner_up:g}" if isinstance(s_.runner_up, float) else f"{s_.margin:{fmt}} over {s_.runner_up}"])
+    n_boundary = sum(s_.at_boundary for s_ in sel)
+    st.markdown(generic_html([*by, f"best {param_x}", f"{metric} at best", "grid searched", "position", "margin to runner-up"], rows, number=3,
+                             left_cols=len(by),
+                             caption=f"Selected {param_x} per {', '.join(by) or 'setting'}: the value with the best mean {metric} over the searched "
+                                     "grid. † a winner at a grid edge: the optimum may lie outside the searched range, so widen the grid "
+                                     "before calling the parameter tuned."), unsafe_allow_html=True)
+    if n_boundary:
+        st.warning(f"{n_boundary} of {len(sel)} winners sit at a grid boundary.")
+    param_label = keyed(st.text_input, "Parameter label (LaTeX)", "sel_param_label", param_x)
+    with st.expander("LaTeX (booktabs)"):
+        st.code(selection_latex(sel, param_x, metric, by, defs, param_label=param_label), language="latex")
+    pin_to_paper({"selection-table": {"param": param_x, "metric": metric, "by": by, "param_label": param_label}}, records=all_recs,
+                 key="sel_pin", suggested_label=f"tab:{experiment}-{param_x}-selection")
+
+    # --- write the winners into a comparison spec
+    studies_dir = default_studies_dir(st.session_state.get("db", ""))
+    specs = {}
+    if studies_dir.is_dir():
+        for path in sorted(studies_dir.rglob("*.json")):
+            try:
+                study = Study.load(path)
+            except Exception:  # noqa: BLE001
+                continue
+            if study.kind == "comparison" and study.project == (project or study.project):
+                specs[str(path.relative_to(studies_dir))] = (path, study)
+    if not specs:
+        st.caption(f"No comparison spec under `{studies_dir}` to write the selection into.")
+        return
+    with st.expander("Write the selection into a comparison spec"):
+        chosen = keyed_selectbox("Template spec", list(specs), "sel_spec", list(specs)[0])
+        path, template = specs[chosen]
+        if by == ["method"]:
+            selections = {str(s_.group[0]): s_.best for s_ in sel}
+        elif not by:
+            selections = {arm.method: sel[0].best for arm in template.methods}
+        else:
+            st.caption("Select per `method` (or per nothing) to map winners onto the spec's arms.")
+            return
+        out = materialize_selection(template, param_x, selections, note=experiment)
+        changed = [f"`{a.method}` ← {param_x} = {a.config[param_x]}" for a, orig in zip(out.methods, template.methods)
+                   if param_x in a.config and param_x not in orig.config]
+        if not changed:
+            st.caption("Every arm of this spec already sets the parameter, or no winner matches its methods.")
+            return
+        st.markdown("Arms that receive a value: " + "; ".join(changed))
+        default_name = path.stem + "-tuned.json"
+        target_name = keyed(st.text_input, "Save as", "sel_target", default_name)
+        target = studies_dir / target_name
+        if target.exists() and target != path:
+            st.caption(f"`{target.name}` exists and will be replaced.")
+        if st.button("Write spec", key="sel_write", disabled=not target_name):
+            out.save(target)
+            st.success(f"Wrote `{target}`; run it with `results-tracker recipe run {target}`.")

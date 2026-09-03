@@ -355,3 +355,40 @@ def sweep_latex(
                    f"{latex_escape(param_label or param)}. Mean{' $\\pm$ std' if std != 'none' else ''} over {n_txt} runs per value. "
                    f"Best in bold ({'higher' if hib else 'lower'} is better).")
     return _wrap("\n".join(out), env=env, caption=caption, label=label, font=font, position=position, provenance=provenance)
+
+
+# --------------------------------------------------------------------------- selection (tuning) table
+
+def selection_latex(
+    selections: Sequence[agg.Selection],
+    param: str,
+    metric: str,
+    group_by: Sequence[str],
+    defs: MetricDefs,
+    *,
+    caption: Optional[str] = None,
+    label: Optional[str] = None,
+    env: Optional[str] = "table",
+    font: Optional[str] = None,
+    param_label: Optional[str] = None,
+    provenance: Optional[str] = None,
+) -> str:
+    """Per group: the selected value of `param`, the mean metric it achieves, the grid it was chosen from; a
+    dagger marks winners at a grid boundary (the optimum may lie outside the searched range)."""
+    fmt = defs.get(metric, {}).get("fmt", ".2f")
+    plabel = param_label or latex_escape(param)
+    heads = [latex_escape(g) for g in group_by] + [plabel, metric_header(metric, defs), "grid"]
+    lines = []
+    for s in selections:
+        cells = [latex_escape(v) for v in s.group]
+        cells.append(latex_escape(fmt_number(s.best, "g") if isinstance(s.best, float) else s.best) + ("$^\\dagger$" if s.at_boundary else ""))
+        cells.append(fmt_stat(s.stat, fmt))
+        cells.append(latex_escape(", ".join(fmt_number(x, "g") if isinstance(x, float) else str(x) for x in s.grid)))
+        lines.append(" & ".join(cells) + " \\\\")
+    body = "\n".join(["\\toprule", " & ".join(heads) + " \\\\", "\\midrule", *lines, "\\bottomrule"])
+    if caption is None:
+        caption = (f"Selected {plabel} per {', '.join(latex_escape(g) for g in group_by) or 'setting'}: the value with the best mean "
+                   f"{display_metric_name(metric)} over the searched grid. $^\\dagger$ selected at a grid boundary.")
+    col_spec = "l" * len(group_by) + "ccl"
+    return _wrap(f"\\begin{{tabular}}{{{col_spec}}}\n{body}\n\\end{{tabular}}", caption=caption, label=label, env=env, font=font,
+                 position="!t", provenance=provenance)

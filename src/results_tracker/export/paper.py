@@ -26,22 +26,29 @@ from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 
 from .. import aggregate as agg
 from .csv import runs_csv
-from .figures import ablation_figure, comparison_figure, figure_bytes, figure_tex, ieee_preamble, sweep_figure
-from .latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
+from .figures import (ablation_figure, comparison_figure, curves_figure, distribution_figure, figure_bytes, figure_tex,
+                      ieee_preamble, sweep_figure, tradeoff_figure)
+from .latex import ablation_latex, comparison_latex, provenance_note, selection_latex, sweep_latex, width_hint
 from .visual import make_visual
 
 Record = dict[str, Any]
 
-KINDS = ("comparison-table", "ablation-table", "sweep-table",
-         "sweep-figure", "ablation-figure", "comparison-figure", "visual-figure", "runs-csv")
-TABLE_KINDS = ("comparison-table", "ablation-table", "sweep-table")
-FIGURE_KINDS = ("sweep-figure", "ablation-figure", "comparison-figure", "visual-figure")
+KINDS = ("comparison-table", "ablation-table", "sweep-table", "selection-table",
+         "sweep-figure", "ablation-figure", "comparison-figure", "visual-figure",
+         "curves-figure", "tradeoff-figure", "distribution-figure", "runs-csv")
+TABLE_KINDS = ("comparison-table", "ablation-table", "sweep-table", "selection-table")
+FIGURE_KINDS = ("sweep-figure", "ablation-figure", "comparison-figure", "visual-figure", "curves-figure", "tradeoff-figure",
+                "distribution-figure")
+#: which GUI page configures (and restores) an asset kind; kinds not listed live on the Export page
+KIND_PAGE = {"curves-figure": "curves", "tradeoff-figure": "tradeoff", "distribution-figure": "comparison", "selection-table": "sweep"}
 EXPORT_STATUSES = ("planned", "draft", "final")  # dropped assets are kept in the database but not rendered
 
 KIND_TITLES = {
     "comparison-table": "Comparison table (LaTeX)", "ablation-table": "Ablation table (LaTeX)",
     "sweep-table": "Sweep table (LaTeX)", "sweep-figure": "Sweep figure", "ablation-figure": "Ablation figure",
     "comparison-figure": "Comparison figure", "visual-figure": "Visual comparison figure", "runs-csv": "Runs (CSV)",
+    "selection-table": "Selection table (LaTeX)", "curves-figure": "Curves figure", "tradeoff-figure": "Trade-off figure",
+    "distribution-figure": "Distribution figure",
 }
 
 
@@ -208,6 +215,52 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
                                                                 label=label, width=width).encode()))
             out.files.append((f"figures/{slug}.json", json.dumps(asdict(vr.spec), indent=2, default=str).encode()))
             out.note = "; ".join(vr.problems + [f"not shown: {k} — {why}" for k, why in vr.omitted.items()])
+        elif kind == "curves-figure":
+            from ..curves import curve_series, normalise
+
+            curve = o.get("curve")
+            if not curve:
+                raise ValueError("a curves figure needs a `curve` option")
+            series = {g: normalise(cs, o.get("normalise", "value")) for g, cs in curve_series(recs, curve, o.get("by") or []).items()}
+            if not series:
+                raise ValueError(f"no run has a `{curve}` curve in its diagnostics.json")
+            fig = curves_figure(series, curve, xlabel=o.get("xlabel") or "iteration", ylabel=o.get("ylabel") or curve,
+                                band=o.get("band", True), log_y=o.get("log_y", False), width=width, height=o.get("height"),
+                                emphasize=o.get("emphasize") or (), caption=o.get("panel_label") or None, guide=o.get("guide"))
+            add_figure(fig, f"{sum(cs.runs for cs in series.values())} runs with curves")
+        elif kind == "tradeoff-figure":
+            x_metric, y_metric = o.get("x_metric") or "runtime_s", o.get("y_metric") or metric
+            pts = agg.tradeoff_points(recs, x_metric, y_metric, series_key=o.get("series", "method"), path_key=o.get("path"))
+            if not pts:
+                raise ValueError(f"no run has both `{x_metric}` and `{y_metric}`")
+            hollow = set(o.get("hollow") or []) | ({r["method"] for r in recs if r.get("method_is_baseline") or r.get("source") == "reported"}
+                                                  if o.get("hollow_baselines", True) else set())
+            fig = tradeoff_figure(pts, x_metric, y_metric, xlabel=o.get("xlabel"), ylabel=o.get("ylabel"), log_x=o.get("log_x", True),
+                                  hollow=hollow, annotate=o.get("annotate", True), width=width, height=o.get("height"),
+                                  emphasize=o.get("emphasize") or (), labels=agg.method_labels(recs) if o.get("series", "method") == "method" else None,
+                                  caption=o.get("panel_label") or None)
+            add_figure(fig)
+        elif kind == "distribution-figure":
+            if not metric:
+                raise ValueError("a distribution figure needs a `metric` option")
+            table = agg.instance_table(recs, metric, methods=o.get("methods") or None, higher_is_better=hib.get(metric, True))
+            if not table.methods:
+                raise ValueError(f"no per-instance runs with `{metric}` (runs need an `instance`)")
+            fig = distribution_figure({m: table.values(m) for m in table.methods}, metric, ylabel=o.get("ylabel") or default_ylabel,
+                                      width=width, height=o.get("height"), emphasize=o.get("emphasize") or (), labels=agg.method_labels(recs),
+                                      show_points=o.get("points", True), caption=o.get("panel_label") or None)
+            add_figure(fig, f"{len(table.instances)} instances")
+        elif kind == "selection-table":
+            param = o.get("param")
+            if not param or not metric:
+                raise ValueError("a selection table needs `param` and `metric` options")
+            sel = agg.selection_table(recs, param, metric, group_by=o.get("by") or [], higher_is_better=hib.get(metric, True))
+            if not sel:
+                raise ValueError(f"no runs have `{param}` in their config")
+            tex = selection_latex(sel, param, metric, o.get("by") or [], defs, caption=caption, label=label, env=env, font=o.get("font"),
+                                  param_label=o.get("param_label"), provenance=prov)
+            out.files.append((f"tables/{slug}.tex", tex.encode()))
+            out.note = f"{sum(s.at_boundary for s in sel)} of {len(sel)} winners at a grid boundary" if any(s.at_boundary for s in sel) else ""
         elif kind == "runs-csv":
             out.files.append((f"data/{slug}.csv", runs_csv(recs_all).encode()))
             out.runs = len(recs_all)

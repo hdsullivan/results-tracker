@@ -17,12 +17,12 @@ from ..export.bundle import build_bundle
 from ..export.csv import runs_csv
 from ..export.figures import ablation_figure, comparison_figure, figure_bytes, figure_tex, ieee_preamble, sweep_figure, to_grayscale_png
 from ..export.latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
-from ..export.paper import KIND_TITLES, KINDS
+from ..export.paper import KIND_PAGE, KIND_TITLES, KINDS
 from ..export.visual import ZOOM_FRACTION, guess_roles, list_image_files, make_visual
 from .common import (
     active_where, db_path, hib_map, keyed, keyed_multiselect, keyed_radio, keyed_selectbox, load_catalog, load_metric_defs,
-    load_records, load_records_union, pin_to_paper, select_extra_experiments, select_project_experiment, sidebar_db, sidebar_filter,
-    where_cli, where_text,
+    load_records, load_records_union, pin_to_paper, reset_on_experiment_change, select_extra_experiments, select_project_experiment,
+    sidebar_db, sidebar_filter, where_cli, where_text,
 )
 from .tables import ablation_html, comparison_html, generic_html, sweep_html
 
@@ -155,13 +155,7 @@ def render() -> None:
         st.caption(f"Filtered to {len(recs_all)} runs: {where_text()} · on the command line add `{where_cli()}`; "
                    "the filter is recorded in the provenance comment of every table.")
 
-    if st.session_state.get("exp_for_experiment") != experiment:
-        # a new experiment: every option (kind, metrics, keys, labels) starts from that experiment's defaults,
-        # except what a just-opened asset is about to prefill
-        st.session_state["exp_for_experiment"] = experiment
-        pending = st.session_state.get("_prefill") or {}
-        for k in [k for k in st.session_state if str(k).startswith("exp_") and k != "exp_for_experiment" and k not in pending]:
-            del st.session_state[k]
+    reset_on_experiment_change("exp_", experiment)  # options restart from the new experiment's defaults
     with st.sidebar:
         st.markdown("**Export**")
         title = keyed_radio("What to export", TITLES, "exp_kind", KIND_TITLES[PREFERRED.get(exp_type, "comparison-table")])
@@ -177,6 +171,11 @@ def render() -> None:
     def pin(options: dict[str, Any], label: Optional[str] = None, caption: Optional[str] = None) -> None:
         assert kind is not None
         pin_to_paper({kind: options}, records=recs_all, key="exp_pin", suggested_label=label, caption=caption, extra_experiments=extra)
+
+    if kind in KIND_PAGE:
+        st.info(f"{KIND_TITLES[kind]}s are configured and pinned on the **{KIND_PAGE[kind].capitalize()}** page; "
+                "`results-tracker export paper` renders them like every other asset.")
+        return
 
     if kind == "comparison-table":
         c1, c2 = st.columns(2)

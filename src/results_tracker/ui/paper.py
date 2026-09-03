@@ -14,7 +14,7 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..api import delete_asset, list_assets, update_asset
-from ..export.paper import EXPORT_STATUSES, KIND_TITLES, asset_experiments, mark_exported, render_paper, write_paper, zip_paper
+from ..export.paper import EXPORT_STATUSES, KIND_PAGE, KIND_TITLES, asset_experiments, mark_exported, render_paper, write_paper, zip_paper
 from ..export.paper import staleness as asset_staleness
 from .common import db_path, engine_for, keyed, keyed_selectbox, load_records, load_records_union, page_url, select_project, sidebar_db
 from .studies import default_studies_dir, load_planned, studies_feeding
@@ -94,8 +94,9 @@ def _asset_detail(a, project: str, engine) -> None:
     state, detail = asset_staleness(a, load_records_union(project, asset_experiments(a)))
     st.caption(f"{KIND_TITLES.get(a.kind, a.kind)} of **{' + '.join(asset_experiments(a))}**"
                + (f" with filter {agg.where_text(a.filters)}" if a.filters else "") + f" · {state}: {detail}")
-    href = page_url("export", project=project, asset=a.label)
-    st.markdown(f'<a href="{href}" target="_self">Open in Export</a> — restores this asset\'s experiment, filter and options; '
+    page = KIND_PAGE.get(a.kind, "export")
+    href = page_url(page, project=project, asset=a.label)
+    st.markdown(f'<a href="{href}" target="_self">Open in {page.capitalize()}</a> — restores this asset\'s experiment, filter and options; '
                 "pin again from there to change what it renders.", unsafe_allow_html=True)
     with st.form(key=f"asset_form_{a.label}"):
         c1, c2, c3 = st.columns([1, 1, 2])

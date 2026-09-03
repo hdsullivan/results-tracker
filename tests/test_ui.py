@@ -679,3 +679,107 @@ def test_sweep_page_defaults_to_the_declared_knob_and_splits_by_condition(condit
     assert not at2.exception
     at2.multiselect(key="exp_by").set_value(["config.noise"]).run()
     assert not at2.exception and not at2.error
+
+
+def test_curves_page_and_asset_routing(toy_studies_db):
+    from results_tracker import get_asset
+
+    db, studies = toy_studies_db
+    at = _run("curves")
+    assert not at.exception
+    assert at.selectbox(key="cur_curve").value == "step_sizes"
+    opts = at.multiselect(key="cur_by").options
+    assert "config.blur" in opts and "config.noise" in opts and "method" not in opts and at.multiselect(key="cur_by").value == []
+    # only adaptive-gd records curves, so `method` does not vary among the plotted runs and is not offered
+    caption = "\n".join(c.value for c in at.caption)
+    assert "32 runs with curves" in caption and "pooled over config.blur, config.noise" in caption
+    at.multiselect(key="cur_by").set_value(["config.noise"]).run()
+    at.selectbox(key="cur_norm").select("ratio").run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert "<td>16</td>" in md and "divided by the first iteration" in md  # 16 runs per noise level
+    at.button(key="cur_pin_button").click().run()
+    assert not at.exception
+    a = get_asset("toy-paper", "fig:main-comparison-step_sizes", db=db)
+    assert a.kind == "curves-figure" and a.options["by"] == ["config.noise"] and a.options["normalise"] == "ratio"
+    # the Paper page opens a curves asset on the Curves page, which restores its options
+    at2 = _run("paper")
+    md = "\n".join(m.value for m in at2.markdown)
+    assert 'href="curves?' in md and "Open in Curves" in md
+    at3 = AppTest.from_string("from results_tracker.ui import curves\ncurves.render()\n", default_timeout=30)
+    at3.query_params["asset"] = "fig:main-comparison-step_sizes"
+    at3.query_params["project"] = "toy-paper"
+    at3.run()
+    assert not at3.exception
+    assert at3.multiselect(key="cur_by").value == ["config.noise"] and at3.selectbox(key="cur_norm").value == "ratio"
+    # the Export page points such kinds back to their page
+    at4 = _run("export")
+    at4.sidebar.radio[0].set_value("Curves figure").run()
+    assert any("Curves" in i.value and "page" in i.value for i in at4.info)
+
+
+def test_tradeoff_page(demo_db):
+    from results_tracker import get_asset
+
+    at = _run("tradeoff")
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    assert not at.exception
+    assert at.selectbox(key="to_x").value == "runtime_s" and at.selectbox(key="to_y").value == "psnr"
+    caption = "\n".join(c.value for c in at.caption)
+    assert "hollow: DPIR, PnP-BM3D, TV" in caption  # the demo's two baselines and its reported method
+    at.selectbox(key="to_path").select("dataset").run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert "CBSD68</td>" in md and "Set12</td>" in md  # one point per dataset along the path
+    at.button(key="to_pin_button").click().run()
+    a = get_asset("demo-paper", "fig:main-comparison-tradeoff", db=demo_db)
+    assert a.kind == "tradeoff-figure" and a.options["path"] == "dataset" and a.options["x_metric"] == "runtime_s"
+
+
+def test_comparison_per_instance_section(toy_studies_db):
+    from results_tracker import get_asset
+
+    db, _ = toy_studies_db
+    at = _run("comparison")
+    assert not at.exception
+    assert any(h.value == "Per instance" for h in at.subheader)
+    md = "\n".join(m.value for m in at.markdown)
+    assert "phantom_00" in md and "Instances ranked by the gain of" in md and "candidates for a qualitative figure" in md
+    assert at.selectbox(key="cmp_gain_ours").value == "adaptive-gd"  # last in method order = ours
+    caption = "\n".join(c.value for c in at.caption)
+    assert "Largest gain: **phantom_" in caption
+    at.button(key="cmp_dist_pin_button").click().run()
+    assert not at.exception
+    a = get_asset("toy-paper", "fig:main-comparison-psnr-distribution", db=db)
+    assert a.kind == "distribution-figure" and a.options["methods"] == ["wiener", "gd", "adaptive-gd"]
+
+
+def test_sweep_selection_and_materialize(condition_sweep_db, tmp_path):
+    from results_tracker import get_asset
+    from results_tracker.recipe import Study
+
+    studies = tmp_path / "studies"
+    (studies / "compare.json").write_text(json.dumps({"name": "compare", "kind": "comparison", "project": "pnp", "problem": "deblurring",
+                                                      "methods": [{"method": "adaptive"}, {"method": "pnp", "config": {"beta": 0.9}}]}))
+    at = _run("sweep")
+    assert not at.exception and any(h.value == "Selection" for h in at.subheader)
+    at.multiselect(key="sel_by").set_value(["config.denoiser"]).run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert "drunet</td><td>0.5</td>" in md and "dncnn</td><td>0.5</td>" in md and "interior" in md and "0, 0.5, 1" in md
+    assert not at.warning
+    at.multiselect(key="sel_by").set_value([]).run()
+    at.button(key="sel_pin_button").click().run()
+    assert get_asset("pnp", "tab:ema-beta-beta-selection", db=condition_sweep_db).kind == "selection-table"
+    # a boundary winner is flagged
+    _sidebar_multiselect(at, "Filter on").set_value(["config.beta"]).run()
+    _sidebar_multiselect(at, "config.beta").set_value(["0.5", "1"]).run()
+    assert any("at a grid boundary" in w.value for w in at.warning)
+    _sidebar_multiselect(at, "config.beta").set_value([]).run()
+    # write the winner into the comparison spec: only the arm without beta receives it
+    at.text_input(key="sel_target").input("compare-tuned.json").run()
+    at.button(key="sel_write").click().run()
+    assert not at.exception and any("compare-tuned.json" in s_.value for s_ in at.success)
+    tuned = Study.load(studies / "compare-tuned.json")
+    assert tuned.methods[0].config == {"beta": 0.5} and tuned.methods[1].config == {"beta": 0.9} and "from ema-beta" in tuned.description

@@ -102,6 +102,13 @@ assets that remember the pool; Settings page (metrics, method label / baseline /
 metric); `Method.position` drives row order; `db.add_missing_columns` migrates older databases. Not done: the
 experiment stage field (the migration helper now makes it a small change).
 
+Done 2026-09-03 (step 5): Curves page (`curves.py` reads `diagnostics.json`, lines per arm / condition, normalised,
+individual runs), Trade-off page (two metrics, path over K, hollow baselines), Comparison → Per instance (box plot,
+instance × method table, gain ranking as the instance picker), Sweep → Selection (winner per group, grid, boundary
+flag, LaTeX, pin, `materialize_selection` into a comparison spec). New asset kinds `curves-figure`, `tradeoff-figure`,
+`distribution-figure`, `selection-table`; an asset opens on the page that configures it (`KIND_PAGE`). Not done:
+clicking a comparison cell to drill into its runs (the per-instance table covers the common case).
+
 ## 4. UX and plumbing
 
 - ~~**One selection across pages**~~ (done): project, experiment and filter live in `session_state` and in the
@@ -129,7 +136,7 @@ experiment stage field (the migration helper now makes it a small change).
 | 2 | `Asset` table, Pin-to-paper on all pages, Paper page, `export paper` (§1) | done 2026-09-03 |
 | 3 | Study ↔ asset link, cost estimate, pending-only spec, edit / clone form, running status (§2) | done 2026-09-03 |
 | 4 | Value maps + facets, cross-experiment tables, Settings page (§3, §4) | done 2026-09-03 |
-| 5 | Curves page, two-metric scatter, distribution / instance picker, selection table (§3) | 3 days |
+| 5 | Curves page, two-metric scatter, distribution / instance picker, selection table (§3) | done 2026-09-03 |
 | 6 | Overview via SQL, notes, small UX items (§4) | 1 day |
 
 Steps 1–3 make the GUI the place where the paper is planned and tracked; steps 4–5 retire the
