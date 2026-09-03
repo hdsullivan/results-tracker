@@ -45,6 +45,7 @@ class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
     description: str = ""
+    primary_metric: str = ""  # the metric headlines and default figures use ("" = guess psnr/ssim/first)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -70,6 +71,7 @@ class Method(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     label: str = ""  # display label for tables; falls back to name
     is_baseline: bool = False
+    position: int = 0  # display order in tables and legends (ties: first seen)
 
 
 class Experiment(SQLModel, table=True):
@@ -117,6 +119,7 @@ class Asset(SQLModel, table=True):
     label: str = Field(index=True)  # the LaTeX label: tab:main, fig:beta
     kind: str  # one of export.paper.KINDS
     experiment: str
+    extra_experiments: list[str] = Field(default_factory=list, sa_column=Column(JSON))  # pooled with `experiment`
     filters: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # the `where` filter
     options: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # rendering options for `kind`
     caption: str = ""
@@ -127,3 +130,19 @@ class Asset(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
     exported_at: Optional[datetime] = None
     fingerprint: Optional[str] = None  # records_fingerprint of the runs at the last pin or export
+
+
+class ValueMap(SQLModel, table=True):
+    """A derived, labelled grouping of a field's values for one project: `config.kernel` 0-3 -> "isotropic",
+    4-7 -> "anisotropic", 8-11 -> "motion" becomes the field `derived.kernel_type`, usable wherever a config key
+    is (row/column keys, filters, facets, table headers). Rules: `{"label": ..., "values": [...]}` or
+    `{"label": ..., "range": [lo, hi]}` (inclusive); the first matching rule wins, unmatched values stay None."""
+
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    name: str = Field(index=True)  # the derived field name: derived.<name>
+    field: str  # the source field: config.<key>, method, dataset, ...
+    rules: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    description: str = ""

@@ -376,6 +376,17 @@ def test_pin_paper_page_export_and_reopen(demo_db, tmp_path):
     assert md.index("tab:main") < md.index("fig:lambda-sweep") and "dataset = Set12" in md and md.count("never exported") >= 2
     assert {m.label: m.value for m in at3.metric}["Assets"] == "2"
     assert 'href="export?project=demo-paper&asset=tab%3Amain"' in md  # the default database is not spelled out
+    # bookkeeping through the form: status, position and a rename land in the database and the selection follows the new label
+    [sb for sb in at3.selectbox if sb.label == "Status"][0].select("final").run()
+    [ti for ti in at3.text_input if ti.label == "Label"][0].input("tab:main-renamed").run()
+    [b for b in at3.button if b.label == "Save"][0].click().run()
+    assert not at3.exception, at3.exception
+    from results_tracker import get_asset as _get_asset
+    assert _get_asset("demo-paper", "tab:main-renamed", db=demo_db).status.value == "final" and _get_asset("demo-paper", "tab:main", db=demo_db) is None
+    assert at3.selectbox(key="paper_asset").value == "tab:main-renamed"
+    [ti for ti in at3.text_input if ti.label == "Label"][0].input("tab:main").run()
+    [b for b in at3.button if b.label == "Save"][0].click().run()
+    assert not at3.exception and _get_asset("demo-paper", "tab:main", db=demo_db).status.value == "final"
     # export the paper into a directory: stable names, filter in the provenance, assets become current
     at3.text_input(key="paper_out_dir").input(str(tmp_path / "paper")).run()
     [b for b in at3.button if b.label == "Write to directory"][0].click().run()
@@ -521,3 +532,83 @@ def test_studies_planning_layer(toy_studies_db):
     md = "\n".join(m.value for m in at2.markdown)
     assert "3/45 runs · 1 running" in md and "fig:reg" in md
     assert get_asset(PROJECT, "fig:reg", db=db).experiment == "reg-sweep"
+
+
+def test_settings_page_drives_tables(demo_db):
+    """A value map, a method order and a primary metric set on the Settings page show up on the other pages."""
+    from results_tracker import get_metric_defs, list_methods, list_value_maps
+
+    at = _run("settings")
+    # value map: dataset -> size class, saved for the project
+    at.text_input(key="set_vm_name").input("size").run()
+    at.selectbox(key="set_vm_field").select("dataset").run()
+    at.text_area(key="set_vm_rules").input("small = Set12\nlarge = CBSD68").run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert 'Set12</td><td style="text-align:left">small</td>' in md and 'CBSD68</td><td style="text-align:left">large</td>' in md  # mapping preview
+    at.button(key="set_vm_save").click().run()
+    assert not at.exception and any("derived.size" in s_.value for s_ in at.success)
+    vm = list_value_maps("demo-paper", db=demo_db)[0]
+    assert vm.name == "size" and vm.field == "dataset" and vm.rules[0] == {"label": "small", "values": ["Set12"]}
+    # methods: Ours first; metrics: SSIM to 4 decimals
+    at.number_input(key="set_method_Ours_pos").set_value(-1).run()
+    at.button(key="set_methods_save").click().run()
+    assert next(m for m in list_methods(db=demo_db) if m.name == "Ours").position == -1
+    at.text_input(key="set_metric_ssim_fmt").input(".4f").run()
+    at.button(key="set_metrics_save").click().run()
+    assert get_metric_defs(db=demo_db)["ssim"].fmt == ".4f"
+    at.selectbox(key="set_primary").select("ssim").run()
+    at.button(key="set_project_save").click().run()
+    assert not at.exception
+
+    # Comparison: the derived field is a grouping key, columns follow rule order, rows follow method position
+    at2 = _run("comparison")
+    exp_box = [sb for sb in at2.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    rows_box = [ms for ms in at2.sidebar.multiselect if ms.label == "Rows grouped by"][0]
+    assert "derived.size" in rows_box.options and "derived.size" in _sidebar_multiselect(at2, "Filter on").options
+    rows_box.set_value(["method", "derived.size"]).run()
+    assert not at2.exception
+    md = "\n".join(m.value for m in at2.markdown)
+    assert md.index("<span>small</span>") < md.index("<span>large</span>")  # rule order, not alphabetical
+    table = md[md.index('class="ieee"'):]
+    assert table.index("Ours") < table.index("TV")  # method position -1 puts Ours first
+    assert "0.8500" in md  # SSIM now printed with 4 decimals
+    # Overview headline uses the project's primary metric
+    at3 = _run("overview")
+    md = "\n".join(m.value for m in at3.markdown)
+    assert "best method: Ours" in md and "SSIM" in md.split("Results at a glance")[-1] if "Results at a glance" in md else "SSIM" in md
+
+
+def test_comparison_pools_several_experiments_and_pins_them(demo_db):
+    from results_tracker import get_asset, get_engine
+    from results_tracker.export import paper
+
+    at = _run("comparison")
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    _sidebar_multiselect(at, "Also include experiments").set_value(["lambda-sweep"]).run()
+    assert not at.exception
+    rows_box = [ms for ms in at.sidebar.multiselect if ms.label == "Rows grouped by"][0]
+    assert rows_box.value == ["method", "experiment"] and "experiment" in _sidebar_multiselect(at, "Filter on").options
+    md = "\n".join(m.value for m in at.markdown)
+    assert "<span>main-comparison</span>" in md and "<span>lambda-sweep</span>" in md
+    assert any("main-comparison + lambda-sweep" in c.value for c in at.caption)
+    assert at.query_params["extra"] == ["lambda-sweep"]
+    at.text_input(key="cmp_pin_label").input("tab:pooled").run()
+    at.button(key="cmp_pin_button").click().run()
+    a = get_asset("demo-paper", "tab:pooled", db=demo_db)
+    assert a.extra_experiments == ["lambda-sweep"] and a.options["cols"] == "experiment"
+    rendered = paper.render_paper(get_engine(demo_db), "demo-paper", source="d.db")
+    tex = rendered[0].files[0][1].decode()
+    assert "experiment 'main-comparison + lambda-sweep'" in tex and "\\multicolumn{3}{c}{lambda-sweep}" in tex
+    assert rendered[0].runs == 33  # 18 + 14 completed runs pooled (the reported DPIR row and the failed run excluded)
+    # the Export page restores the pooled experiments when the asset is opened
+    at2 = AppTest.from_string("from results_tracker.ui import export\nexport.render()\n", default_timeout=30)
+    at2.query_params["asset"] = "tab:pooled"
+    at2.query_params["project"] = "demo-paper"
+    at2.run()
+    assert not at2.exception
+    assert _sidebar_multiselect(at2, "Also include experiments").value == ["lambda-sweep"]
+    assert at2.selectbox(key="exp_cols").value == "experiment"
+    assert any("Pooling" in c.value for c in at2.caption)

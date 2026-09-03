@@ -19,7 +19,7 @@ from typing import Any, Iterable, Optional, Sequence, Type, TypeVar, Union
 from sqlmodel import Session, SQLModel, select
 
 from .db import get_engine, session_scope
-from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus
+from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus, ValueMap
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -282,13 +282,79 @@ def define_metric(
         return m
 
 
-def define_method(name: str, *, label: str = "", is_baseline: bool = False, db=None, engine=None) -> Method:
+def define_method(name: str, *, label: str = "", is_baseline: bool = False, position: Optional[int] = None,
+                  db=None, engine=None) -> Method:
+    """Display label (may carry a LaTeX citation), baseline flag, and `position` (table/legend order; None = keep)."""
     engine = _resolve_engine(engine, db)
     with session_scope(engine) as s:
         m = get_or_create(s, Method, name)
         m.label, m.is_baseline = label, is_baseline
+        if position is not None:
+            m.position = int(position)
         s.flush()
         return m
+
+
+def list_methods(db=None, engine=None) -> list[Method]:
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        return sorted(s.exec(select(Method)).all(), key=lambda m: (int(m.position or 0), m.name))
+
+
+def set_project(name: str, *, description: Optional[str] = None, primary_metric: Optional[str] = None, db=None, engine=None) -> Project:
+    """Create or annotate a project; `primary_metric` is what the Overview headline and default figures use."""
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        p = get_or_create(s, Project, name)
+        if description is not None:
+            p.description = description
+        if primary_metric is not None:
+            p.primary_metric = primary_metric
+        s.flush()
+        return p
+
+
+# --------------------------------------------------------------------------- value maps
+
+def define_value_map(project: str, name: str, *, field: str, rules: Sequence[Mapping[str, Any]], description: str = "",
+                     db=None, engine=None) -> ValueMap:
+    """Create or replace the derived field `derived.<name>` of `project` (see valuemaps.py for the rule forms)."""
+    from .valuemaps import derive  # validates the rule shapes by exercising them
+
+    for r in rules:
+        if "label" not in r or not ("values" in r or "range" in r):
+            raise ValueError(f"rule {dict(r)!r}: needs a label and either values or range")
+    derive(rules, 0)
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        proj = get_or_create(s, Project, project)
+        vm = s.exec(select(ValueMap).where(ValueMap.project_id == proj.id, ValueMap.name == name)).first()
+        if vm is None:
+            vm = ValueMap(project_id=proj.id, name=name, field=field)
+            s.add(vm)
+        vm.field, vm.rules, vm.description = field, [dict(r) for r in _to_plain(list(rules))], description
+        s.flush()
+        return vm
+
+
+def list_value_maps(project: Optional[str] = None, db=None, engine=None) -> list[ValueMap]:
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        stmt = select(ValueMap)
+        if project:
+            stmt = stmt.join(Project, ValueMap.project_id == Project.id).where(Project.name == project)
+        return sorted(s.exec(stmt).all(), key=lambda v: v.name)
+
+
+def delete_value_map(project: str, name: str, db=None, engine=None) -> bool:
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        vm = s.exec(select(ValueMap).join(Project, ValueMap.project_id == Project.id)
+                    .where(Project.name == project, ValueMap.name == name)).first()
+        if vm is None:
+            return False
+        s.delete(vm)
+        return True
 
 
 def delete_runs(run_ids: Iterable[int], db=None, engine=None) -> int:
@@ -343,6 +409,7 @@ def save_asset(
     experiment: str,
     options: Optional[dict] = None,
     filters: Optional[dict] = None,
+    extra_experiments: Optional[Sequence[str]] = None,
     caption: Optional[str] = None,
     status: Union[str, AssetStatus, None] = None,
     notes: Optional[str] = None,
@@ -364,6 +431,7 @@ def save_asset(
             a = Asset(project_id=proj.id, label=label, kind=kind, experiment=experiment, position=last + 1)
             s.add(a)
         a.kind, a.experiment = kind, experiment
+        a.extra_experiments = [str(x) for x in (extra_experiments or []) if x != experiment]
         a.options = _to_plain(options or {})
         a.filters = _to_plain(filters or {})
         a.exported_at = None
@@ -400,9 +468,9 @@ def get_asset(project: str, label: str, db=None, engine=None) -> Optional[Asset]
 
 
 def update_asset(project: str, label: str, db=None, engine=None, **fields: Any) -> Asset:
-    """Change bookkeeping fields (status, position, caption, notes, exported_at, fingerprint, label) in place."""
+    """Change bookkeeping fields (status, position, caption, notes, exported_at, fingerprint, new_label) in place."""
     engine = _resolve_engine(engine, db)
-    allowed = {"status", "position", "caption", "notes", "exported_at", "fingerprint", "label"}
+    allowed = {"status", "position", "caption", "notes", "exported_at", "fingerprint", "new_label"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"cannot update {sorted(bad)}; re-pin the asset to change kind, experiment, filters or options")
@@ -412,7 +480,7 @@ def update_asset(project: str, label: str, db=None, engine=None, **fields: Any) 
         if a is None:
             raise LookupError(f"no asset {label!r} in project {project!r}")
         for k, v in fields.items():
-            setattr(a, k, AssetStatus(v) if k == "status" else v)
+            setattr(a, "label" if k == "new_label" else k, AssetStatus(v) if k == "status" else v)
         a.updated_at = datetime.now(timezone.utc)
         s.flush()
         return a
@@ -489,6 +557,11 @@ def run_records(runs: Iterable[Run], db=None, engine=None) -> list[dict[str, Any
         methods = {m.id: m for m in s.exec(select(Method)).all()}
         datasets = {d.id: d for d in s.exec(select(Dataset)).all()}
         experiments = {e.id: e for e in s.exec(select(Experiment)).all()}
+        maps_by_project: dict[int, list[dict[str, Any]]] = {}
+        for vm in s.exec(select(ValueMap)).all():
+            maps_by_project.setdefault(vm.project_id, []).append({"name": vm.name, "field": vm.field, "rules": list(vm.rules or [])})
+    from .valuemaps import apply_value_maps
+
     out = []
     for r in runs:
         m = methods.get(r.method_id)
@@ -505,6 +578,8 @@ def run_records(runs: Iterable[Run], db=None, engine=None) -> list[dict[str, Any
                 "method": m.name if m else None,
                 "method_label": (m.label or m.name) if m else None,
                 "method_is_baseline": bool(m.is_baseline) if m else False,
+                "method_position": int(m.position or 0) if m else 0,
+                "derived": {},
                 "dataset": d.name if d else None,
                 "instance": r.instance,
                 "seed": r.seed,
@@ -519,4 +594,6 @@ def run_records(runs: Iterable[Run], db=None, engine=None) -> list[dict[str, Any
                 "notes": r.notes,
             }
         )
+        if e is not None and maps_by_project.get(e.project_id):
+            apply_value_maps(out[-1:], maps_by_project[e.project_id])
     return out

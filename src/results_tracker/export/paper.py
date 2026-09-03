@@ -102,7 +102,7 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
     label, kind = spec["label"], spec["kind"]
     if kind not in KINDS:
         raise ValueError(f"unknown asset kind {kind!r}; expected one of {KINDS}")
-    experiment = spec.get("experiment") or ""
+    experiment = " + ".join(asset_experiments(spec)) if spec.get("extra_experiments") else (spec.get("experiment") or "")
     filters = dict(spec.get("filters") or {})
     o = dict(spec.get("options") or {})
     caption = spec.get("caption") or None
@@ -117,7 +117,7 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
     slug = label_slug(label)
     hib = {k: v["higher_is_better"] for k, v in defs.items()}
     prov = provenance_note(source, experiment, len(recs_all), extra=f"Filter: {agg.where_cli(filters)}" if filters else "")
-    metric = o.get("metric") or _primary_metric(recs)
+    metric = o.get("metric") or (spec.get("primary_metric") if spec.get("primary_metric") in agg.metric_names(recs) else None) or _primary_metric(recs)
     unit = defs.get(metric, {}).get("unit", "") if metric else ""
     default_ylabel = (f"{metric} ({unit})" if unit else metric) if metric else ""
     width = _width(o.get("width", "double" if kind == "visual-figure" else "single"))
@@ -134,7 +134,9 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
         if kind == "comparison-table":
             rows_key, cols_key = o.get("rows", "method"), o.get("cols", "dataset")
             cols_key = None if cols_key in (None, "none") else cols_key
-            pt = agg.pivot_table(recs, rows_key, cols_key, metrics=o.get("metrics") or None, higher_is_better=hib)
+            pt = agg.pivot_table(recs, rows_key, cols_key, metrics=o.get("metrics") or None, higher_is_better=hib,
+                                 row_order=agg.method_order(recs) if rows_key == "method" else agg.value_order(recs, rows_key),
+                                 col_order=agg.value_order(recs, cols_key) if cols_key else None)
             audit = agg.audit_grid(recs_all, [rows_key] + ([cols_key] if cols_key else []))
             hint = width_hint(pt, o.get("std", "pm"), env, o.get("font"))
             tex = comparison_latex(pt, defs, caption=caption, label=label, env=env, font=o.get("font"), std=o.get("std", "pm"),
@@ -184,7 +186,9 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
                 raise ValueError("a comparison figure needs a `metric` option")
             rows_key, cols_key = o.get("rows", "method"), o.get("cols", "dataset")
             cols_key = None if cols_key in (None, "none") else cols_key
-            pt = agg.pivot_table(recs, rows_key, cols_key, metrics=[metric], higher_is_better=hib)
+            pt = agg.pivot_table(recs, rows_key, cols_key, metrics=[metric], higher_is_better=hib,
+                                 row_order=agg.method_order(recs) if rows_key == "method" else agg.value_order(recs, rows_key),
+                                 col_order=agg.value_order(recs, cols_key) if cols_key else None)
             fig = comparison_figure(pt, metric, ylabel=o.get("ylabel") or default_ylabel, width=width, height=o.get("height"),
                                     emphasize=o.get("emphasize") or (), zero_based=o.get("zero_based", False),
                                     hatch=o.get("hatch", False), caption=o.get("panel_label") or None,
@@ -223,8 +227,16 @@ def _primary_metric(recs: Sequence[Record]) -> Optional[str]:
 def asset_spec(asset) -> dict[str, Any]:
     """The render spec of a models.Asset row."""
     status = asset.status.value if hasattr(asset.status, "value") else str(asset.status)
-    return {"label": asset.label, "kind": asset.kind, "experiment": asset.experiment, "filters": dict(asset.filters or {}),
+    return {"label": asset.label, "kind": asset.kind, "experiment": asset.experiment,
+            "extra_experiments": list(asset.extra_experiments or []), "filters": dict(asset.filters or {}),
             "options": dict(asset.options or {}), "caption": asset.caption, "status": status}
+
+
+def asset_experiments(asset_or_spec) -> list[str]:
+    """The experiment(s) an asset pools: its own first, then `extra_experiments`."""
+    if isinstance(asset_or_spec, Mapping):
+        return [asset_or_spec.get("experiment") or ""] + list(asset_or_spec.get("extra_experiments") or [])
+    return [asset_or_spec.experiment] + list(asset_or_spec.extra_experiments or [])
 
 
 def render_paper(engine, project: str, *, source: str = "", statuses: Sequence[str] = EXPORT_STATUSES,
@@ -232,9 +244,10 @@ def render_paper(engine, project: str, *, source: str = "", statuses: Sequence[s
     """Render every asset of `project` whose status is in `statuses`, in manuscript order.
 
     `records_for(experiment) -> records` overrides how an experiment's runs are loaded (the GUI passes its cache)."""
-    from ..api import get_metric_defs, get_runs, list_assets, run_records
+    from ..api import get_metric_defs, get_runs, list_assets, list_projects, run_records
 
     defs = {k: {"unit": m.unit, "higher_is_better": m.higher_is_better, "fmt": m.fmt} for k, m in get_metric_defs(engine=engine).items()}
+    primary = next((p.primary_metric for p in list_projects(engine=engine) if p.name == project), "") or None
     cache: dict[str, list[Record]] = {}
 
     def load(exp: str) -> list[Record]:
@@ -248,7 +261,8 @@ def render_paper(engine, project: str, *, source: str = "", statuses: Sequence[s
         status = a.status.value if hasattr(a.status, "value") else str(a.status)
         if status not in wanted:
             continue
-        out.append(render_asset(asset_spec(a), load(a.experiment), defs, source=source))
+        records = [r for exp in asset_experiments(a) for r in load(exp)]
+        out.append(render_asset({**asset_spec(a), "primary_metric": primary}, records, defs, source=source))
     return out
 
 

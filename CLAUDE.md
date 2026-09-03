@@ -27,7 +27,8 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 ## Layout
 
 - `src/results_tracker/models.py` — SQLModel schema. Everything is a `Run` (config JSON + metrics JSON).
-- `api.py` — `log_run` and query helpers; `run_records` flattens ORM rows to dicts.
+- `api.py` — `log_run` and query helpers; `run_records` flattens ORM rows to dicts and applies the project's value maps
+  (`derived.<name>` fields, see `valuemaps.py`). `db.add_missing_columns` migrates older databases when a model gains a column.
 - `aggregate.py` — pure-Python stats over record dicts: comparison/pivot tables, sweeps, ablations
   (config diff vs base), grid audit. No ORM, no pandas. Ranking always uses unrounded means.
 - `importer.py` — CSV / JSON bulk import with a one-time column mapping and duplicate skipping.
@@ -37,8 +38,9 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
   from GUI views; `render_asset` renders one from records, `render_paper`/`write_paper` regenerate a project's assets into
   stable file names, `records_fingerprint`/`staleness` tell when the data moved under an export.
   `visual.py` ports `adaptivePnP/.../utils/deblur_figures.py` (zoom inset, metric stamp, error colour bar, GT block).
-- `ui/` — Streamlit pages; `ui/common.py` holds cached loaders, sidebar selectors, the keyed-widget helpers and the
-  `pin_to_paper` expander; `ui/paper.py` lists and exports the pinned assets; `ui/charts.py` (Plotly)
+- `ui/` — Streamlit pages; `ui/common.py` holds cached loaders, sidebar selectors (project, experiment, pooled experiments,
+  filter), the keyed-widget helpers and the `pin_to_paper` expander; `ui/paper.py` lists and exports the pinned assets;
+  `ui/settings.py` edits metrics, methods, value maps and the primary metric; `ui/charts.py` (Plotly)
   and `ui/tables.py` (HTML in the IEEEtran/booktabs look) mirror the export styling on screen.
 - `recipe/` — `knobs.py` (declared parameter spaces), `core.py` (`Method`, `Problem`, `Instance`, `Estimate`, registry),
   `study.py` (`Study` spec with `feeds`, `expand`, `pending_subset`, resumable `run_study` that logs `running` rows and
@@ -49,7 +51,9 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 
 ## Conventions
 
-- Aggregation and export functions take plain record dicts so they are testable without a DB.
+- Aggregation and export functions take plain record dicts so they are testable without a DB. Grouping/filter keys are
+  `method`, `dataset`, ..., `config.<key>` and `derived.<name>`; offer them via `agg.grouping_keys`, order rows with
+  `agg.method_order` and derived columns with `agg.value_order`.
 - Recipe runs put the condition (kernel, noise, ...) in `config` next to the method knobs; `ablation_table` treats
   keys that vary among `base`-tagged runs as conditions and pools over them. Re-running a study is a resume (`has_run`).
 - log_run deduplicates on (experiment, method, dataset, instance, seed, config); the importer passes on_duplicate='allow'.

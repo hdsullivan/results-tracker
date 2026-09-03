@@ -80,13 +80,14 @@ results-tracker metric define runtime_s --lower --unit s --fmt .1f
 ```
 
 Method labels are what appears in tables and legends. Give baselines a citation
-and mark them as baselines so qualitative figures order them before yours:
+and mark them as baselines so qualitative figures order them before yours; a
+`position` fixes the row order of every table (or set both on the Settings page):
 
 ```python
 from results_tracker import define_method
 define_method("pnp_admm", label=r"PnP-ADMM~\cite{venkatakrishnan2013}", is_baseline=True)
 define_method("dpir",     label=r"DPIR~\cite{zhang2021}",              is_baseline=True)
-define_method("adaptive_pnp", label="AdaptivePnP")   # ours: not a baseline
+define_method("adaptive_pnp", label="AdaptivePnP", position=9)   # ours: not a baseline, last row
 ```
 
 Labels containing a backslash are passed to LaTeX untouched; plain labels are
@@ -293,6 +294,17 @@ the full set of options (captions, labels, std style, widths).
   machine, and *Edit* / *Clone* into the form below. If the GUI's environment
   cannot import the repo, `results-tracker recipe export-knobs -i <module> -o
   studies/knobs.json` gives it the declarations it needs to plan.
+- **Settings** — metric direction / unit / format, method labels, baseline
+  flags and **display order**, the project's primary metric, and **value maps**:
+  derived, labelled groupings of a raw field (`config.kernel` 0-3 → isotropic,
+  4-7 → anisotropic, 8-11 → motion becomes `derived.kernel_type`). Derived
+  fields work wherever a config key does: row and column keys, filters, facets,
+  `--rows derived.kernel_type`, `--where derived.kernel_type=motion`; columns
+  follow the rule order.
+- **Pooling experiments.** *Also include experiments* on the Comparison and
+  Export pages unions several experiments of the project (the paper's main table
+  with K across columns from `compare-K2`, `compare-K5`, `compare-K10`); group by
+  `experiment` or the config key that differs. Pinned assets remember the pool.
 - **Pin to paper.** Under every table and figure (Comparison, Sweep, Ablation,
   Visual, Export) a *Pin to paper* expander saves the current view — experiment,
   filter and rendering options — as a paper **asset** with a LaTeX label

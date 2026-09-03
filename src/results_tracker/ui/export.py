@@ -21,7 +21,8 @@ from ..export.paper import KIND_TITLES, KINDS
 from ..export.visual import ZOOM_FRACTION, guess_roles, list_image_files, make_visual
 from .common import (
     active_where, db_path, hib_map, keyed, keyed_multiselect, keyed_radio, keyed_selectbox, load_catalog, load_metric_defs,
-    load_records, pin_to_paper, select_project_experiment, sidebar_db, sidebar_filter, where_cli, where_text,
+    load_records, load_records_union, pin_to_paper, select_extra_experiments, select_project_experiment, sidebar_db, sidebar_filter,
+    where_cli, where_text,
 )
 from .tables import ablation_html, comparison_html, generic_html, sweep_html
 
@@ -127,7 +128,8 @@ def render() -> None:
     project, experiment = select_project_experiment()
     if experiment is None:
         return
-    recs_all = load_records(project, experiment)
+    extra = select_extra_experiments(project, experiment)
+    recs_all = load_records_union(project, [experiment, *extra])
     defs = load_metric_defs()
     if not recs_all:
         st.info("No runs in this experiment.")
@@ -141,7 +143,10 @@ def render() -> None:
     exp_type = recs[0].get("experiment_type") or "comparison"
     metrics_all = agg.metric_names(recs)
     hib = hib_map(defs)
-    prov = provenance_note(db_path(), experiment, len(recs_all), extra=f"Filter: {where_cli()}" if active_where() else "")
+    prov = provenance_note(db_path(), " + ".join([experiment, *extra]), len(recs_all), extra=f"Filter: {where_cli()}" if active_where() else "")
+    if extra:
+        st.caption(f"Pooling **{experiment}** with {', '.join(f'**{e}**' for e in extra)} ({len(recs_all)} runs); "
+                   "use `experiment` or a distinguishing config key as a row or column key.")
     opened = st.session_state.get("opened_asset")
     if opened and opened[1] == experiment:
         st.caption(f"Asset **`{opened[0]}`** opened from the Paper page: the options below are the ones it was pinned with. "
@@ -162,21 +167,25 @@ def render() -> None:
         title = keyed_radio("What to export", TITLES, "exp_kind", KIND_TITLES[PREFERRED.get(exp_type, "comparison-table")])
     kind = KIND_BY_TITLE.get(title)
 
-    keys_present = [k for k in ["method", "dataset", "instance", "seed"] if any(r.get(k) is not None for r in recs)]
-    config_keys = [f"config.{k}" for k in sorted({k for r in recs for k in agg.flatten(r["config"])})]
+    group_keys = agg.grouping_keys(recs)  # experiment (when pooled), method, dataset, ..., config.*, derived.*
     stem = experiment.replace(" ", "_")
+
+    def orders(row_key: str, col_key: Optional[str]) -> dict[str, Any]:
+        return dict(row_order=agg.method_order(recs) if row_key == "method" else agg.value_order(recs, row_key),
+                    col_order=agg.value_order(recs, col_key) if col_key else None)
 
     def pin(options: dict[str, Any], label: Optional[str] = None, caption: Optional[str] = None) -> None:
         assert kind is not None
-        pin_to_paper({kind: options}, records=recs_all, key="exp_pin", suggested_label=label, caption=caption)
+        pin_to_paper({kind: options}, records=recs_all, key="exp_pin", suggested_label=label, caption=caption, extra_experiments=extra)
 
     if kind == "comparison-table":
         c1, c2 = st.columns(2)
         with c1:
-            row_key = keyed_selectbox("Rows", keys_present + config_keys, "exp_rows", "method")
-        col_opts = ["none"] + [k for k in keys_present + config_keys if k != row_key]
+            row_key = keyed_selectbox("Rows", group_keys, "exp_rows", "method")
+        col_opts = ["none"] + [k for k in group_keys if k != row_key]
         with c2:
-            col_key = keyed_selectbox("Column groups", col_opts, "exp_cols", "dataset" if "dataset" in col_opts else "none")
+            col_key = keyed_selectbox("Column groups", col_opts, "exp_cols",
+                                      "experiment" if extra else ("dataset" if "dataset" in col_opts else "none"))
         metrics = keyed_multiselect("Metrics", metrics_all, "exp_metrics", metrics_all)
         underline = keyed(st.checkbox, "Underline second best", "exp_underline", True)
         env, std, font, label, caption = _common_table_opts()
@@ -184,7 +193,7 @@ def render() -> None:
             st.warning("Pick at least one metric.")
             return
         ck = None if col_key == "none" else col_key
-        pt = agg.pivot_table(recs, row_key, ck, metrics=metrics, higher_is_better=hib)
+        pt = agg.pivot_table(recs, row_key, ck, metrics=metrics, higher_is_better=hib, **orders(row_key, ck))
         audit = agg.audit_grid(recs_all, [row_key] + ([ck] if ck else []))
         if audit.missing or audit.failed or audit.uneven or audit.coverage:
             st.warning("Audit: " + audit.summary() + (". Missing cells are rendered as `--`." if audit.missing else "."))
@@ -310,17 +319,18 @@ def render() -> None:
         with c1:
             metric = keyed_selectbox("Metric", metrics_all, "exp_metric", metrics_all[0])
         with c2:
-            row_key = keyed_selectbox("Bars", keys_present + config_keys, "exp_rows", "method")
-        col_opts = ["none"] + [k for k in keys_present + config_keys if k != row_key]
+            row_key = keyed_selectbox("Bars", group_keys, "exp_rows", "method")
+        col_opts = ["none"] + [k for k in group_keys if k != row_key]
         with c3:
-            col_key = keyed_selectbox("x groups", col_opts, "exp_cols", "dataset" if "dataset" in col_opts else "none")
+            col_key = keyed_selectbox("x groups", col_opts, "exp_cols", "experiment" if extra else ("dataset" if "dataset" in col_opts else "none"))
         unit = defs.get(metric, {}).get("unit", "")
         c1, c2, c3 = st.columns(3)
         with c1:
             ylabel = keyed(st.text_input, "y label", "exp_ylabel", f"{metric} ({unit})" if unit else metric)
         with c2:
             width = keyed_selectbox("Width", WIDTHS, "exp_width", "single")
-        pt = agg.pivot_table(recs, row_key, None if col_key == "none" else col_key, metrics=[metric], higher_is_better=hib)
+        pt = agg.pivot_table(recs, row_key, None if col_key == "none" else col_key, metrics=[metric], higher_is_better=hib,
+                             **orders(row_key, None if col_key == "none" else col_key))
         with c3:
             emph = keyed_multiselect("Emphasize (proposed)", [str(r) for r in pt.rows], "exp_emph", [])
         k1, k2, k3 = st.columns(3)

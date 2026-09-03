@@ -57,12 +57,58 @@ def flatten(d: Mapping[str, Any], prefix: str = "", sep: str = ".") -> dict[str,
 
 def get_field(record: Record, key: str) -> Any:
     """'method' -> record['method']; 'config.lambda' -> record['config']['lambda'];
-    'metrics.psnr' -> record['metrics']['psnr']."""
+    'metrics.psnr' -> record['metrics']['psnr']; 'derived.kernel_type' -> record['derived']['kernel_type']
+    (a value map's label, see valuemaps.py)."""
     if key.startswith("config."):
         return flatten(record.get("config", {})).get(key[len("config."):])
     if key.startswith("metrics."):
         return record.get("metrics", {}).get(key[len("metrics."):])
+    if key.startswith("derived."):
+        return (record.get("derived") or {}).get(key[len("derived."):])
     return record.get(key)
+
+
+BASE_FIELDS = ("experiment", "method", "dataset", "instance", "seed")
+
+
+def grouping_keys(records: Iterable[Record], base: Sequence[str] = BASE_FIELDS, varying_only: bool = False) -> list[str]:
+    """Fields a table can group or filter on: base fields that are set (and, for `experiment`, take more than one
+    value), then `config.<key>` for every config key, then `derived.<name>` for every value-map field."""
+    recs = list(records)
+    keys: list[str] = []
+    for k in base:
+        vals = {get_field(r, k) for r in recs} - {None}
+        if vals and (len(vals) > 1 or (k != "experiment" and not varying_only)):
+            keys.append(k)
+    config_keys = sorted({k for r in recs for k in flatten(r.get("config", {}))})
+    derived_keys = sorted({k for r in recs for k in (r.get("derived") or {})})
+    for prefix, names in (("config.", config_keys), ("derived.", derived_keys)):
+        for k in names:
+            if not varying_only or len({get_field(r, prefix + k) for r in recs}) > 1:
+                keys.append(prefix + k)
+    return keys
+
+
+def value_order(records: Iterable[Record], key: str) -> Optional[list[Any]]:
+    """The display order of a key's values when one is declared: rule order for `derived.*` fields, else None
+    (callers then sort naturally)."""
+    if key.startswith("derived."):
+        name = key[len("derived."):]
+        for r in records:
+            order = (r.get("derived_order") or {}).get(name)
+            if order:
+                return list(order)
+    return None
+
+
+def method_order(records: Iterable[Record]) -> list[Any]:
+    """Methods in display order: by `Method.position`, ties in first-seen order (the paper's fixed row order)."""
+    seen: dict[Any, tuple[int, int]] = {}
+    for i, r in enumerate(records):
+        m = r.get("method")
+        if m is not None and m not in seen:
+            seen[m] = (int(r.get("method_position") or 0), i)
+    return sorted(seen, key=seen.__getitem__)
 
 
 def parse_where(items: Iterable[str]) -> dict[str, Any]:

@@ -10,8 +10,8 @@ import streamlit as st
 from .. import aggregate as agg
 from .charts import comparison_bars
 from .tables import comparison_html, flat_html
-from .common import (active_where, fmt_for, hib_map, load_metric_defs, load_records, pin_to_paper, select_project_experiment,
-                     sidebar_db, sidebar_filter, where_text)
+from .common import (active_where, fmt_for, hib_map, load_metric_defs, load_records_union, pin_to_paper, select_extra_experiments,
+                     select_project_experiment, sidebar_db, sidebar_filter, where_text)
 
 BASE_KEYS = ["method", "dataset", "instance", "seed"]
 
@@ -35,7 +35,8 @@ def render() -> None:
     project, experiment = select_project_experiment(prefer="comparison")
     if experiment is None:
         return
-    recs = load_records(project, experiment)
+    extra = select_extra_experiments(project, experiment)
+    recs = load_records_union(project, [experiment, *extra])
     defs = load_metric_defs()
     if not recs:
         st.info("No runs in this experiment.")
@@ -44,15 +45,15 @@ def render() -> None:
     if not recs:
         return
 
-    config_keys = sorted({k for r in recs for k in agg.flatten(r["config"])})
     all_metrics = agg.metric_names(recs)
-    present = [k for k in BASE_KEYS if any(r.get(k) is not None for r in recs)]
-    options = present + [f"config.{k}" for k in config_keys]
+    options = agg.grouping_keys(recs)  # experiment (when pooled), method, dataset, ..., config.*, derived.*
+    title = experiment + (f" + {', '.join(extra)}" if extra else "")
 
     with st.sidebar:
         st.markdown("**Table**")
         n_datasets = len({r.get("dataset") for r in recs if r.get("dataset") is not None})
-        default_keys = [o for o in (["method", "dataset"] if n_datasets > 1 else ["method"]) if o in options] or options[:1]
+        wanted = ["method"] + (["experiment"] if extra else []) + (["dataset"] if n_datasets > 1 and not extra else [])
+        default_keys = [o for o in wanted if o in options] or options[:1]
         group_by = st.multiselect("Rows grouped by", options, default=default_keys,
                                   help="With several datasets the default keeps dataset as a key: pooling over datasets a method was not run on is not a fair comparison.")
         metrics = st.multiselect("Metrics", all_metrics, default=all_metrics)
@@ -68,14 +69,16 @@ def render() -> None:
     ct = agg.comparison_table(pool, group_by=group_by, metrics=metrics, higher_is_better=hib_map(defs))
 
     n_runs = len(pool)
-    st.caption(f"{experiment} · {n_runs} completed runs" + (f" ({n_failed} failed excluded)" if n_failed else "")
+    st.caption(f"{title} · {n_runs} completed runs" + (f" ({n_failed} failed excluded)" if n_failed else "")
                + (f" · filter: {where_text()}" if active_where() else "")
                + " · mean ± std over everything not in the row key · **bold** best, <u>underlined</u> second", unsafe_allow_html=True)
-    for msg in agg.coverage_audit(pool, group_by):
+    for msg in agg.coverage_audit(pool, group_by, hidden=("dataset", "instance") + (("experiment",) if extra else ())):
         st.warning("Rows are pooled over different " + msg)
+    orders = dict(row_order=agg.method_order(pool) if group_by[0] == "method" else agg.value_order(pool, group_by[0]),
+                  col_order=agg.value_order(pool, group_by[1]) if len(group_by) == 2 else None)
     if len(group_by) <= 2:
         pt = agg.pivot_table(pool, group_by[0], group_by[1] if len(group_by) == 2 else None, metrics=metrics,
-                             higher_is_better=hib_map(defs))
+                             higher_is_better=hib_map(defs), **orders)
         st.markdown(comparison_html(pt, defs, show_std=show_std, show_n=show_n,
                                     row_labels=agg.method_labels(pool) if group_by[0] == "method" else None),
                     unsafe_allow_html=True)
@@ -89,7 +92,7 @@ def render() -> None:
     if len(group_by) <= 2:
         pin_to_paper({"comparison-table": {"rows": group_by[0], "cols": group_by[1] if len(group_by) == 2 else None,
                                            "metrics": metrics, "std": "pm" if show_std else "none"}},
-                     records=recs, key="cmp_pin")
+                     records=recs, key="cmp_pin", extra_experiments=extra)
 
     st.subheader("Chart")
     metric = st.selectbox("Metric", metrics, key="chart_metric")
@@ -104,7 +107,7 @@ def render() -> None:
 
         with st.expander("LaTeX (booktabs)"):
             pt = agg.pivot_table(pool, group_by[0], group_by[1] if len(group_by) == 2 else None, metrics=metrics,
-                                 higher_is_better=hib_map(defs))
+                                 higher_is_better=hib_map(defs), **orders)
             tex = comparison_latex(pt, defs, std="pm" if show_std else "none",
                                    row_labels=agg.method_labels(pool) if group_by[0] == "method" else None)
             st.code(tex, language="latex")

@@ -54,6 +54,7 @@ def experiments_rows(cat: dict, recs: list[dict]) -> list[list[Any]]:
 def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
     """One line per experiment: what a reader would want to know first."""
     hib = hib_map(defs)
+    primary_by_project = {p["name"]: p.get("primary_metric") for p in cat["projects"]}
     out = []
     for e in cat["experiments"]:
         rs = agg.completed([r for r in recs if r["experiment"] == e["experiment"]])
@@ -61,7 +62,8 @@ def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
             out.append([e["experiment"], e["type"], "no completed runs", ""])
             continue
         metrics = agg.metric_names(rs)
-        primary = next((m for m in ("psnr", "ssim") if m in metrics), metrics[0] if metrics else None)
+        declared = primary_by_project.get(e["project"])
+        primary = declared if declared in metrics else next((m for m in ("psnr", "ssim") if m in metrics), metrics[0] if metrics else None)
         if primary is None:
             out.append([e["experiment"], e["type"], "no metrics", ""])
             continue

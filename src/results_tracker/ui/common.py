@@ -22,7 +22,7 @@ Where = dict[str, list[Any]]  # field -> accepted values (any of)
 # Selection keys in st.session_state. Plain values, not widget keys: pages render their own widgets
 # from these and write the choice back, so a page can restrict the option list without losing the
 # selection made elsewhere.
-KEY_DB, KEY_PROJECT, KEY_EXPERIMENT, KEY_WHERE = "db", "project_name", "experiment_name", "where"
+KEY_DB, KEY_PROJECT, KEY_EXPERIMENT, KEY_WHERE, KEY_EXTRA = "db", "project_name", "experiment_name", "where", "extra_experiments"
 
 FILTER_BASE_FIELDS = ("method", "dataset", "instance", "seed", "status", "source")
 
@@ -67,13 +67,22 @@ def _load_metric_defs(path: str, mtime: float) -> dict[str, dict[str, Any]]:
 @st.cache_data(show_spinner=False)
 def _load_catalog(path: str, mtime: float) -> dict[str, list[dict[str, Any]]]:
     engine = engine_for(path)
-    projs = {p.id: p.name for p in list_projects(engine=engine)}
+    projects = list_projects(engine=engine)
+    projs = {p.id: p.name for p in projects}
     exps = [
         {"project": projs[e.project_id], "experiment": e.name, "type": e.type.value, "description": e.description,
          "swept_params": list(e.swept_params or [])}
         for e in list_experiments(engine=engine)
     ]
-    return {"projects": [{"name": n} for n in projs.values()], "experiments": exps}
+    return {"projects": [{"name": p.name, "primary_metric": p.primary_metric or ""} for p in projects], "experiments": exps}
+
+
+def load_records_union(project: Optional[str], experiments: Sequence[str]) -> list[Record]:
+    """The runs of several experiments of one project, in the given order (each carries its `experiment`)."""
+    out: list[Record] = []
+    for e in experiments:
+        out.extend(load_records(project, e))
+    return out
 
 
 def load_records(project: Optional[str] = None, experiment: Optional[str] = None) -> list[Record]:
@@ -103,6 +112,9 @@ def _take_query_params() -> None:
         st.session_state[KEY_PROJECT] = qp.get("project")
     if qp.get("experiment"):
         st.session_state[KEY_EXPERIMENT] = qp.get("experiment")
+    extra = qp.get_all("extra")
+    if extra:
+        st.session_state[KEY_EXTRA] = list(extra)
     items = qp.get_all("where")
     if items:
         try:
@@ -132,8 +144,9 @@ def open_asset(label: str, project: Optional[str] = None) -> bool:
     ss = st.session_state
     ss[KEY_PROJECT], ss[KEY_EXPERIMENT] = project, a.experiment
     ss[KEY_WHERE] = {k: (list(v) if isinstance(v, (list, tuple)) else [v]) for k, v in (a.filters or {}).items()}
-    for k in [k for k in ss if k == "where_fields" or str(k).startswith("where_value_")]:
-        del ss[k]  # the filter widgets reseed from KEY_WHERE
+    ss[KEY_EXTRA] = list(a.extra_experiments or [])
+    for k in [k for k in ss if k in ("where_fields", "extra_widget") or str(k).startswith("where_value_")]:
+        del ss[k]  # the filter and pooling widgets reseed from the stored values
     ss["_prefill"] = prefill_from_asset(a)
     ss["opened_asset"] = (a.label, a.experiment)
     return True
@@ -148,6 +161,7 @@ def _sync_query_params() -> None:
         "project": st.session_state.get(KEY_PROJECT),
         "experiment": st.session_state.get(KEY_EXPERIMENT),
         "where": where_items(st.session_state.get(KEY_WHERE, {})) or None,
+        "extra": list(st.session_state.get(KEY_EXTRA) or []) or None,
     }
     for k, v in wanted.items():
         current = qp.get_all(k)
@@ -230,6 +244,22 @@ def select_project_experiment(
         return project, experiment
 
 
+def select_extra_experiments(project: Optional[str], experiment: Optional[str]) -> list[str]:
+    """Sidebar multiselect of the project's other experiments to pool with the selected one (Comparison, Export).
+    The paper's main table often spans several studies (compare-K2, compare-K5, ...); group the pooled runs by
+    `experiment` or by the config key that tells them apart. Kept across pages and in the URL (`extra=`)."""
+    if project is None or experiment is None:
+        return []
+    others = [e["experiment"] for e in load_catalog()["experiments"] if e["project"] == project and e["experiment"] != experiment]
+    with st.sidebar:
+        extra = keyed_multiselect("Also include experiments", others, "extra_widget", list(st.session_state.get(KEY_EXTRA) or []),
+                                  help="Pool these experiments' runs with the selected one. Group by `experiment` (or the config "
+                                       "key that differs between them) so their cells stay apart.")
+    st.session_state[KEY_EXTRA] = list(extra)
+    _sync_query_params()
+    return list(extra)
+
+
 # --------------------------------------------------------------------------- sidebar: where filter
 
 _fmt_value = agg.fmt_value
@@ -245,11 +275,8 @@ def _distinct(records: Iterable[Record], field: str) -> list[Any]:
 
 
 def filter_fields(records: list[Record]) -> list[str]:
-    """Fields worth filtering on: base fields and config keys that take more than one value here."""
-    fields = [f for f in FILTER_BASE_FIELDS if len(_distinct(records, f)) > 1]
-    config_keys = sorted({k for r in records for k in agg.flatten(r.get("config", {}))})
-    fields += [f"config.{k}" for k in config_keys if len(_distinct(records, f"config.{k}")) > 1]
-    return fields
+    """Fields worth filtering on: base fields, config keys and derived (value-map) fields that take more than one value here."""
+    return agg.grouping_keys(records, base=("experiment",) + FILTER_BASE_FIELDS, varying_only=True)
 
 
 def _take_seed(key: str, seed: Any) -> tuple[Any, bool]:
@@ -361,7 +388,8 @@ def where_cli() -> str:
 # --------------------------------------------------------------------------- pin to paper
 
 def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], key: str,
-                 suggested_label: Optional[str] = None, caption: Optional[str] = None) -> None:
+                 suggested_label: Optional[str] = None, caption: Optional[str] = None,
+                 extra_experiments: Sequence[str] = ()) -> None:
     """An expander that saves the current view as a paper asset (models.Asset) of the selected project.
 
     `choices` maps asset kind -> rendering options for that kind (one entry, or several to pick from). The
@@ -393,13 +421,14 @@ def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], k
             caption = keyed(st.text_area, "Caption in the manuscript (blank = auto-generated)", f"{key}_caption",
                             existing.caption if existing else "", height=70)
         where = active_where()
-        st.caption(f"Renders **{experiment}**" + (f" with filter {where_text(where)}" if where else "") + f" as {KIND_TITLES[kind]}"
+        st.caption(f"Renders **{experiment}**" + (f" + {', '.join(extra_experiments)}" if extra_experiments else "")
+                   + (f" with filter {where_text(where)}" if where else "") + f" as {KIND_TITLES[kind]}"
                    + (f". `{label}` exists ({existing.kind} of {existing.experiment}); pinning replaces what it renders." if existing else "."))
         with st.expander("Options that will be saved"):
             st.json(choices[kind])
         if st.button("Pin", key=f"{key}_button", disabled=not label, type="primary"):
             save_asset(project, label, kind=kind, experiment=experiment, options=choices[kind], filters=where,
-                       caption=caption if caption is not None else None, status=status,
+                       extra_experiments=list(extra_experiments), caption=caption if caption is not None else None, status=status,
                        fingerprint=records_fingerprint(records), engine=engine)
             ss["opened_asset"] = (label, experiment)
             st.success(f"Pinned `{label}`. It is listed on the Paper page; `results-tracker export paper -p {project}` renders it.")

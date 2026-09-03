@@ -14,9 +14,9 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..api import delete_asset, list_assets, update_asset
-from ..export.paper import EXPORT_STATUSES, KIND_TITLES, mark_exported, render_paper, write_paper, zip_paper
+from ..export.paper import EXPORT_STATUSES, KIND_TITLES, asset_experiments, mark_exported, render_paper, write_paper, zip_paper
 from ..export.paper import staleness as asset_staleness
-from .common import db_path, engine_for, keyed, keyed_selectbox, load_records, page_url, select_project, sidebar_db
+from .common import db_path, engine_for, keyed, keyed_selectbox, load_records, load_records_union, page_url, select_project, sidebar_db
 from .studies import default_studies_dir, load_planned, studies_feeding
 from .tables import generic_html
 
@@ -44,7 +44,7 @@ def render() -> None:
                 "everything pinned here is what `results-tracker export paper` regenerates.")
         return
 
-    states = {a.label: asset_staleness(a, load_records(project, a.experiment)) for a in assets}
+    states = {a.label: asset_staleness(a, load_records_union(project, asset_experiments(a))) for a in assets}
     studies_dir = default_studies_dir(db_path())
     planned = load_planned(studies_dir) if studies_dir.is_dir() else []
     readiness = {a.label: _readiness(planned, project, a) for a in assets}
@@ -59,7 +59,7 @@ def render() -> None:
     rows = []
     for a in assets:
         state, detail = states[a.label]
-        rows.append([a.position, a.label, KIND_TITLES.get(a.kind, a.kind), a.status.value, a.experiment,
+        rows.append([a.position, a.label, KIND_TITLES.get(a.kind, a.kind), a.status.value, " + ".join(asset_experiments(a)),
                      agg.where_text(a.filters or {}) or "—", readiness[a.label], state, detail, _fmt_ts(a.exported_at) if a.exported_at else "—"])
     st.markdown(generic_html(["#", "Label", "Kind", "Status", "Experiment", "Filter", "Data", "State", "Detail", "Exported"], rows,
                              caption=f"Paper assets of {project} in manuscript order. Data: completed / planned runs of the studies that "
@@ -91,8 +91,8 @@ def _readiness(planned, project: str, a) -> str:
 
 
 def _asset_detail(a, project: str, engine) -> None:
-    state, detail = asset_staleness(a, load_records(project, a.experiment))
-    st.caption(f"{KIND_TITLES.get(a.kind, a.kind)} of **{a.experiment}**"
+    state, detail = asset_staleness(a, load_records_union(project, asset_experiments(a)))
+    st.caption(f"{KIND_TITLES.get(a.kind, a.kind)} of **{' + '.join(asset_experiments(a))}**"
                + (f" with filter {agg.where_text(a.filters)}" if a.filters else "") + f" · {state}: {detail}")
     href = page_url("export", project=project, asset=a.label)
     st.markdown(f'<a href="{href}" target="_self">Open in Export</a> — restores this asset\'s experiment, filter and options; '
@@ -107,9 +107,9 @@ def _asset_detail(a, project: str, engine) -> None:
         if st.form_submit_button("Save"):
             fields = {"status": status, "position": position, "caption": caption, "notes": notes}
             if new_label.strip() and new_label.strip() != a.label:
-                fields["label"] = new_label.strip()
+                fields["new_label"] = new_label.strip()
             update_asset(project, a.label, engine=engine, **fields)
-            st.session_state["paper_asset"] = fields.get("label", a.label)
+            st.session_state.setdefault("_prefill", {})["paper_asset"] = fields.get("new_label", a.label)  # drawn widget: set on next run
             st.rerun()
     with st.expander("Rendering options"):
         st.json({"kind": a.kind, "experiment": a.experiment, "filters": a.filters, "options": a.options})

@@ -206,6 +206,83 @@ def metric_list(db: Optional[Path] = DbOpt):
     console.print(t)
 
 
+method_app = typer.Typer(help="Method display: label (may carry a citation), baseline flag, table order.")
+app.add_typer(method_app, name="method")
+
+
+@method_app.command("define")
+def method_define(
+    name: str,
+    label: Optional[str] = typer.Option(None, "--label", help=r"Display label, e.g. 'DPIR~\cite{zhang2021}'."),
+    baseline: Optional[bool] = typer.Option(None, "--baseline/--no-baseline", help="Baselines come first in visual figures."),
+    position: Optional[int] = typer.Option(None, "--position", help="Row/legend order in tables and figures."),
+    db: Optional[Path] = DbOpt,
+):
+    from .api import define_method, list_methods
+
+    current = next((m for m in list_methods(db=db) if m.name == name), None)
+    define_method(name, label=label if label is not None else (current.label if current else ""),
+                  is_baseline=baseline if baseline is not None else (current.is_baseline if current else False),
+                  position=position, db=db)
+    console.print(f"[green]method {name}[/] defined")
+
+
+@method_app.command("list")
+def method_list(db: Optional[Path] = DbOpt):
+    from .api import list_methods
+
+    t = Table("#", "method", "label", "baseline")
+    for m in list_methods(db=db):
+        t.add_row(str(m.position), m.name, m.label or "—", "yes" if m.is_baseline else "")
+    console.print(t)
+
+
+valuemap_app = typer.Typer(help="Value maps: derived, labelled groupings of a field's values (kernel index -> kernel type).", no_args_is_help=True)
+app.add_typer(valuemap_app, name="valuemap")
+
+
+@valuemap_app.command("set")
+def valuemap_set(
+    name: str = typer.Argument(..., help="Derived field name; used as derived.<name>."),
+    project: str = typer.Option(..., "--project", "-p"),
+    field: str = typer.Option(..., "--field", help="Source field, e.g. config.kernel or dataset."),
+    rule: list[str] = typer.Option(..., "--rule", help="`label = v1, v2` or `label = lo-hi` (repeatable; first match wins)."),
+    description: str = typer.Option("", "--description"),
+    db: Optional[Path] = DbOpt,
+):
+    """Define (or replace) a value map, e.g. --rule 'isotropic = 0-3' --rule 'anisotropic = 4-7' --rule 'motion = 8-11'."""
+    from .api import define_value_map
+    from .valuemaps import parse_rules
+
+    try:
+        rules = parse_rules("\n".join(rule))
+        define_value_map(project, name, field=field, rules=rules, description=description, db=db)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    console.print(f"[green]derived.{name}[/] = {field} with {len(rules)} rule(s); use it as a row, column or filter key")
+
+
+@valuemap_app.command("list")
+def valuemap_list(project: Optional[str] = typer.Option(None, "--project", "-p"), db: Optional[Path] = DbOpt):
+    from .api import list_value_maps
+    from .valuemaps import format_rules
+
+    t = Table("derived field", "source", "rules", "description")
+    for vm in list_value_maps(project, db=db):
+        t.add_row(f"derived.{vm.name}", vm.field, format_rules(vm.rules), vm.description)
+    console.print(t)
+
+
+@valuemap_app.command("rm")
+def valuemap_rm(name: str, project: str = typer.Option(..., "--project", "-p"), db: Optional[Path] = DbOpt):
+    from .api import delete_value_map
+
+    if not delete_value_map(project, name, db=db):
+        console.print(f"[red]no value map {name!r} in {project!r}[/]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]removed[/] derived.{name}")
+
+
 @app.command()
 def table(
     experiment: str = typer.Option(..., "--experiment", "-e"),
