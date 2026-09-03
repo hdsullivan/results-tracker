@@ -171,6 +171,20 @@ def test_visual_page(demo_db):
     # grayscale + labels toggles re-render
     [cb for cb in at.checkbox if cb.label == "Grayscale preview"][0].check().run()
     assert not at.exception
+    # two comparisons stacked: independent method selections, two numbered figures and metric tables
+    at = _run("visual")
+    [ni for ni in at.sidebar.number_input if ni.label.startswith("Comparisons stacked")][0].set_value(2).run()
+    assert not at.exception and not at.error
+    methods = [ms for ms in at.multiselect if ms.label.startswith("Methods")]
+    assert len(methods) == 2
+    methods[1].set_value(["PnP-BM3D", "Ours"]).run()
+    assert not at.exception
+    body = "\n".join(m.value for m in at.markdown)
+    assert "Left to right: Reference, Measurement, TV [1], PnP-BM3D [2], Ours" in body  # comparison 1 unchanged
+    assert "Left to right: Reference, Measurement, PnP-BM3D [2], Ours" in body  # comparison 2
+    assert "Fig. 1" in body and "Fig. 2" in body
+    assert [h.value for h in at.header] == ["Comparison 1", "Comparison 2"]
+    assert len([sh for sh in at.subheader if sh.value == "Panel metrics"]) == 2
 
 
 def test_export_page_visual_and_bundle(demo_db):

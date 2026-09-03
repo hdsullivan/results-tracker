@@ -1,0 +1,53 @@
+{
+  "experiment": "smoke-deblur",
+  "dataset": "CBSD68",
+  "instance": "image_001",
+  "seed": 0,
+  "image": "reconstruction.png",
+  "reference": "/Users/haleysullivan/Documents/Research/adaptivePnP/smoke_artifacts/smoke-deblur/dpir/dpir-77857f94/kernel=3_noise=0.01_size=64/seed0/image_001/ground_truth.png",
+  "measurement": "/Users/haleysullivan/Documents/Research/adaptivePnP/smoke_artifacts/smoke-deblur/dpir/dpir-77857f94/kernel=3_noise=0.01_size=64/seed0/image_001/measurement.png",
+  "crop_box": [
+    144,
+    144,
+    96,
+    96
+  ],
+  "display_range": [
+    0.0,
+    1.0
+  ],
+  "error_vmax": null,
+  "mode": "image",
+  "kernel": null,
+  "rows": [],
+  "panels": [
+    {
+      "title": "Reference",
+      "path": "/Users/haleysullivan/Documents/Research/adaptivePnP/smoke_artifacts/smoke-deblur/dpir/dpir-77857f94/kernel=3_noise=0.01_size=64/seed0/image_001/ground_truth.png",
+      "kind": "reference"
+    },
+    {
+      "title": "Measurement",
+      "path": "/Users/haleysullivan/Documents/Research/adaptivePnP/smoke_artifacts/smoke-deblur/dpir/dpir-77857f94/kernel=3_noise=0.01_size=64/seed0/image_001/measurement.png",
+      "kind": "measurement"
+    },
+    {
+      "title": "DPIR",
+      "path": "/Users/haleysullivan/Documents/Research/adaptivePnP/smoke_artifacts/smoke-deblur/dpir/dpir-77857f94/kernel=3_noise=0.01_size=64/seed0/image_001/reconstruction.png",
+      "kind": "method",
+      "row": "",
+      "run_id": 6,
+      "seed": 0,
+      "instance": "image_001"
+    },
+    {
+      "title": "AdaptivePnP-PGM",
+      "path": "/Users/haleysullivan/Documents/Research/adaptivePnP/smoke_artifacts/smoke-deblur/adaptivePnP_pgm/adaptivePnP_pgm-4fe2f3ea/kernel=3_noise=0.01_size=64/seed0/image_001/reconstruction.png",
+      "kind": "method",
+      "row": "",
+      "run_id": 2,
+      "seed": 0,
+      "instance": "image_001"
+    }
+  ]
+}
