@@ -15,8 +15,11 @@ from .study import (
     Job,
     Report,
     Study,
+    StudyObserver,
     Sweep,
+    arm_changes,
     condition_grid,
+    default_diagnostics_dir,
     expand,
     load_study_classes,
     run_study,
@@ -26,6 +29,6 @@ from .study import (
 __all__ = [
     "Knob", "KnobSpace", "KNOB_KINDS",
     "Instance", "Estimate", "Method", "Problem", "Registry", "registry", "import_ref",
-    "Study", "Arm", "Sweep", "Ablation", "Job", "Report", "STUDY_KINDS",
+    "Study", "Arm", "Sweep", "Ablation", "Job", "Report", "StudyObserver", "STUDY_KINDS", "arm_changes", "default_diagnostics_dir",
     "validate_study", "condition_grid", "expand", "load_study_classes", "run_study",
 ]

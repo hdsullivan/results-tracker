@@ -42,10 +42,25 @@ class Sweep:
 
 @dataclass
 class Ablation:
-    """`base`: knob overrides of the full model (on top of each arm's config); `arms`: one changed knob each."""
+    """`base`: knob overrides of the full model (on top of each arm's config); `arms`: what each variant changes.
+
+    An arm is either `{knob: value}` (exactly one knob) or `{"label": "...", "set": {knob: value, ...}}` for a
+    variant that only makes sense as a joint change (a floor arm together with its tolerance)."""
 
     base: dict[str, Any] = field(default_factory=dict)
     arms: list[dict[str, Any]] = field(default_factory=list)
+
+
+def arm_changes(arm: Mapping[str, Any]) -> tuple[Optional[str], dict[str, Any]]:
+    """(label or None, {knob: value}) for either arm form; raises ValueError for anything else."""
+    if "set" in arm:
+        extra = set(arm) - {"set", "label"}
+        if extra or not isinstance(arm["set"], Mapping) or not arm["set"]:
+            raise ValueError(f"ablation arm {dict(arm)!r}: use {{'label': ..., 'set': {{knob: value, ...}}}}")
+        return arm.get("label"), dict(arm["set"])
+    if len(arm) != 1:
+        raise ValueError(f"ablation arm {dict(arm)!r} must change exactly one knob (or use the 'set' form)")
+    return None, dict(arm)
 
 
 @dataclass
@@ -151,13 +166,12 @@ def validate_study(study: Study, problem_cls: type[Problem], methods: Mapping[st
         if study.ablation is not None:
             base = space.resolve({**arm.config, **study.ablation.base})
             for changed in study.ablation.arms:
-                if len(changed) != 1:
-                    raise ValueError(f"ablation arm {changed!r} must change exactly one knob")
-                (knob, value), = changed.items()
-                if knob not in space:
-                    raise ValueError(f"ablation knob {knob!r} is not a knob of {cls.key!r} ({space.names})")
-                if space[knob].validate(value) == base[knob]:
-                    raise ValueError(f"ablation arm {changed!r} does not differ from the base ({knob}={base[knob]!r})")
+                _, changes = arm_changes(changed)
+                for knob in changes:
+                    if knob not in space:
+                        raise ValueError(f"ablation knob {knob!r} is not a knob of {cls.key!r} ({space.names})")
+                if all(space[k].validate(v) == base[k] for k, v in changes.items()):
+                    raise ValueError(f"ablation arm {changed!r} does not differ from the base")
     if study.kind == "sweep" and study.sweep is None:
         raise ValueError("a sweep study needs `sweep`")
     if study.kind == "ablation" and study.ablation is None:
@@ -192,9 +206,10 @@ def expand(study: Study, problem_cls: type[Problem], methods: Mapping[str, type[
                     base = space.resolve({**arm.config, **study.ablation.base})
                     jobs.append(Job(cls.key, base, condition, seed, ("base",), "full model"))
                     for changed in study.ablation.arms:
-                        (knob, value), = changed.items()
-                        cfg = space.resolve({**base, knob: value})
-                        jobs.append(Job(cls.key, cfg, condition, seed, (), f"{knob}={_fmt(cfg[knob])}"))
+                        label, changes = arm_changes(changed)
+                        cfg = space.resolve({**base, **changes})
+                        label = label or ", ".join(f"{k}={_fmt(cfg[k])}" for k in changes)
+                        jobs.append(Job(cls.key, cfg, condition, seed, (), label))
                 else:
                     jobs.append(Job(cls.key, space.resolve(arm.config), condition, seed, (), cls.key))
     return jobs
@@ -265,6 +280,28 @@ def load_study_classes(
     return problem_cls, methods
 
 
+class StudyObserver:
+    """Callbacks a caller can attach to `run_study`; override what you need.
+
+    `on_run` fires after each instance is logged (whether it completed or failed); `on_study_done` once
+    at the end. This is how a repo streams its own on-disk result files while the study runs."""
+
+    def on_run(self, job: Job, instance: Instance, estimate: Estimate, metrics: Mapping[str, Any],
+               run_dir: Optional[Path]) -> None:
+        pass
+
+    def on_study_done(self, report: Report) -> None:
+        pass
+
+
+def default_diagnostics_dir(engine) -> Optional[Path]:
+    """`<database>.diagnostics/` next to a file database; None for an in-memory one."""
+    database = getattr(getattr(engine, "url", None), "database", None)
+    if not database or database == ":memory:":
+        return None
+    return Path(database).with_suffix(".diagnostics")
+
+
 def run_study(
     study: Study,
     *,
@@ -273,6 +310,10 @@ def run_study(
     registry: Optional[Registry] = None,
     resume: bool = True,
     artifacts_dir: Optional[str] = None,
+    diagnostics_dir: Optional[str] = None,
+    problem_options: Optional[Mapping[str, Any]] = None,
+    provenance: Optional[Mapping[str, Any]] = None,
+    observers: Sequence[StudyObserver] = (),
     log: Optional[Callable[[str], None]] = print,
 ) -> Report:
     """Run every job of `study` on every instance and log one run per instance.
@@ -280,12 +321,20 @@ def run_study(
     A method that raises, returns a non-finite estimate, or whose metrics cannot be computed yields a
     `failed` run with the message in `notes`; the grid keeps going. With `resume` (default) a setting
     already logged as completed is skipped without being recomputed, so an interrupted study is simply
-    started again. `artifacts_dir` overrides the study's own."""
+    started again.
+
+    `artifacts_dir` overrides the study's own and receives images plus `diagnostics.json` per run. Without
+    one, non-scalar diagnostics (curves) still survive: they go to `diagnostics_dir`, by default
+    `<database>.diagnostics/`, so a run's trajectory is never lost for want of an artifacts folder.
+    `problem_options` are passed to the problem's constructor (device, data root); they describe the
+    machine, not the experiment, so they stay out of the run config. `provenance` (e.g. a dependency's
+    commit) is appended to every run's notes. `observers` receive each logged run."""
     problem_cls, method_classes = load_study_classes(study, registry)
-    problem = problem_cls()
+    problem = problem_cls(**dict(problem_options or {}))
     jobs = expand(study, problem_cls, method_classes)
     engine = _resolve_engine(engine, db)
     _define(problem, method_classes.values(), engine)
+    provenance_note = " ".join(f"{k}={v}" for k, v in (provenance or {}).items())
 
     methods: dict[str, Method] = {cls.key: cls() for cls in method_classes.values()}
     for m in methods.values():
@@ -293,6 +342,9 @@ def run_study(
             raise ValueError(f"method {m.key!r} does not support problem {problem.key!r}")
     dataset = problem.dataset_name(study.split)
     root = Path(artifacts_dir or study.artifacts_dir) if (artifacts_dir or study.artifacts_dir) else None
+    with_images = root is not None
+    if root is None:
+        root = Path(diagnostics_dir) if diagnostics_dir else default_diagnostics_dir(engine)
     states: dict[tuple[str, Any], Any] = {}
     instances: dict[tuple[str, int], list[Instance]] = {}
     report = Report(study.name)
@@ -336,21 +388,26 @@ def run_study(
                 arm_dir = f"{re.sub(r'[^A-Za-z0-9_.=+-]+', '-', job.arm)}-{_config_hash(job.config)}"
                 run_dir = root / study.name / job.method / arm_dir / _slug(job.condition) / f"seed{job.seed}" / inst.name
                 run_dir.mkdir(parents=True, exist_ok=True)
-                if est.ok:
+                if est.ok and with_images:
                     problem.save_artifacts(run_dir, inst, est)
                 (run_dir / "diagnostics.json").write_text(json.dumps(
                     {"method": job.method, "arm": job.arm, "config": _to_plain(full_config), "ok": est.ok,
                      "message": est.message, **rest}, indent=2, default=str))
                 artifacts = str(run_dir)
 
+            notes = "; ".join(part for part in (est.message[:400], provenance_note) if part)
             log_run(study.name, project=study.project, experiment_type=study.kind, method=job.method, dataset=dataset,
                     instance=inst.name, seed=job.seed, config=full_config, metrics=metrics,
-                    status="completed" if est.ok else "failed", notes=est.message[:500],
+                    status="completed" if est.ok else "failed", notes=notes,
                     artifacts_dir=artifacts, tags=[*study.tags, *job.tags], engine=engine)
             report.logged += 1
             report.failed += not est.ok
+            for observer in observers:
+                observer.on_run(job, inst, est, metrics, Path(artifacts) if artifacts else None)
             verdict = "FAILED " + est.message if not est.ok else " ".join(
                 f"{k}={v:.3f}" for k, v in metrics.items() if isinstance(v, float) and k != "runtime_s")
             say(f"  {study.name} {job.method} [{job.arm}] {_slug(job.condition)} seed={job.seed} {inst.name}: {verdict}")
+    for observer in observers:
+        observer.on_study_done(report)
     say(str(report))
     return report

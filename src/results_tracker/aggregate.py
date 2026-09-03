@@ -467,6 +467,24 @@ def best_sweep_value(series: Sequence[tuple[Any, Stat]], higher_is_better: bool 
     return pick(series, key=lambda t: t[1].mean)[0]
 
 
+def select_best(
+    records: Iterable[Record],
+    param: str,
+    metric: str,
+    group_by: Sequence[str] = (),
+    higher_is_better: bool = True,
+) -> dict[GroupKey, Any]:
+    """The swept value with the best mean metric, per group: {group: value}.
+
+    The tuning rule a fixed-step baseline needs ("the rho that maximises mean PSNR pooled over kernels and
+    noise levels, per scale factor") is `select_best(recs, "rho", "psnr", group_by=["config.scale"])`."""
+    return {
+        g: agg_best
+        for g, series in sweep_series(records, param, metric, group_by=group_by).items()
+        if (agg_best := best_sweep_value(series, higher_is_better)) is not None
+    }
+
+
 def _sort_key(x: Any) -> tuple:
     return (isinstance(x, str), x)
 

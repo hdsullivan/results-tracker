@@ -125,7 +125,7 @@ registry.method(SnapPnP); registry.problem(Deblurring)   # or use them as decora
 |---|---|---|
 | `comparison` | — | one job per method arm |
 | `sweep` | `sweep: {knob, values}` | one job per arm × value |
-| `ablation` | `ablation: {base, arms}` | the full model (tagged `base`) plus one job per arm; each arm changes **exactly one** knob and must differ from the base |
+| `ablation` | `ablation: {base, arms}` | the full model (tagged `base`) plus one job per arm; an arm is `{knob: value}` (exactly one knob) or `{"label": ..., "set": {knob: value, ...}}` for a joint change, and must differ from the base |
 
 Every job runs on every instance of every condition and seed; unset knobs and conditions take their
 defaults. `results-tracker recipe validate spec.json` lists the jobs without running anything.
@@ -137,6 +137,14 @@ Run it, in the repo's own environment:
 ```bash
 results-tracker recipe run studies/deblurring-ema-beta.json --db paper/results.db
 ```
+
+`run_study` also takes `problem_options` (passed to the problem's constructor: device, data root — machine
+facts that stay out of the run config), `provenance` (a dict appended to every run's notes, e.g. a
+dependency's commit), and `observers` (`StudyObserver` subclasses whose `on_run` fires after every logged
+run, the hook a repo uses to stream its own result files). Without an `artifacts_dir`, curves and other
+non-scalar diagnostics still land in `<database>.diagnostics/<study>/...` so no trajectory is lost.
+`aggregate.select_best(records, "rho", "psnr", group_by=["config.scale"])` is the tuning rule: the swept
+value with the best mean metric, per group.
 
 Runs are logged as `experiment = study name`, `method = key`, `dataset = problem.dataset_name(split)`,
 `instance = Instance.name`, `seed`, `config = condition ∪ knobs`. Re-running is a resume: settings

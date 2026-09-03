@@ -8,6 +8,9 @@ from results_tracker import get_runs, has_run, run_records
 from results_tracker.cli import app
 from results_tracker.recipe import (
     Ablation,
+    StudyObserver,
+    arm_changes,
+    default_diagnostics_dir,
     Arm,
     Estimate,
     Instance,
@@ -272,3 +275,79 @@ def test_recipe_cli(tmp_path):
     assert "Ours" in r.output and r.output.count("\\multicolumn") == 2
     r = runner.invoke(app, ["export", "ablation-table", "-e", "ablation", "-p", PROJECT, "--db", db])
     assert r.exit_code == 0 and "w/o adaptive" in r.output
+
+
+class Recorder(StudyObserver):
+    def __init__(self):
+        self.runs, self.done = [], None
+
+    def on_run(self, job, instance, estimate, metrics, run_dir):
+        self.runs.append((job.method, job.arm, instance.name, estimate.ok, run_dir))
+
+    def on_study_done(self, report):
+        self.done = report
+
+
+class Configurable(ToyDeblurring):
+    key = "toy-configurable"
+
+    def __init__(self, device="cpu", tag="none"):
+        self.device, self.tag = device, tag
+
+
+def test_observers_diagnostics_dir_problem_options_and_provenance(tmp_path, engine):
+    reg = Registry()
+    reg.problem(Configurable)
+    reg.method(AdaptiveGD)
+    study = Study("obs", "comparison", "toy-configurable", [Arm("adaptive-gd", {"iters": 3})], project="p", n_instances=2)
+    rec = Recorder()
+    # no artifacts_dir: curves must still be persisted next to the database
+    report = run_study(study, engine=engine, registry=reg, observers=[rec], log=None,
+                       problem_options={"device": "cpu", "tag": "x"}, provenance={"oriel": "abc123", "dirty": 0})
+    assert report.logged == 2 and rec.done is report
+    assert [(m, a, n, ok) for m, a, n, ok, _ in rec.runs] == [("adaptive-gd", "adaptive-gd", "phantom_00", True),
+                                                             ("adaptive-gd", "adaptive-gd", "phantom_01", True)]
+    run_dir = rec.runs[0][4]
+    diag_root = default_diagnostics_dir(engine)
+    assert diag_root is not None and run_dir.is_relative_to(diag_root)
+    assert sorted(p.name for p in run_dir.iterdir()) == ["diagnostics.json"]  # curves, but no images
+    assert len(json.loads((run_dir / "diagnostics.json").read_text())["step_sizes"]) == 3
+    recs = run_records(get_runs(experiment="obs", project="p", engine=engine), engine=engine)
+    assert all(r["notes"] == "oriel=abc123 dirty=0" for r in recs)
+    assert all(r["artifacts_dir"] == str(run_dir) for r in recs if r["instance"] == "phantom_00")
+    # a failed run still gets the provenance and the observer call
+    reg.method(Crashy)
+    study = Study("obs2", "comparison", "toy-configurable", [Arm("crashy", {"mode": "raise"})], project="p")
+    rec = Recorder()
+    run_study(study, engine=engine, registry=reg, observers=[rec], log=None, provenance={"v": 1})
+    assert rec.runs[0][3] is False
+    assert run_records(get_runs(experiment="obs2", project="p", engine=engine), engine=engine)[0]["notes"] == "RuntimeError: boom; v=1"
+
+
+def test_multi_knob_ablation_arms():
+    assert arm_changes({"adaptive": False}) == (None, {"adaptive": False})
+    assert arm_changes({"label": "no prior", "set": {"prior": "tikhonov", "reg": 0.1}}) == ("no prior", {"prior": "tikhonov", "reg": 0.1})
+    for bad in ({}, {"a": 1, "b": 2}, {"set": {}}, {"set": {"a": 1}, "junk": 2}):
+        with pytest.raises(ValueError):
+            arm_changes(bad)
+    methods = {"adaptive-gd": AdaptiveGD}
+    study = Study("x", "ablation", "toy-deblur", [Arm("adaptive-gd")],
+                  ablation=Ablation(arms=[{"label": "quadratic, weaker", "set": {"prior": "tikhonov", "reg": 0.001}}, {"set": {"iters": 5}}]))
+    jobs = expand(study, ToyDeblurring, methods)
+    assert [j.arm for j in jobs] == ["full model", "quadratic, weaker", "iters=5"]
+    assert jobs[1].config["prior"] == "tikhonov" and jobs[1].config["reg"] == 0.001
+    study.ablation.arms.append({"set": {"iters": 30, "reg": 0.003}})  # equals the base on every knob
+    with pytest.raises(ValueError, match="does not differ"):
+        validate_study(study, ToyDeblurring, methods)
+    assert Study.from_dict(study.to_dict()) == study  # the set form round-trips
+
+
+def test_select_best_is_the_tuning_rule(engine):
+    _, sweep, _ = toy_studies()
+    run_study(sweep, engine=engine, log=None)
+    recs = run_records(get_runs(experiment="reg-sweep", project=PROJECT, engine=engine), engine=engine)
+    best = agg.select_best(recs, "reg", "psnr")
+    assert list(best) == [()] and best[()] in (0.003, 0.01)
+    by_seed = agg.select_best(recs, "reg", "psnr", group_by=["seed"])
+    assert set(by_seed) == {(0,), (1,), (2,)}
+    assert agg.select_best(recs, "reg", "psnr", higher_is_better=False)[()] == 0.0003
