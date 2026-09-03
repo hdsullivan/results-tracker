@@ -21,6 +21,7 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+from ..aggregate import plain_label
 from .figures import IEEE_RC, SAVE_KW
 
 BOX_COLOR = "#eda100"  # yellow from the categorical palette: visible on gray and on the magma error map
@@ -226,7 +227,7 @@ def build_panels(
         meas_panel = Panel("Measurement", load_image(mp, data_range), path=str(mp), kind="measurement")
 
     for r in records:
-        title = (titles or {}).get(r.get("method"), r.get("method_label") or str(r.get("method")))
+        title = (titles or {}).get(r.get("method"), plain_label(r.get("method_label")) or str(r.get("method")))
         d = r.get("artifacts_dir")
         p = Path(d).expanduser() / image if d else None
         if p is None or not p.is_file():
@@ -710,7 +711,7 @@ def panel_metrics_rows(
     Returns (headers, rows, warnings). A gap between logged and recomputed values beyond the tolerances is
     flagged: it usually means the logged number was computed on a different image, crop or data range."""
     by_id = {r.get("run_id"): r for r in records if r.get("run_id") is not None}
-    by_title = {(r.get("method_label") or r.get("method")): r for r in records}
+    by_title = {(plain_label(r.get("method_label")) or r.get("method")): r for r in records}
     want_ssim = reference is not None and "ssim" in metrics
     headers = ["Panel"] + [f"{m} (logged)" for m in metrics] + (["PSNR (from image)", "Δ (dB)"] if reference is not None else []) \
         + (["SSIM (from image)", "Δ"] if want_ssim else [])

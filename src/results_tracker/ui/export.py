@@ -112,7 +112,7 @@ def render() -> None:
             st.info(hint)
         tex = comparison_latex(pt, defs, caption=caption, label=label, env=env, font=font, std=std,
                                underline_second=underline,
-                               row_labels=agg.method_labels(recs) if row_key == "method" else None,
+                               row_labels=agg.method_labels(recs, latex=True) if row_key == "method" else None,
                                audit=audit, provenance=prov)
         _latex_block(tex, f"{stem}-table.tex", preview=comparison_html(
             pt, defs, caption=caption, show_std=std != "none", underline_second=underline,

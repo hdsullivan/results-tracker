@@ -66,7 +66,7 @@ def show_artifacts(run: dict, other: Optional[dict], defs: dict) -> None:
             st.warning(pr)
         methods = [pnl for pnl in panels if pnl.kind == "method"]
         for pnl, r in zip(methods, recs):  # two runs of one method would otherwise share a title
-            pnl.title = f"{r.get('method_label') or r.get('method') or 'run'} (#{r['run_id']})" if len(recs) > 1 else (r.get("method_label") or r.get("method") or recon)
+            pnl.title = f"{agg.plain_label(r.get('method_label')) or r.get('method') or 'run'} (#{r['run_id']})" if len(recs) > 1 else (r.get("method_label") or r.get("method") or recon)
         meas_panel = next((pnl for pnl in panels if pnl.kind == "measurement"), None)
         if methods:
             try:

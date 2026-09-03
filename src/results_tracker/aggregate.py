@@ -6,6 +6,7 @@ No ORM, no pandas: easy to test and reusable by the GUI and the exporters.
 from __future__ import annotations
 
 import json
+import re
 from numbers import Number
 
 import statistics
@@ -107,12 +108,29 @@ def group_records(records: Iterable[Record], keys: Sequence[str]) -> dict[GroupK
     return groups
 
 
-def method_labels(records: Iterable[Record]) -> dict[Any, str]:
-    """method name -> display label (from Method.label), for table row labels."""
+_CITE = re.compile(r"\s*~?\\cite[tp]?\{[^}]*\}")
+
+
+def plain_label(label: Optional[str]) -> Optional[str]:
+    """A method label without its LaTeX citation: `DPIR~\cite{zhang2021}` -> `DPIR`.
+
+    Labels may carry a `\cite{}` so LaTeX tables cite the baseline; figures, panel titles and the GUI
+    cannot render it and show the bare name instead."""
+    if label is None:
+        return None
+    return _CITE.sub("", label).strip() or label
+
+
+def method_labels(records: Iterable[Record], latex: bool = False) -> dict[Any, str]:
+    """method name -> display label (from Method.label), for table row labels.
+
+    With `latex=False` (figures, HTML, panel titles) citations are stripped; LaTeX table exports pass
+    `latex=True` to keep `label~\cite{key}` intact."""
     out: dict[Any, str] = {}
     for r in records:
         if r.get("method") is not None and r.get("method_label"):
-            out.setdefault(r["method"], r["method_label"])
+            label = r["method_label"] if latex else plain_label(r["method_label"])
+            out.setdefault(r["method"], label)
     return out
 
 
@@ -167,7 +185,7 @@ def selection_notes(chosen: Sequence[Record]) -> list[str]:
     for key in ("seed", "instance"):
         vals = {r.get(key) for r in chosen if r.get(key) is not None}
         if len(vals) > 1:
-            who = ", ".join(f"{r.get('method_label') or r.get('method')}: {key} {r.get(key)}" for r in chosen if r.get(key) is not None)
+            who = ", ".join(f"{plain_label(r.get('method_label')) or r.get('method')}: {key} {r.get(key)}" for r in chosen if r.get(key) is not None)
             notes.append(f"panels show different {key}s ({who}); pick one {key} for a fair comparison")
     return notes
 
@@ -182,7 +200,7 @@ def omitted_methods(records: Iterable[Record], chosen: Sequence[Record], dataset
     out: dict[Any, str] = {}
     for m in {r.get("method") for r in recs} - shown:
         runs = [r for r in recs if r.get("method") == m]
-        label = runs[0].get("method_label") or str(m)
+        label = plain_label(runs[0].get("method_label")) or str(m)
         if not any(r.get("artifacts_dir") for r in runs):
             out[label] = "no artifacts_dir (e.g. numbers reported from a paper)"
         else:

@@ -70,7 +70,8 @@ def build_bundle(
                 audit = agg.audit_grid(recs, ["method"] + (["dataset"] if has_ds else []))
                 hint = width_hint(pt, "pm", "table", None)
                 add(zf, f"tables/{slug}.tex",
-                    comparison_latex(pt, defs, label=f"tab:{slug}", row_labels=labels, audit=audit, provenance=prov,
+                    comparison_latex(pt, defs, label=f"tab:{slug}", row_labels=agg.method_labels(done, latex=True),
+                                     audit=audit, provenance=prov,
                                      env="table*" if hint else "table"),
                     "comparison-table", name, len(done), audit.summary() + (" · table* (wide)" if hint else ""))
                 if metric:

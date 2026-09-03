@@ -586,7 +586,7 @@ def export_table(
         err_console.print(f"[yellow]width:[/] {hint}")
     text = comparison_latex(
         pt, defs, caption=caption, label=label, env=_env(env), font=font, std=std,
-        underline_second=not no_underline, row_labels=agg.method_labels(recs) if rows == "method" else None,
+        underline_second=not no_underline, row_labels=agg.method_labels(recs, latex=True) if rows == "method" else None,
         audit=audit, provenance=provenance_note(resolve_db_path(db), experiment, len(recs)),
     )
     _emit(text, out)

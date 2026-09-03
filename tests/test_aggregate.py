@@ -303,3 +303,13 @@ def test_parse_where_and_filter_records():
     assert agg.filter_records(recs, {"config.K": "10"}) == [recs[1]]  # string form of a number matches too
     with pytest.raises(ValueError):
         agg.parse_where(["nonsense"])
+
+
+def test_plain_label_strips_citations_for_figures_and_screens():
+    assert agg.plain_label(r"DPIR~\cite{zhang2021plug}") == "DPIR"
+    assert agg.plain_label(r"GSPnP \citep{hurault2022}") == "GSPnP"
+    assert agg.plain_label("TV [1]") == "TV [1]" and agg.plain_label(None) is None
+    recs = [rec("dpir", 0, psnr=1.0)]
+    recs[0]["method_label"] = r"DPIR~\cite{zhang2021plug}"
+    assert agg.method_labels(recs) == {"dpir": "DPIR"}
+    assert agg.method_labels(recs, latex=True) == {"dpir": r"DPIR~\cite{zhang2021plug}"}
