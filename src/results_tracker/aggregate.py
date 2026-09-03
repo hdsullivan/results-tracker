@@ -103,6 +103,52 @@ def filter_records(records: Iterable[Record], where: Mapping[str, Any]) -> list[
     return recs
 
 
+def fmt_value(v: Any) -> str:
+    """A config/field value for captions and widgets: floats in %g, None as (none)."""
+    if v is None:
+        return "(none)"
+    if isinstance(v, float):
+        return f"{v:g}"
+    return str(v)
+
+
+def _as_list(v: Any) -> list[Any]:
+    return list(v) if isinstance(v, (list, tuple, set)) else [v]
+
+
+def where_text(where: Mapping[str, Any]) -> str:
+    """Human form of a filter: `dataset = Set12 · config.K ∈ {2, 5}`."""
+    parts = []
+    for k, v in where.items():
+        vs = _as_list(v)
+        parts.append(f"{k} = {fmt_value(vs[0])}" if len(vs) == 1 else f"{k} ∈ {{{', '.join(fmt_value(x) for x in vs)}}}")
+    return " · ".join(parts)
+
+
+def _cli_value(v: Any) -> str:
+    if isinstance(v, str):
+        try:
+            json.loads(v)
+        except ValueError:
+            return v  # a plain word: parse_where keeps it as a string
+        return json.dumps(v)  # looks like a number or bool: quote it so it stays a string
+    return json.dumps(v, separators=(",", ":"))
+
+
+def where_items(where: Mapping[str, Any]) -> list[str]:
+    """A filter as `field=value` items for `--where` and URLs; `parse_where` inverts this."""
+    items = []
+    for k, v in where.items():
+        vs = _as_list(v)
+        items.append(f"{k}={_cli_value(vs[0]) if len(vs) == 1 else _cli_value(vs)}")
+    return items
+
+
+def where_cli(where: Mapping[str, Any]) -> str:
+    """`--where 'a=1' --where 'b=[2,3]'` for a filter, or an empty string."""
+    return " ".join(f"--where '{it}'" for it in where_items(where))
+
+
 def group_records(records: Iterable[Record], keys: Sequence[str]) -> dict[GroupKey, list[Record]]:
     groups: dict[GroupKey, list[Record]] = {}
     for r in records:

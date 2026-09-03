@@ -127,6 +127,26 @@ def recent_rows(recs: list[dict], defs: dict, n: int = 15) -> tuple[list[str], l
     return headers, rows
 
 
+def _paper_line(recs: list[dict]) -> None:
+    """One line on the pinned paper assets: how many, how many final, how many need a re-export."""
+    from collections import Counter
+
+    from ..api import list_assets
+    from ..export.paper import staleness
+    from .common import db_path, engine_for
+
+    assets = list_assets(engine=engine_for(db_path()))
+    if not assets:
+        return
+    by_exp: dict[str, list[dict]] = {}
+    for r in recs:
+        by_exp.setdefault(r["experiment"], []).append(r)
+    states = Counter(staleness(a, by_exp.get(a.experiment, []))[0] for a in assets if a.status.value != "dropped")
+    n_final = sum(a.status.value == "final" for a in assets)
+    st.caption(f"**Paper:** {sum(states.values())} pinned assets · {n_final} final · {states.get('stale', 0)} stale · "
+               f"{states.get('never exported', 0)} never exported — details on the Paper page.")
+
+
 def render() -> None:
     st.title("Results Tracker")
     sidebar_db()
@@ -145,6 +165,7 @@ def render() -> None:
     if not recs:
         st.info("Empty database. Seed a demo with `results-tracker demo`, or log runs with `results_tracker.log_run`.")
         return
+    _paper_line(recs)
 
     st.subheader("Experiments")
     projects = ", ".join(p["name"] for p in cat["projects"])

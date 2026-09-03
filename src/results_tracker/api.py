@@ -19,7 +19,7 @@ from typing import Any, Iterable, Optional, Sequence, Type, TypeVar, Union
 from sqlmodel import Session, SQLModel, select
 
 from .db import get_engine, session_scope
-from .models import Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus
+from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -303,6 +303,102 @@ def delete_runs(run_ids: Iterable[int], db=None, engine=None) -> int:
         for r in rows:
             s.delete(r)
         return len(rows)
+
+
+# --------------------------------------------------------------------------- paper assets
+
+def save_asset(
+    project: str,
+    label: str,
+    *,
+    kind: str,
+    experiment: str,
+    options: Optional[dict] = None,
+    filters: Optional[dict] = None,
+    caption: Optional[str] = None,
+    status: Union[str, AssetStatus, None] = None,
+    notes: Optional[str] = None,
+    position: Optional[int] = None,
+    fingerprint: Optional[str] = None,
+    db=None,
+    engine=None,
+) -> Asset:
+    """Pin (or re-pin) a paper asset: the table or figure `label` of `project` is rendered from `experiment`
+    with `filters` and `options` (see export.paper.KINDS). Re-pinning replaces kind, experiment, filters and
+    options and clears `exported_at` (the exported file no longer matches); status, caption, notes and
+    position are kept unless given. New assets go to the end of the manuscript order."""
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        proj = get_or_create(s, Project, project)
+        a = s.exec(select(Asset).where(Asset.project_id == proj.id, Asset.label == label)).first()
+        if a is None:
+            last = max((x.position for x in s.exec(select(Asset).where(Asset.project_id == proj.id)).all()), default=-1)
+            a = Asset(project_id=proj.id, label=label, kind=kind, experiment=experiment, position=last + 1)
+            s.add(a)
+        a.kind, a.experiment = kind, experiment
+        a.options = _to_plain(options or {})
+        a.filters = _to_plain(filters or {})
+        a.exported_at = None
+        if caption is not None:
+            a.caption = caption
+        if status is not None:
+            a.status = AssetStatus(status)
+        if notes is not None:
+            a.notes = notes
+        if position is not None:
+            a.position = int(position)
+        if fingerprint is not None:
+            a.fingerprint = fingerprint
+        a.updated_at = datetime.now(timezone.utc)
+        s.flush()
+        return a
+
+
+def list_assets(project: Optional[str] = None, db=None, engine=None) -> list[Asset]:
+    """Assets in manuscript order (position, then label)."""
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        stmt = select(Asset)
+        if project:
+            stmt = stmt.join(Project, Asset.project_id == Project.id).where(Project.name == project)
+        return sorted(s.exec(stmt).all(), key=lambda a: (a.position, a.label))
+
+
+def get_asset(project: str, label: str, db=None, engine=None) -> Optional[Asset]:
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        return s.exec(select(Asset).join(Project, Asset.project_id == Project.id)
+                      .where(Project.name == project, Asset.label == label)).first()
+
+
+def update_asset(project: str, label: str, db=None, engine=None, **fields: Any) -> Asset:
+    """Change bookkeeping fields (status, position, caption, notes, exported_at, fingerprint, label) in place."""
+    engine = _resolve_engine(engine, db)
+    allowed = {"status", "position", "caption", "notes", "exported_at", "fingerprint", "label"}
+    bad = set(fields) - allowed
+    if bad:
+        raise ValueError(f"cannot update {sorted(bad)}; re-pin the asset to change kind, experiment, filters or options")
+    with session_scope(engine) as s:
+        a = s.exec(select(Asset).join(Project, Asset.project_id == Project.id)
+                   .where(Project.name == project, Asset.label == label)).first()
+        if a is None:
+            raise LookupError(f"no asset {label!r} in project {project!r}")
+        for k, v in fields.items():
+            setattr(a, k, AssetStatus(v) if k == "status" else v)
+        a.updated_at = datetime.now(timezone.utc)
+        s.flush()
+        return a
+
+
+def delete_asset(project: str, label: str, db=None, engine=None) -> bool:
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        a = s.exec(select(Asset).join(Project, Asset.project_id == Project.id)
+                   .where(Project.name == project, Asset.label == label)).first()
+        if a is None:
+            return False
+        s.delete(a)
+        return True
 
 
 # --------------------------------------------------------------------------- read API

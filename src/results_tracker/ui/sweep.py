@@ -13,7 +13,8 @@ from ..export.latex import sweep_latex
 from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
 from .tables import figure_caption_html, generic_html, sweep_html
-from .common import active_where, fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db, sidebar_filter, where_text
+from .common import (active_where, fmt_for, load_metric_defs, load_records, pin_to_paper, select_project_experiment, sidebar_db,
+                     sidebar_filter, where_text)
 
 GROUP_KEYS = ["method", "dataset", "instance"]
 
@@ -29,7 +30,8 @@ def render() -> None:
     if not recs:
         st.info("No runs in this experiment.")
         return
-    recs = agg.completed(sidebar_filter(recs))
+    all_recs = sidebar_filter(recs)
+    recs = agg.completed(all_recs)
     if not recs:
         if not active_where():
             st.info("No completed runs in this experiment.")
@@ -150,6 +152,9 @@ def render() -> None:
                                      f"std of the best (or 1% of the range when std is 0). A wide plateau means the choice is forgiving."),
                 unsafe_allow_html=True)
 
+    pin_to_paper({"sweep-figure": {"param": param_x, "metric": metric, "by": group_by, "band": show_band, "log_x": log_x, "width": "single"},
+                  "sweep-table": {"param": param_x, "metric": metric, "by": group_by}},
+                 records=all_recs, key="sweep_pin")
     with st.expander("LaTeX (booktabs table + figure snippet)"):
         st.code(sweep_latex(series, param_x, metric, defs), language="latex")
         st.code(figure_tex(f"figures/{experiment}-{param_x}-{metric}.pdf", label=f"fig:{experiment}-{param_x}", width="single"),

@@ -286,6 +286,15 @@ results-tracker ui                         # uses $RESULTS_TRACKER_DB
 Every page has a LaTeX expander and a paper-figure expander; the Export page has
 the full set of options (captions, labels, std style, widths).
 
+- **Pin to paper.** Under every table and figure (Comparison, Sweep, Ablation,
+  Visual, Export) a *Pin to paper* expander saves the current view — experiment,
+  filter and rendering options — as a paper **asset** with a LaTeX label
+  (`tab:main`, `fig:beta`) and a status (planned / draft / final). The **Paper**
+  page lists the assets in manuscript order, says whether each export is still
+  *current* or *stale* (runs were added or replaced since), lets you edit status,
+  order, caption and notes, and exports them all. *Open in Export* restores an
+  asset's view so you can change it and pin again.
+
 ---
 
 ## 7. Wire the paper to the database
@@ -294,7 +303,26 @@ Generate the paper's assets into the manuscript tree and `\input` them, so a
 re-run of the experiments followed by one command refreshes the whole results
 section.
 
-`paper/Makefile`:
+The short way: pin every table and figure of the manuscript from the GUI (see
+*Pin to paper* above), then
+
+```bash
+results-tracker export paper -p adaptive-pnp -o paper/assets
+```
+
+writes `tables/tab-main.tex`, `figures/fig-beta.pdf` + `.tex` snippet, `data/*.csv`,
+`preamble.tex` and `MANIFEST.json` under `paper/assets/`, with stable names taken
+from the labels. `results-tracker asset list` shows which assets are stale;
+`asset set fig:beta --status final` and `asset rm` do the bookkeeping. The
+Makefile then has one target:
+
+```make
+assets:
+	results-tracker export paper -p $(P) -o assets
+```
+
+The long way, one export command per asset, still works and is what the pinned
+assets run under the hood. `paper/Makefile`:
 
 ```make
 RT = results-tracker

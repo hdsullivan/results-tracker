@@ -30,6 +30,15 @@ class RunStatus(str, Enum):
     running = "running"
 
 
+class AssetStatus(str, Enum):
+    """Where a paper asset stands: planned (data may not exist yet), draft, final, or dropped from the paper."""
+
+    planned = "planned"
+    draft = "draft"
+    final = "final"
+    dropped = "dropped"
+
+
 class Project(SQLModel, table=True):
     """One per paper."""
 
@@ -94,3 +103,27 @@ class Run(SQLModel, table=True):
     artifacts_dir: Optional[str] = None
     notes: str = ""
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
+
+class Asset(SQLModel, table=True):
+    """One table or figure of the manuscript, pinned from a GUI view: which experiment, which filter, which
+    rendering options. `results-tracker export paper` regenerates exactly these. `fingerprint` hashes the runs
+    the asset was last rendered from, so the Paper page can say when the data moved under it."""
+
+    __table_args__ = (UniqueConstraint("project_id", "label"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    label: str = Field(index=True)  # the LaTeX label: tab:main, fig:beta
+    kind: str  # one of export.paper.KINDS
+    experiment: str
+    filters: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # the `where` filter
+    options: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # rendering options for `kind`
+    caption: str = ""
+    status: AssetStatus = Field(default=AssetStatus.planned)
+    position: int = 0  # manuscript order
+    notes: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    exported_at: Optional[datetime] = None
+    fingerprint: Optional[str] = None  # records_fingerprint of the runs at the last pin or export

@@ -844,6 +844,47 @@ def export_bundle(
     console.print(f"[green]wrote[/] {out}  ({len(data) // 1024} KB, {sum(1 for m in manifest if m['file'])} files)")
 
 
+@export_app.command("paper")
+def export_paper_cmd(
+    project: str = typer.Option(..., "--project", "-p"),
+    out: Path = typer.Option(Path("paper_assets"), "--out", "-o", help="Directory (or .zip file with --zip) to write into."),
+    zip_: bool = typer.Option(False, "--zip", help="Write one zip file instead of a directory."),
+    status: list[str] = typer.Option([], "--status", help="Only assets with these statuses (default: planned, draft, final)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Render and report, but write nothing and do not mark assets exported."),
+    db: Optional[Path] = DbOpt,
+):
+    """The pinned paper assets of a project, rendered into stable file names (tables/, figures/, data/, MANIFEST.json)."""
+    from .export.paper import EXPORT_STATUSES, mark_exported, render_paper, write_paper, zip_paper
+
+    engine = get_engine(db)
+    source = resolve_db_path(db)
+    rendered = render_paper(engine, project, source=source, statuses=status or EXPORT_STATUSES)
+    if not rendered:
+        console.print(f"[red]no assets to export in project {project!r}[/] (pin views on the GUI pages, or `results-tracker asset list`)")
+        raise typer.Exit(code=1)
+    t = Table("label", "kind", "status", "experiment", "filter", "runs", "files", "note")
+    for r in rendered:
+        t.add_row(r.label, r.kind, r.status, r.experiment, " ".join(r.filters) or "—", str(r.runs),
+                  "\n".join(f for f, _ in r.files) or "—", f"[red]{r.error}[/]" if r.error else r.note)
+    console.print(t)
+    failed = [r for r in rendered if r.error]
+    if dry_run:
+        console.print(f"dry run: {len(rendered) - len(failed)} assets rendered, {len(failed)} failed; nothing written")
+        raise typer.Exit(code=1 if failed else 0)
+    if zip_:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        data = zip_paper(rendered, project=project, source=source)
+        out.write_bytes(data)
+        console.print(f"[green]wrote[/] {out}  ({len(data) // 1024} KB)")
+    else:
+        paths = write_paper(rendered, out, project=project, source=source)
+        console.print(f"[green]wrote[/] {len(paths)} files under {out}")
+    mark_exported(engine, project, rendered)
+    if failed:
+        err_console.print(f"[yellow]{len(failed)} asset(s) could not be rendered:[/] " + ", ".join(f"{r.label} ({r.error})" for r in failed))
+        raise typer.Exit(code=1)
+
+
 @export_app.command("preamble")
 def export_preamble():
     """Print the LaTeX packages the generated tables and figures need."""
@@ -866,6 +907,71 @@ def export_runs_csv(
     recs, _ = _load_experiment(experiment, project, db, where)
     _emit(runs_csv(recs), out)
 
+
+
+# --------------------------------------------------------------------------- paper assets
+
+asset_app = typer.Typer(help="Paper assets: the tables and figures pinned from the GUI that `export paper` regenerates.", no_args_is_help=True)
+app.add_typer(asset_app, name="asset")
+
+
+@asset_app.command("list")
+def asset_list(project: Optional[str] = ProjOpt, db: Optional[Path] = DbOpt):
+    """Every pinned asset with its status and whether the export is current."""
+    from .api import list_assets
+    from .export.paper import staleness
+
+    engine = get_engine(db)
+    assets = list_assets(project, engine=engine)
+    if not assets:
+        console.print("no assets pinned yet (use the Pin to paper expander on a GUI page)")
+        return
+    projs = {p.id: p.name for p in list_projects(engine=engine)}
+    cache: dict[tuple, list] = {}
+    t = Table("#", "label", "kind", "status", "experiment", "filter", "state", "detail")
+    for a in assets:
+        key = (projs.get(a.project_id), a.experiment)
+        if key not in cache:
+            cache[key] = run_records(get_runs(experiment=a.experiment, project=key[0], engine=engine), engine=engine)
+        state, detail = staleness(a, cache[key])
+        t.add_row(str(a.position), a.label, a.kind, a.status.value, a.experiment, agg.where_text(a.filters or {}) or "—", state, detail)
+    console.print(t)
+
+
+@asset_app.command("set")
+def asset_set(
+    label: str = typer.Argument(..., help="Asset label, e.g. tab:main"),
+    project: str = typer.Option(..., "--project", "-p"),
+    status: Optional[str] = typer.Option(None, "--status", help="planned | draft | final | dropped"),
+    position: Optional[int] = typer.Option(None, "--position", help="Manuscript order."),
+    caption: Optional[str] = typer.Option(None, "--caption"),
+    notes: Optional[str] = typer.Option(None, "--notes"),
+    db: Optional[Path] = DbOpt,
+):
+    """Change an asset's status, order, caption or notes (re-pin from the GUI to change what it renders)."""
+    from .api import update_asset
+
+    fields = {k: v for k, v in dict(status=status, position=position, caption=caption, notes=notes).items() if v is not None}
+    if not fields:
+        raise typer.BadParameter("nothing to change")
+    try:
+        a = update_asset(project, label, engine=get_engine(db), **fields)
+    except (LookupError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]updated[/] {a.label}: " + ", ".join(f"{k}={v}" for k, v in fields.items()))
+
+
+@asset_app.command("rm")
+def asset_rm(label: str = typer.Argument(...), project: str = typer.Option(..., "--project", "-p"), db: Optional[Path] = DbOpt):
+    """Forget a pinned asset (exported files are left alone)."""
+    from .api import delete_asset
+
+    if delete_asset(project, label, engine=get_engine(db)):
+        console.print(f"[green]removed[/] {label}")
+    else:
+        console.print(f"[red]no asset {label!r} in project {project!r}[/]")
+        raise typer.Exit(code=1)
 
 
 # --------------------------------------------------------------------------- recipes

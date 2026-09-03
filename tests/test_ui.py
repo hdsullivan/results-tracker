@@ -349,3 +349,89 @@ def test_where_filter_is_shared_and_matches_the_cli(demo_db):
     _sidebar_multiselect(at3, "seed").set_value(["0"]).run()
     assert not at3.exception
     assert at3.query_params["where"] == ["seed=0"]
+
+
+def test_pin_paper_page_export_and_reopen(demo_db, tmp_path):
+    from results_tracker import log_run
+
+    # pin the filtered comparison table from the Comparison page
+    at = _run("comparison")
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    _sidebar_multiselect(at, "Filter on").set_value(["dataset"]).run()
+    _sidebar_multiselect(at, "dataset").set_value(["Set12"]).run()
+    assert at.text_input(key="cmp_pin_label").value == "tab:main-comparison"  # default label from the experiment
+    at.text_input(key="cmp_pin_label").input("tab:main").run()
+    at.button(key="cmp_pin_button").click().run()
+    assert not at.exception and any("Pinned `tab:main`" in s_.value for s_ in at.success)
+    # and a sweep figure from the Sweep page (two kinds offered there)
+    at2 = _run("sweep")
+    assert at2.selectbox(key="sweep_pin_kind").value == "sweep-figure"
+    at2.button(key="sweep_pin_button").click().run()
+    assert not at2.exception and any("fig:lambda-sweep" in s_.value for s_ in at2.success)
+
+    # the Paper page lists both in manuscript order, never exported, with the filter
+    at3 = _run("paper")
+    md = "\n".join(m.value for m in at3.markdown)
+    assert md.index("tab:main") < md.index("fig:lambda-sweep") and "dataset = Set12" in md and md.count("never exported") >= 2
+    assert {m.label: m.value for m in at3.metric}["Assets"] == "2"
+    assert 'href="export?project=demo-paper&asset=tab%3Amain"' in md  # the default database is not spelled out
+    # export the paper into a directory: stable names, filter in the provenance, assets become current
+    at3.text_input(key="paper_out_dir").input(str(tmp_path / "paper")).run()
+    [b for b in at3.button if b.label == "Write to directory"][0].click().run()
+    assert not at3.exception
+    tex = (tmp_path / "paper" / "tables" / "tab-main.tex").read_text()
+    assert "\\label{tab:main}" in tex and "Filter: --where 'dataset=Set12'" in tex and "CBSD68" not in tex
+    assert (tmp_path / "paper" / "figures" / "fig-lambda-sweep.pdf").exists() and (tmp_path / "paper" / "MANIFEST.json").exists()
+    md = "\n".join(m.value for m in at3.markdown)
+    assert md.count(">current<") == 2 and any("2 assets rendered, 0 failed" in s_.value for s_ in at3.success)
+
+    # opening an asset restores experiment, filter and options on the Export page
+    at4 = AppTest.from_string("from results_tracker.ui import export\nexport.render()\n", default_timeout=30)
+    at4.query_params["asset"] = "tab:main"
+    at4.query_params["project"] = "demo-paper"
+    at4.run()
+    assert not at4.exception
+    assert [sb for sb in at4.sidebar.selectbox if sb.label == "Experiment"][0].value.startswith("main-comparison")
+    assert at4.session_state["where"] == {"dataset": ["Set12"]} and at4.query_params["where"] == ["dataset=Set12"]
+    assert at4.sidebar.radio[0].value == "Comparison table (LaTeX)" and at4.text_input(key="exp_label").value == "tab:main"
+    assert "asset" not in at4.query_params and any("opened from the Paper page" in c.value for c in at4.caption)
+    assert at4.text_input(key="exp_pin_label").value == "tab:main"  # pinning again updates the same asset
+    at4.selectbox(key="exp_std").select("small").run()
+    at4.button(key="exp_pin_button").click().run()
+    assert not at4.exception
+    from results_tracker import get_asset
+    a = get_asset("demo-paper", "tab:main", db=demo_db)
+    assert a.options["std"] == "small" and a.filters == {"dataset": ["Set12"]} and a.exported_at is None  # re-pinned: export forgotten
+
+    # new data -> stale on the Paper page and on the Overview
+    log_run("main-comparison", project="demo-paper", method="Ours", dataset="Set12", seed=7, config={"lambda": 0.1, "iters": 50},
+            metrics={"psnr": 31.0, "ssim": 0.9, "runtime_s": 6.0}, db=demo_db, git_commit=None)
+    st.cache_data.clear()
+    at5 = _run("paper")
+    md = "\n".join(m.value for m in at5.markdown)
+    assert ">never exported<" in md and ">current<" in md  # tab:main was re-pinned, fig:lambda-sweep is untouched
+    at6 = _run("overview")
+    assert any("Paper:" in c.value and "2 pinned assets" in c.value for c in at6.caption)
+
+
+def test_export_kind_follows_experiment_unless_an_asset_is_open(demo_db):
+    at = _run("export")
+    assert at.sidebar.radio[0].value == "Ablation table (LaTeX)"
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("lambda-sweep")][0]).run()
+    assert at.sidebar.radio[0].value == "Sweep figure"
+    at.sidebar.radio[0].set_value("Sweep table (LaTeX)").run()
+    assert at.sidebar.radio[0].value == "Sweep table (LaTeX)"  # an explicit choice sticks within the experiment
+
+
+def test_page_url_carries_a_non_default_database(demo_db):
+    # a link opens a new Streamlit session, so it must say which database it means unless that is the default
+    at = AppTest.from_string(
+        "import streamlit as st\nfrom results_tracker.ui.common import page_url\n"
+        "st.write(page_url('export', project='p q', asset='tab:m'))\n"
+        "st.session_state['db'] = '/x/other.db'\nst.write(page_url('export', project='p', asset='tab:m'))\n", default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert at.markdown[0].value == "export?project=p+q&asset=tab%3Am"
+    assert at.markdown[1].value == "export?db=%2Fx%2Fother.db&project=p&asset=tab%3Am"

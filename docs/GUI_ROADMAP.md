@@ -35,7 +35,13 @@ regenerated from exactly those pins.
   collapses to one target. The current all-experiments bundle stays as "everything".
 - **Paper tags on experiments**: a `paper` / `exploratory` / `superseded` state on `Experiment` so the
   Overview separates the manuscript's experiments from scratch work, and dropped experiments stop
-  cluttering selectors (hidden by default, toggle to show).
+  cluttering selectors (hidden by default, toggle to show). *Still open*: it needs a column on an existing
+  table, i.e. a small migration helper in `db.py` (`create_all` only adds new tables).
+
+Done 2026-09-03: `Asset` table + API, `export/paper.py`, Pin-to-paper on Comparison / Sweep / Ablation / Visual /
+Export, the Paper page (status, order, caption, notes, staleness, export to directory or zip, *Open in Export*
+restores a view via `?asset=`), `results-tracker export paper` and `asset list|set|rm`. Not done: the experiment
+stage column above; restoring an asset on the analysis pages themselves (only Export restores widgets).
 
 ## 2. Planning layer
 
@@ -108,7 +114,7 @@ regenerated from exactly those pins.
 | Step | Delivers | Size |
 |---|---|---|
 | 1 | Shared `where` filter + shared selection / URL params (§3, §4) | done 2026-09-03 |
-| 2 | `Asset` table, Pin-to-paper on all pages, Paper page, `export paper` (§1) | 2–3 days |
+| 2 | `Asset` table, Pin-to-paper on all pages, Paper page, `export paper` (§1) | done 2026-09-03 |
 | 3 | Study ↔ asset link, cost estimate, pending-only spec, edit / clone form, running status (§2) | 2 days |
 | 4 | Value maps + facets, cross-experiment tables, Settings page (§3, §4) | 2 days |
 | 5 | Curves page, two-metric scatter, distribution / instance picker, selection table (§3) | 3 days |

@@ -4,21 +4,33 @@ from .api import (
     DuplicateRunError,
     DuplicateRunWarning,
     define_method,
+    delete_asset,
     delete_runs,
     define_metric,
+    get_asset,
     get_metric_defs,
     get_runs,
     has_run,
+    list_assets,
     list_experiments,
     list_projects,
     log_run,
     run_records,
+    save_asset,
+    update_asset,
 )
 from .db import get_engine, resolve_db_path
-from .models import Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus
+from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Project, Run, RunStatus
 
 __all__ = [
     "log_run",
+    "save_asset",
+    "get_asset",
+    "list_assets",
+    "update_asset",
+    "delete_asset",
+    "Asset",
+    "AssetStatus",
     "delete_runs",
     "DuplicateRunWarning",
     "DuplicateRunError",

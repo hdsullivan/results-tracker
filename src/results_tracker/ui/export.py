@@ -1,28 +1,85 @@
-"""Export page: LaTeX tables and IEEE figures for the current experiment, with preview and download."""
+"""Export page: LaTeX tables and IEEE figures for the current experiment, with preview, download and pinning.
+
+Every widget is keyed under `exp_*` so an asset opened from the Paper page (`?asset=tab:main`) can prefill the
+page with the options it was pinned with (`prefill_from_asset`); pinning again saves the current options back.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from typing import Any, Optional
 
 import streamlit as st
 
 from .. import aggregate as agg
 from ..export.bundle import build_bundle
 from ..export.csv import runs_csv
-from ..export.visual import ZOOM_FRACTION, guess_roles, list_image_files, make_visual
 from ..export.figures import ablation_figure, comparison_figure, figure_bytes, figure_tex, ieee_preamble, sweep_figure, to_grayscale_png
-from typing import Optional
-
 from ..export.latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
-from .common import (active_where, db_path, hib_map, load_catalog, load_metric_defs, load_records, select_project_experiment,
-                     sidebar_db, sidebar_filter, where_cli, where_text)
+from ..export.paper import KIND_TITLES, KINDS
+from ..export.visual import ZOOM_FRACTION, guess_roles, list_image_files, make_visual
+from .common import (
+    active_where, db_path, hib_map, keyed, keyed_multiselect, keyed_radio, keyed_selectbox, load_catalog, load_metric_defs,
+    load_records, pin_to_paper, select_project_experiment, sidebar_db, sidebar_filter, where_cli, where_text,
+)
 from .tables import ablation_html, comparison_html, generic_html, sweep_html
 
-KINDS = ["Comparison table (LaTeX)", "Ablation table (LaTeX)", "Sweep table (LaTeX)",
-         "Sweep figure", "Ablation figure", "Comparison figure", "Visual comparison figure",
-         "Runs (CSV)", "Paper bundle (zip)"]
-PREFERRED = {"comparison": 0, "ablation": 1, "sweep": 3}
+BUNDLE = "Paper bundle (zip)"
+TITLES = [KIND_TITLES[k] for k in KINDS] + [BUNDLE]
+KIND_BY_TITLE = {v: k for k, v in KIND_TITLES.items()}
+PREFERRED = {"comparison": "comparison-table", "ablation": "ablation-table", "sweep": "sweep-figure"}
+NONE = "— none —"
+WIDTHS = ["single", "double", "ieee-single", "ieee-double"]
+FONTS = ["(default)", "small", "footnotesize", "scriptsize"]
+
+
+def prefill_from_asset(a) -> dict[str, Any]:
+    """Widget states (key -> value) that reproduce an asset's options on this page."""
+    o = dict(a.options or {})
+    pre: dict[str, Any] = {"exp_kind": KIND_TITLES.get(a.kind, TITLES[0]), "exp_label": a.label, "exp_caption": a.caption or ""}
+
+    def table_opts() -> None:
+        env = o["env"] if "env" in o else "table"
+        pre.update({"exp_env": env or "none", "exp_std": o.get("std", "pm"), "exp_font": o.get("font") or "(default)"})
+
+    def put(key: str, opt: str, default: Any = None, convert=lambda v: v) -> None:
+        if opt in o and o[opt] is not None:
+            pre[key] = convert(o[opt])
+        elif default is not None:
+            pre[key] = default
+
+    k = a.kind
+    if k == "comparison-table":
+        table_opts()
+        put("exp_rows", "rows"); put("exp_cols", "cols", convert=lambda v: v or "none"); put("exp_metrics", "metrics"); put("exp_underline", "underline")
+        if o.get("cols", "dataset") is None:
+            pre["exp_cols"] = "none"
+    elif k == "ablation-table":
+        table_opts()
+        put("exp_metrics", "metrics"); put("exp_show_delta", "show_delta"); put("exp_settings", "setting_columns")
+    elif k in ("sweep-table", "sweep-figure"):
+        put("exp_param", "param"); put("exp_metric", "metric"); put("exp_by", "by")
+        if k == "sweep-table":
+            table_opts()
+            put("exp_param_label", "param_label")
+        else:
+            put("exp_xlabel", "xlabel"); put("exp_ylabel", "ylabel"); put("exp_width", "width"); put("exp_band", "band")
+            put("exp_emph", "emphasize"); put("exp_height", "height", convert=float); put("exp_panel", "panel_label")
+    elif k == "ablation-figure":
+        put("exp_metric", "metric"); put("exp_xlabel", "xlabel"); put("exp_width", "width"); put("exp_panel", "panel_label")
+    elif k == "comparison-figure":
+        put("exp_metric", "metric"); put("exp_rows", "rows"); put("exp_cols", "cols", convert=lambda v: v or "none")
+        put("exp_ylabel", "ylabel"); put("exp_width", "width"); put("exp_emph", "emphasize"); put("exp_zero", "zero_based")
+        put("exp_hatch", "hatch"); put("exp_panel", "panel_label")
+    elif k == "visual-figure":
+        put("exp_vdataset", "dataset"); put("exp_vrows", "rows", default=NONE); put("exp_vseed", "seed")
+        pre["exp_vmode"] = "Error maps" if o.get("mode") == "error" else "Reconstruction"
+        put("exp_vimage", "image"); put("exp_vref", "reference", default=NONE); put("exp_vmeas", "measurement", default=NONE)
+        put("exp_vzoom", "zoom"); put("exp_vzf", "zoom_fraction", convert=float)
+        if o.get("zoom_center"):
+            pre["exp_vzc"] = float(o["zoom_center"][0])
+    return pre
 
 
 def _latex_block(tex: str, filename: str, preview: Optional[str] = None) -> None:
@@ -53,11 +110,14 @@ def _figure_block(fig, stem: str, width: str = "single") -> None:
 
 def _common_table_opts():
     c1, c2, c3 = st.columns(3)
-    env = c1.selectbox("Environment", ["table", "table*", "none"], help="none = bare tabular")
-    std = c2.selectbox("Std style", ["pm", "small", "none"], help="pm: 30.96 ± 0.39 · small: scriptsize ± · none")
-    font = c3.selectbox("Font size", ["(default)", "small", "footnotesize", "scriptsize"])
-    label = st.text_input("\\label", value="")
-    caption = st.text_area("Caption (blank = auto-generated)", value="", height=70)
+    with c1:
+        env = keyed_selectbox("Environment", ["table", "table*", "none"], "exp_env", "table", help="none = bare tabular")
+    with c2:
+        std = keyed_selectbox("Std style", ["pm", "small", "none"], "exp_std", "pm", help="pm: 30.96 ± 0.39 · small: scriptsize ± · none")
+    with c3:
+        font = keyed_selectbox("Font size", FONTS, "exp_font", "(default)")
+    label = keyed(st.text_input, "\\label", "exp_label", "")
+    caption = keyed(st.text_area, "Caption (blank = auto-generated)", "exp_caption", "", height=70)
     return (None if env == "none" else env), std, (None if font == "(default)" else font), (label or None), (caption or None)
 
 
@@ -82,25 +142,43 @@ def render() -> None:
     metrics_all = agg.metric_names(recs)
     hib = hib_map(defs)
     prov = provenance_note(db_path(), experiment, len(recs_all), extra=f"Filter: {where_cli()}" if active_where() else "")
+    opened = st.session_state.get("opened_asset")
+    if opened and opened[1] == experiment:
+        st.caption(f"Asset **`{opened[0]}`** opened from the Paper page: the options below are the ones it was pinned with. "
+                   "Change them and pin again to update it.")
     if active_where():
         st.caption(f"Filtered to {len(recs_all)} runs: {where_text()} · on the command line add `{where_cli()}`; "
                    "the filter is recorded in the provenance comment of every table.")
 
+    if st.session_state.get("exp_for_experiment") != experiment:
+        # a new experiment: every option (kind, metrics, keys, labels) starts from that experiment's defaults,
+        # except what a just-opened asset is about to prefill
+        st.session_state["exp_for_experiment"] = experiment
+        pending = st.session_state.get("_prefill") or {}
+        for k in [k for k in st.session_state if str(k).startswith("exp_") and k != "exp_for_experiment" and k not in pending]:
+            del st.session_state[k]
     with st.sidebar:
         st.markdown("**Export**")
-        kind = st.radio("What to export", KINDS, index=PREFERRED.get(exp_type, 0))
+        title = keyed_radio("What to export", TITLES, "exp_kind", KIND_TITLES[PREFERRED.get(exp_type, "comparison-table")])
+    kind = KIND_BY_TITLE.get(title)
 
     keys_present = [k for k in ["method", "dataset", "instance", "seed"] if any(r.get(k) is not None for r in recs)]
     config_keys = [f"config.{k}" for k in sorted({k for r in recs for k in agg.flatten(r["config"])})]
     stem = experiment.replace(" ", "_")
 
-    if kind == "Comparison table (LaTeX)":
+    def pin(options: dict[str, Any], label: Optional[str] = None, caption: Optional[str] = None) -> None:
+        assert kind is not None
+        pin_to_paper({kind: options}, records=recs_all, key="exp_pin", suggested_label=label, caption=caption)
+
+    if kind == "comparison-table":
         c1, c2 = st.columns(2)
-        row_key = c1.selectbox("Rows", keys_present + config_keys, index=0)
+        with c1:
+            row_key = keyed_selectbox("Rows", keys_present + config_keys, "exp_rows", "method")
         col_opts = ["none"] + [k for k in keys_present + config_keys if k != row_key]
-        col_key = c2.selectbox("Column groups", col_opts, index=col_opts.index("dataset") if "dataset" in col_opts else 0)
-        metrics = st.multiselect("Metrics", metrics_all, default=metrics_all)
-        underline = st.checkbox("Underline second best", value=True)
+        with c2:
+            col_key = keyed_selectbox("Column groups", col_opts, "exp_cols", "dataset" if "dataset" in col_opts else "none")
+        metrics = keyed_multiselect("Metrics", metrics_all, "exp_metrics", metrics_all)
+        underline = keyed(st.checkbox, "Underline second best", "exp_underline", True)
         env, std, font, label, caption = _common_table_opts()
         if not metrics:
             st.warning("Pick at least one metric.")
@@ -126,12 +204,15 @@ def render() -> None:
         _latex_block(tex, f"{stem}-table.tex", preview=comparison_html(
             pt, defs, caption=caption, show_std=std != "none", underline_second=underline,
             row_labels=agg.method_labels(recs) if row_key == "method" else None))
+        pin({"rows": row_key, "cols": ck, "metrics": metrics, "underline": underline, "env": env, "std": std, "font": font}, label, caption or "")
 
-    elif kind == "Ablation table (LaTeX)":
-        metrics = st.multiselect("Metrics", metrics_all, default=metrics_all)
+    elif kind == "ablation-table":
+        metrics = keyed_multiselect("Metrics", metrics_all, "exp_metrics", metrics_all)
         c1, c2 = st.columns(2)
-        show_delta = c1.checkbox("Show Δ vs full model", value=True)
-        settings = c2.checkbox("Per-setting ✓/✗ columns", value=True)
+        with c1:
+            show_delta = keyed(st.checkbox, "Show Δ vs full model", "exp_show_delta", True)
+        with c2:
+            settings = keyed(st.checkbox, "Per-setting ✓/✗ columns", "exp_settings", True)
         env, std, font, label, caption = _common_table_opts()
         if not metrics:
             st.warning("Pick at least one metric.")
@@ -147,53 +228,69 @@ def render() -> None:
                              show_delta=show_delta, setting_columns=settings, provenance=prov)
         _latex_block(tex, f"{stem}-ablation.tex", preview=ablation_html(
             rows, metrics, defs, caption=caption, show_std=std != "none", setting_columns=settings))
+        pin({"metrics": metrics, "show_delta": show_delta, "setting_columns": settings, "env": env, "std": std, "font": font}, label, caption or "")
 
-    elif kind in ("Sweep table (LaTeX)", "Sweep figure"):
+    elif kind in ("sweep-table", "sweep-figure"):
         all_keys = sorted({k for r in recs for k in agg.flatten(r["config"])})
         varying = agg.varying_config_keys(recs)
         if not all_keys:
             st.warning("Runs have no config keys to sweep over.")
             return
         c1, c2, c3 = st.columns(3)
-        param = c1.selectbox("Parameter", all_keys, index=all_keys.index(varying[0]) if varying else 0)
-        metric = c2.selectbox("Metric", metrics_all)
+        with c1:
+            param = keyed_selectbox("Parameter", all_keys, "exp_param", varying[0] if varying else all_keys[0])
+        with c2:
+            metric = keyed_selectbox("Metric", metrics_all, "exp_metric", metrics_all[0])
         group_opts = [k for k in ["method", "dataset"] if len({r.get(k) for r in recs}) > 1]
-        by = c3.multiselect("One column/line per", group_opts, default=[])
+        with c3:
+            by = keyed_multiselect("One column/line per", group_opts, "exp_by", [])
         series = {g: s for g, s in agg.sweep_series(recs, param, metric, group_by=by).items() if s}
         if not series:
             st.warning(f"No runs have `{param}` in their config.")
             return
-        if kind == "Sweep table (LaTeX)":
-            param_label = st.text_input("Parameter label (LaTeX)", value=param)
+        if kind == "sweep-table":
+            param_label = keyed(st.text_input, "Parameter label (LaTeX)", "exp_param_label", param)
             env, std, font, label, caption = _common_table_opts()
             tex = sweep_latex(series, param, metric, defs, caption=caption, label=label, env=env, font=font, std=std,
                               param_label=param_label, provenance=prov)
             _latex_block(tex, f"{stem}-{param}.tex", preview=sweep_html(
                 series, param, metric, defs, caption=caption, show_std=std != "none", param_label=param_label))
+            pin({"param": param, "metric": metric, "by": by, "param_label": param_label, "env": env, "std": std, "font": font}, label, caption or "")
         else:
             unit = defs.get(metric, {}).get("unit", "")
             c1, c2, c3 = st.columns(3)
-            xlabel = c1.text_input("x label", value=param)
-            ylabel = c2.text_input("y label", value=f"{metric} ({unit})" if unit else metric)
-            width = c3.selectbox("Width", ["single", "double", "ieee-single", "ieee-double"],
-                                 help="single/double = 5.0/10.5 in (lab convention, LaTeX scales down); ieee-* = literal 3.5/7.16 in")
+            with c1:
+                xlabel = keyed(st.text_input, "x label", "exp_xlabel", param)
+            with c2:
+                ylabel = keyed(st.text_input, "y label", "exp_ylabel", f"{metric} ({unit})" if unit else metric)
+            with c3:
+                width = keyed_selectbox("Width", WIDTHS, "exp_width", "single",
+                                        help="single/double = 5.0/10.5 in (lab convention, LaTeX scales down); ieee-* = literal 3.5/7.16 in")
             c1, c2, c3 = st.columns(3)
-            band = c1.checkbox("Shaded ± std band", value=True, help="Off: capped error bars.")
-            emph = c2.multiselect("Emphasize (proposed)", [" / ".join(map(str, g)) for g in series if g], default=[])
-            height = c3.number_input("Height (in)", min_value=1.0, max_value=8.0, value=3.1, step=0.1)
-            cap = st.text_input("Panel caption (bold, below)", value="", placeholder="a. PSNR vs λ")
+            with c1:
+                band = keyed(st.checkbox, "Shaded ± std band", "exp_band", True, help="Off: capped error bars.")
+            with c2:
+                emph = keyed_multiselect("Emphasize (proposed)", [" / ".join(map(str, g)) for g in series if g], "exp_emph", [])
+            with c3:
+                height = keyed(st.number_input, "Height (in)", "exp_height", 3.1, min_value=1.0, max_value=8.0, step=0.1)
+            cap = keyed(st.text_input, "Panel caption (bold, below)", "exp_panel", "", placeholder="a. PSNR vs λ")
             best = {g: agg.best_sweep_value(s, hib.get(metric, True)) for g, s in series.items()}
             fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel, band=band, best_by_group=best,
                                width=width, height=height, emphasize=emph, caption=cap or None)
             _figure_block(fig, f"{stem}-{param}-{metric}", width)
+            pin({"param": param, "metric": metric, "by": by, "xlabel": xlabel, "ylabel": ylabel, "width": width, "band": band,
+                 "emphasize": emph, "height": height, "panel_label": cap or None})
 
-    elif kind == "Ablation figure":
+    elif kind == "ablation-figure":
         c1, c2, c3 = st.columns(3)
-        metric = c1.selectbox("Metric", metrics_all)
+        with c1:
+            metric = keyed_selectbox("Metric", metrics_all, "exp_metric", metrics_all[0])
         unit = defs.get(metric, {}).get("unit", "")
-        xlabel = c2.text_input("x label", value=f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else ""))
-        width = c3.selectbox("Width", ["single", "double", "ieee-single", "ieee-double"])
-        cap = st.text_input("Panel caption (bold, below)", value="", placeholder="b. Ablation", key="abl_cap")
+        with c2:
+            xlabel = keyed(st.text_input, "x label", "exp_xlabel", f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else ""))
+        with c3:
+            width = keyed_selectbox("Width", WIDTHS, "exp_width", "single")
+        cap = keyed(st.text_input, "Panel caption (bold, below)", "exp_panel", "", placeholder="b. Ablation")
         try:
             rows = agg.ablation_table(recs, metrics=[metric])
         except agg.AmbiguousBaseError as e:
@@ -206,57 +303,78 @@ def render() -> None:
         fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
                               xlabel=xlabel, width=width, caption=cap or None)
         _figure_block(fig, f"{stem}-ablation-{metric}", width)
+        pin({"metric": metric, "xlabel": xlabel, "width": width, "panel_label": cap or None})
 
-    elif kind == "Comparison figure":
+    elif kind == "comparison-figure":
         c1, c2, c3 = st.columns(3)
-        metric = c1.selectbox("Metric", metrics_all)
-        row_key = c2.selectbox("Bars", keys_present + config_keys, index=0)
+        with c1:
+            metric = keyed_selectbox("Metric", metrics_all, "exp_metric", metrics_all[0])
+        with c2:
+            row_key = keyed_selectbox("Bars", keys_present + config_keys, "exp_rows", "method")
         col_opts = ["none"] + [k for k in keys_present + config_keys if k != row_key]
-        col_key = c3.selectbox("x groups", col_opts, index=col_opts.index("dataset") if "dataset" in col_opts else 0)
+        with c3:
+            col_key = keyed_selectbox("x groups", col_opts, "exp_cols", "dataset" if "dataset" in col_opts else "none")
         unit = defs.get(metric, {}).get("unit", "")
         c1, c2, c3 = st.columns(3)
-        ylabel = c1.text_input("y label", value=f"{metric} ({unit})" if unit else metric)
-        width = c2.selectbox("Width", ["single", "double", "ieee-single", "ieee-double"])
+        with c1:
+            ylabel = keyed(st.text_input, "y label", "exp_ylabel", f"{metric} ({unit})" if unit else metric)
+        with c2:
+            width = keyed_selectbox("Width", WIDTHS, "exp_width", "single")
         pt = agg.pivot_table(recs, row_key, None if col_key == "none" else col_key, metrics=[metric], higher_is_better=hib)
-        emph = c3.multiselect("Emphasize (proposed)", [str(r) for r in pt.rows], default=[])
+        with c3:
+            emph = keyed_multiselect("Emphasize (proposed)", [str(r) for r in pt.rows], "exp_emph", [])
         k1, k2, k3 = st.columns(3)
-        zero = k1.checkbox("y axis from 0", value=False, help="Default is data-tight; say which in the caption.")
-        hatch = k2.checkbox("Hatch bars", value=False, help="Grayscale print safety.")
-        cap = k3.text_input("Panel caption", value="", placeholder="a. PSNR", key="cmp_cap")
+        with k1:
+            zero = keyed(st.checkbox, "y axis from 0", "exp_zero", False, help="Default is data-tight; say which in the caption.")
+        with k2:
+            hatch = keyed(st.checkbox, "Hatch bars", "exp_hatch", False, help="Grayscale print safety.")
+        with k3:
+            cap = keyed(st.text_input, "Panel caption", "exp_panel", "", placeholder="a. PSNR")
         fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, emphasize=emph, zero_based=zero, hatch=hatch,
                                 caption=cap or None, row_labels=agg.method_labels(recs) if row_key == "method" else None)
         _figure_block(fig, f"{stem}-{metric}", width)
+        pin({"metric": metric, "rows": row_key, "cols": None if col_key == "none" else col_key, "ylabel": ylabel, "width": width,
+             "emphasize": emph, "zero_based": zero, "hatch": hatch, "panel_label": cap or None})
 
-    elif kind == "Visual comparison figure":
+    elif kind == "visual-figure":
         with_art = [r for r in recs if r.get("artifacts_dir")]
         if not with_art:
             st.info("No runs in this experiment have an `artifacts_dir`.")
             return
         c1, c2, c3, c4 = st.columns(4)
         datasets = list(dict.fromkeys(r["dataset"] for r in with_art if r.get("dataset") is not None))
-        dataset = c1.selectbox("Dataset", datasets) if datasets else None
+        with c1:
+            dataset = keyed_selectbox("Dataset", datasets, "exp_vdataset", datasets[0]) if datasets else None
         pool = [r for r in with_art if dataset is None or r.get("dataset") == dataset]
         seeds = sorted({r["seed"] for r in pool if r.get("seed") is not None})
-        row_opts = ["— none —"] + (["seed"] if len(seeds) > 1 else []) + [f"config.{k}" for k in agg.varying_config_keys(pool)]
-        rows_by = c2.selectbox("Rows", row_opts)
-        rows_by = None if rows_by == "— none —" else rows_by
-        seed = c3.selectbox("Seed", seeds) if seeds and rows_by != "seed" else None
-        vmode = c4.radio("Mode", ["Reconstruction", "Error maps"], horizontal=True)
+        row_opts = [NONE] + (["seed"] if len(seeds) > 1 else []) + [f"config.{k}" for k in agg.varying_config_keys(pool)]
+        with c2:
+            rows_by = keyed_selectbox("Rows", row_opts, "exp_vrows", NONE)
+        rows_by = None if rows_by == NONE else rows_by
+        with c3:
+            seed = keyed_selectbox("Seed", seeds, "exp_vseed", seeds[0]) if seeds and rows_by != "seed" else None
+        with c4:
+            vmode = keyed_radio("Mode", ["Reconstruction", "Error maps"], "exp_vmode", "Reconstruction", horizontal=True)
         files = list_image_files(r["artifacts_dir"] for r in pool)
         roles = guess_roles(files)
         with st.expander("Files and zoom", expanded=False):
             f1, f2, f3 = st.columns(3)
-            none = "— none —"
-            image = f1.selectbox("Reconstruction", files, index=files.index(roles["reconstruction"]) if roles["reconstruction"] in files else 0)
-            reference = f2.selectbox("Ground truth", [none] + files, index=([none] + files).index(roles["reference"]) if roles["reference"] else 0)
-            measurement = f3.selectbox("Measurement", [none] + files, index=([none] + files).index(roles["measurement"]) if roles["measurement"] else 0)
+            with f1:
+                image = keyed_selectbox("Reconstruction", files, "exp_vimage", roles["reconstruction"] or (files[0] if files else None))
+            with f2:
+                reference = keyed_selectbox("Ground truth", [NONE] + files, "exp_vref", roles["reference"] or NONE)
+            with f3:
+                measurement = keyed_selectbox("Measurement", [NONE] + files, "exp_vmeas", roles["measurement"] or NONE)
             z1, z2, z3 = st.columns(3)
-            zoom = z1.checkbox("Zoom inset", value=True, disabled=vmode == "Error maps")
-            zf = z2.slider("Box side fraction", 0.1, 0.6, ZOOM_FRACTION, 0.05)
-            zc = z3.slider("Box centre (x = y)", 0.0, 1.0, 0.5, 0.05)
+            with z1:
+                zoom = keyed(st.checkbox, "Zoom inset", "exp_vzoom", True, disabled=vmode == "Error maps")
+            with z2:
+                zf = keyed(st.slider, "Box side fraction", "exp_vzf", ZOOM_FRACTION, min_value=0.1, max_value=0.6, step=0.05)
+            with z3:
+                zc = keyed(st.slider, "Box centre (x = y)", "exp_vzc", 0.5, min_value=0.0, max_value=1.0, step=0.05)
         try:
             vr = make_visual(recs, defs, experiment=experiment, dataset=dataset, seed=seed, image=image,
-                             reference=None if reference == none else reference, measurement=None if measurement == none else measurement,
+                             reference=None if reference == NONE else reference, measurement=None if measurement == NONE else measurement,
                              mode="error" if vmode == "Error maps" else "image", zoom=zoom, zoom_fraction=zf, zoom_center=(zc, zc),
                              rows=rows_by, width="double", auto_roles=False)
         except ValueError as e:
@@ -271,8 +389,11 @@ def render() -> None:
         st.write(vr.spec.caption_stub())
         st.download_button("Download provenance JSON", json.dumps(asdict(vr.spec), indent=2, default=str),
                            file_name=f"{vstem}.json", mime="application/json")
+        pin({"dataset": dataset, "seed": seed, "image": image, "reference": None if reference == NONE else reference,
+             "measurement": None if measurement == NONE else measurement, "mode": "error" if vmode == "Error maps" else "image",
+             "zoom": zoom, "zoom_fraction": zf, "zoom_center": [zc, zc], "rows": rows_by, "width": "double"})
 
-    elif kind == "Runs (CSV)":
+    elif kind == "runs-csv":
         text = runs_csv(recs_all)
         st.caption(f"{len(recs_all)} runs (including failed), config keys and metrics as columns.")
         lines = text.splitlines()
@@ -281,15 +402,17 @@ def render() -> None:
         st.markdown(generic_html(header, body, caption=f"First {len(body)} of {len(recs_all)} rows of the runs CSV.", left_cols=3),
                     unsafe_allow_html=True)
         st.download_button("Download CSV", text, file_name=f"{stem}-runs.csv", mime="text/csv")
+        pin({})
 
-    elif kind == "Paper bundle (zip)":
+    elif title == BUNDLE:
         cat = load_catalog()
         exps = [e for e in cat["experiments"] if e["project"] == project]
         c1, c2 = st.columns(2)
         width = c1.selectbox("Quantitative figure width", ["single", "double"])
         with_visual = c2.checkbox("Include qualitative image figures", value=True)
-        st.caption(f"Regenerates every table, figure and CSV for **{project}** ({len(exps)} experiments) from the database, "
-                   "with the preamble and a provenance manifest. Nothing is typed by hand.")
+        st.caption(f"Regenerates a default table, figure and CSV for every experiment of **{project}** ({len(exps)} experiments), "
+                   "with the preamble and a provenance manifest. For the manuscript's own pinned tables and figures use the Paper page "
+                   "or `results-tracker export paper`.")
         if st.button("Build bundle", type="primary"):
             experiments = {e["experiment"]: (e["type"], load_records(project, e["experiment"])) for e in exps}
             with st.spinner("Rendering tables and figures…"):

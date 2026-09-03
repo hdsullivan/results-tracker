@@ -11,7 +11,8 @@ from ..export.figures import ablation_figure, figure_bytes, figure_tex, to_grays
 
 from .. import aggregate as agg
 from .charts import ablation_deltas
-from .common import active_where, fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db, sidebar_filter, where_text
+from .common import (active_where, fmt_for, hib_map, load_metric_defs, load_records, pin_to_paper, select_project_experiment,
+                     sidebar_db, sidebar_filter, where_text)
 from .run_detail import run_label
 from .tables import ablation_html, figure_caption_html, generic_html
 
@@ -29,7 +30,8 @@ def render() -> None:
     if not recs:
         st.info("No runs in this experiment.")
         return
-    recs = agg.completed(sidebar_filter(recs))
+    all_recs = sidebar_filter(recs)
+    recs = agg.completed(all_recs)
     if not recs:
         if not active_where():
             st.info("No completed runs in this experiment.")
@@ -133,6 +135,9 @@ def render() -> None:
 
     from ..export.latex import ablation_latex
 
+    pin_to_paper({"ablation-table": {"metrics": metrics, "base_run_id": base_opts[base_choice]},
+                  "ablation-figure": {"metric": metric, "base_run_id": base_opts[base_choice], "width": "single"}},
+                 records=all_recs, key="abl_pin")
     with st.expander("LaTeX (booktabs table + figure snippet)"):
         st.code(ablation_latex(rows, metrics, defs), language="latex")
         st.code(figure_tex(f"figures/{experiment}-ablation-{metric}.pdf", label=f"fig:{experiment}-ablation", width="single"),

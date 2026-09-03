@@ -12,7 +12,8 @@ results-tracker demo --db demo.db --reset --artifacts demo_artifacts
 results-tracker recipe demo --db toy.db --reset --artifacts toy_artifacts --write-specs specs   # recipe-layer demo
 results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back to a free port)
 results-tracker export table -e main-comparison --db demo.db
-results-tracker export bundle -p demo-paper -o /tmp/bundle.zip --db demo.db   # all paper assets at once
+results-tracker export bundle -p demo-paper -o /tmp/bundle.zip --db demo.db   # a default table/figure per experiment
+results-tracker export paper -p demo-paper -o paper_assets --db demo.db        # the pinned paper assets (Paper page / asset list)
 python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Chrome + websocket-client
 ```
 
@@ -31,8 +32,12 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 - `importer.py` — CSV / JSON bulk import with a one-time column mapping and duplicate skipping.
 - `export/latex.py`, `export/figures.py`, `export/visual.py`, `export/csv.py`, `export/bundle.py` — paper exports
   (tables, quantitative figures, qualitative image grids, CSV). `figures.py` also holds `figure_tex` / `ieee_preamble`.
+  `export/paper.py` — the paper layer: `Asset` rows (models.py) are specs `{kind, experiment, filters, options}` pinned
+  from GUI views; `render_asset` renders one from records, `render_paper`/`write_paper` regenerate a project's assets into
+  stable file names, `records_fingerprint`/`staleness` tell when the data moved under an export.
   `visual.py` ports `adaptivePnP/.../utils/deblur_figures.py` (zoom inset, metric stamp, error colour bar, GT block).
-- `ui/` — Streamlit pages; `ui/common.py` holds cached loaders and sidebar selectors; `ui/charts.py` (Plotly)
+- `ui/` — Streamlit pages; `ui/common.py` holds cached loaders, sidebar selectors, the keyed-widget helpers and the
+  `pin_to_paper` expander; `ui/paper.py` lists and exports the pinned assets; `ui/charts.py` (Plotly)
   and `ui/tables.py` (HTML in the IEEEtran/booktabs look) mirror the export styling on screen.
 - `recipe/` — `knobs.py` (declared parameter spaces), `core.py` (`Method`, `Problem`, `Instance`, `Estimate`, registry),
   `study.py` (`Study` spec, `expand`, resumable `run_study` that calls `log_run`), `toy.py` (numpy phantom deblurring,

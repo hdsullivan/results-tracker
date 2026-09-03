@@ -26,7 +26,7 @@ from ..export.visual import (
     make_visual,
     panel_metrics_rows,
 )
-from .common import active_where, load_metric_defs, load_records, select_project_experiment, sidebar_db, sidebar_filter
+from .common import active_where, load_metric_defs, load_records, pin_to_paper, select_project_experiment, sidebar_db, sidebar_filter
 from .tables import figure_caption_html, generic_html
 
 NONE = "— none —"
@@ -170,6 +170,12 @@ def _comparison(i: int, *, recs, defs, experiment, dataset, pool, image, referen
     d2.download_button("Download PDF", figure_bytes(vr.fig, "pdf"), file_name=f"{stem}.pdf", mime="application/pdf", key=key + "pdf")
     d3.download_button("Download provenance JSON", json.dumps(asdict(vr.spec), indent=2, default=str),
                        file_name=f"{stem}.json", mime="application/json", key=key + "json")
+    pin_to_paper({"visual-figure": {"dataset": dataset, "seed": seed, "instance": instance, "image": image, "reference": reference,
+                                    "measurement": measurement, "kernel": kernel, "methods": methods or None, "metrics": list(metrics),
+                                    "mode": "error" if mode == "Error maps" else "image", "zoom": zoom, "zoom_fraction": zoom_fraction,
+                                    "zoom_center": list(zoom_center), "crop_box": list(crop_box) if crop_box else None, "rows": row_key,
+                                    "width": width, "data_range": data_range}},
+                 records=recs, key=key + "pin", suggested_label=f"fig:{stem.replace('-visual', '')}"[:60], caption=None)
 
     # --- panel metrics: logged vs recomputed from the shown image (single-row figures)
     if not row_key:

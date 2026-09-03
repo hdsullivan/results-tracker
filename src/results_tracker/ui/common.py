@@ -7,9 +7,8 @@ writes the same `st.session_state` entries, and they are mirrored into the URL q
 
 from __future__ import annotations
 
-import json
 import os
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Sequence
 
 import streamlit as st
 
@@ -109,6 +108,34 @@ def _take_query_params() -> None:
             st.session_state[KEY_WHERE] = {k: (list(v) if isinstance(v, list) else [v]) for k, v in agg.parse_where(items).items()}
         except ValueError:
             st.session_state[KEY_WHERE] = {}
+    if qp.get("asset"):
+        open_asset(qp.get("asset"), project=qp.get("project"))
+        del qp["asset"]  # consumed: the session now carries the selection, and edits must not be undone on rerun
+
+
+def open_asset(label: str, project: Optional[str] = None) -> bool:
+    """Make a pinned asset the current selection: its project, experiment and filter, plus a prefill of the
+    Export page's widgets with its options (see export.prefill_from_asset). Returns False if unknown."""
+    from ..api import get_asset, list_assets
+
+    engine = engine_for(db_path())
+    a = get_asset(project, label, engine=engine) if project else next((x for x in list_assets(engine=engine) if x.label == label), None)
+    if a is None:
+        return False
+    if not project:
+        from ..api import list_projects
+
+        project = {p.id: p.name for p in list_projects(engine=engine)}[a.project_id]
+    from .export import prefill_from_asset
+
+    ss = st.session_state
+    ss[KEY_PROJECT], ss[KEY_EXPERIMENT] = project, a.experiment
+    ss[KEY_WHERE] = {k: (list(v) if isinstance(v, (list, tuple)) else [v]) for k, v in (a.filters or {}).items()}
+    for k in [k for k in ss if k == "where_fields" or str(k).startswith("where_value_")]:
+        del ss[k]  # the filter widgets reseed from KEY_WHERE
+    ss["_prefill"] = prefill_from_asset(a)
+    ss["opened_asset"] = (a.label, a.experiment)
+    return True
 
 
 def _sync_query_params() -> None:
@@ -130,6 +157,18 @@ def _sync_query_params() -> None:
             qp[k] = v
 
 
+def page_url(page: str, **params: Any) -> str:
+    """A relative link to another page of this GUI carrying the selection: `export?db=…&project=…&asset=…`.
+    Following a link starts a new Streamlit session, so everything the target needs must be in the URL; the
+    database is included only when it is not the default one."""
+    from urllib.parse import urlencode
+
+    db = st.session_state.get(KEY_DB)
+    query = {"db": db} if db and db != _default_db() else {}
+    query.update({k: v for k, v in params.items() if v is not None})
+    return f"{page}?{urlencode(query)}" if query else page
+
+
 # --------------------------------------------------------------------------- sidebar: database, selection
 
 def sidebar_db() -> str:
@@ -145,6 +184,22 @@ def sidebar_db() -> str:
     return db_path()
 
 
+def select_project() -> Optional[str]:
+    """Sidebar project selector, shared by every page and mirrored into the URL. None when the database is empty."""
+    cat = load_catalog()
+    projects = [p["name"] for p in cat["projects"]]
+    with st.sidebar:
+        if not projects:
+            st.info("No projects yet. Run `results-tracker demo` or log a run.")
+            return None
+        _take_query_params()
+        current = st.session_state.get(KEY_PROJECT)
+        project = st.selectbox("Project", projects, index=projects.index(current) if current in projects else 0)
+        st.session_state[KEY_PROJECT] = project
+        _sync_query_params()
+        return project
+
+
 def select_project_experiment(
     types: Optional[tuple[str, ...]] = None, prefer: Optional[str] = None
 ) -> tuple[Optional[str], Optional[str]]:
@@ -153,22 +208,16 @@ def select_project_experiment(
     `types` restricts the list to those experiment types; `prefer` lists experiments of that type first so
     the page opens on a sensible default. The choice is shared by every page and mirrored into the URL.
     """
+    project = select_project()
+    if project is None:
+        return None, None
     cat = load_catalog()
-    projects = [p["name"] for p in cat["projects"]]
     with st.sidebar:
-        if not projects:
-            st.info("No projects yet. Run `results-tracker demo` or log a run.")
-            return None, None
-        _take_query_params()
-        current = st.session_state.get(KEY_PROJECT)
-        project = st.selectbox("Project", projects, index=projects.index(current) if current in projects else 0)
-        st.session_state[KEY_PROJECT] = project
         exps = [e for e in cat["experiments"] if e["project"] == project and (types is None or e["type"] in types)]
         if prefer:
             exps.sort(key=lambda e: e["type"] != prefer)
         if not exps:
             st.info("No experiments of this type in the project.")
-            _sync_query_params()
             return project, None
         names = [e["experiment"] for e in exps]
         labels = [f"{e['experiment']}  ({e['type']})" for e in exps]
@@ -182,12 +231,7 @@ def select_project_experiment(
 
 # --------------------------------------------------------------------------- sidebar: where filter
 
-def _fmt_value(v: Any) -> str:
-    if v is None:
-        return "(none)"
-    if isinstance(v, float):
-        return f"{v:g}"
-    return str(v)
+_fmt_value = agg.fmt_value
 
 
 def _distinct(records: Iterable[Record], field: str) -> list[Any]:
@@ -207,13 +251,56 @@ def filter_fields(records: list[Record]) -> list[str]:
     return fields
 
 
-def _keyed_multiselect(label: str, options: list[str], key: str, seed: list[str], help: Optional[str] = None) -> list[str]:
+def _take_seed(key: str, seed: Any) -> tuple[Any, bool]:
+    """(value, forced): a pending prefill for `key` (from an opened asset) wins over the stored widget state."""
+    pre = st.session_state.get("_prefill") or {}
+    if key in pre:
+        return pre.pop(key), True
+    return seed, False
+
+
+def keyed_multiselect(label: str, options: list[Any], key: str, seed: Sequence[Any] = (), **kw) -> list[Any]:
     """A multiselect whose state lives under `key`, seeded from `seed` the first time it appears and pruned to
     `options` afterwards. Keyed widgets keep their identity across reruns, so clearing a value never resets
     the widget; Streamlit drops the key when a page without the widget is shown, and the seed brings it back."""
     ss = st.session_state
-    ss[key] = [o for o in (ss[key] if key in ss else seed) if o in options]
-    return st.multiselect(label, options, key=key, help=help)
+    val, forced = _take_seed(key, seed)
+    current = list(val or ()) if (forced or key not in ss) else list(ss[key])
+    ss[key] = [o for o in current if o in options]
+    return st.multiselect(label, options, key=key, **kw)
+
+
+def keyed_selectbox(label: str, options: list[Any], key: str, seed: Any = None, **kw) -> Any:
+    """A selectbox with stable identity under `key`; an invalid stored value falls back to the first option."""
+    ss = st.session_state
+    val, forced = _take_seed(key, seed)
+    current = val if (forced or key not in ss) else ss[key]
+    if options:
+        ss[key] = current if current in options else options[0]
+    else:
+        ss.pop(key, None)
+    return st.selectbox(label, options, key=key, **kw)
+
+
+def keyed_radio(label: str, options: list[Any], key: str, seed: Any = None, **kw) -> Any:
+    ss = st.session_state
+    val, forced = _take_seed(key, seed)
+    current = val if (forced or key not in ss) else ss[key]
+    ss[key] = current if current in options else options[0]
+    return st.radio(label, options, key=key, **kw)
+
+
+def keyed(widget, label: str, key: str, seed: Any, **kw) -> Any:
+    """Any other keyed widget (text_input, text_area, checkbox, number_input, slider): `widget(label, key=key, **kw)`
+    with its state seeded on first appearance or from a pending prefill."""
+    ss = st.session_state
+    val, forced = _take_seed(key, seed)
+    if forced or key not in ss:
+        ss[key] = val
+    return widget(label, key=key, **kw)
+
+
+_keyed_multiselect = keyed_multiselect
 
 
 def sidebar_filter(records: list[Record]) -> list[Record]:
@@ -257,37 +344,64 @@ def active_where() -> Where:
 
 def where_text(where: Optional[Where] = None) -> str:
     """Human form of the filter: `dataset = Set12 · config.K ∈ {2, 5}`."""
-    where = active_where() if where is None else where
-    parts = []
-    for k, vs in where.items():
-        vs = list(vs) if isinstance(vs, (list, tuple, set)) else [vs]
-        parts.append(f"{k} = {_fmt_value(vs[0])}" if len(vs) == 1 else f"{k} ∈ {{{', '.join(_fmt_value(v) for v in vs)}}}")
-    return " · ".join(parts)
-
-
-def _cli_value(v: Any) -> str:
-    if isinstance(v, str):
-        try:
-            json.loads(v)
-        except ValueError:
-            return v  # plain word: parse_where keeps it as a string
-        return json.dumps(v)  # looks like a number/bool: quote it so it stays a string
-    return json.dumps(v, separators=(",", ":"))
+    return agg.where_text(active_where() if where is None else where)
 
 
 def where_items(where: Optional[Where] = None) -> list[str]:
-    """The filter as `field=value` items for `--where` and the URL (`agg.parse_where` inverts this)."""
-    where = active_where() if where is None else where
-    items = []
-    for k, vs in where.items():
-        vs = list(vs) if isinstance(vs, (list, tuple, set)) else [vs]
-        items.append(f"{k}={_cli_value(vs[0]) if len(vs) == 1 else _cli_value(vs)}")
-    return items
+    """The filter as `field=value` items for `--where` and the URL."""
+    return agg.where_items(active_where() if where is None else where)
 
 
 def where_cli() -> str:
     """`--where 'a=1' --where 'b=[2,3]'` for the active filter, or an empty string."""
-    return " ".join(f"--where '{it}'" for it in where_items())
+    return agg.where_cli(active_where())
+
+
+# --------------------------------------------------------------------------- pin to paper
+
+def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], key: str,
+                 suggested_label: Optional[str] = None, caption: Optional[str] = None) -> None:
+    """An expander that saves the current view as a paper asset (models.Asset) of the selected project.
+
+    `choices` maps asset kind -> rendering options for that kind (one entry, or several to pick from). The
+    asset is pinned to the current experiment and filter; `records` are the runs behind the view (for the
+    fingerprint). `caption` fixes the manuscript caption; otherwise a text area asks for one.
+    """
+    from ..api import get_asset, save_asset
+    from ..export.paper import KIND_TITLES, default_label, records_fingerprint
+
+    ss = st.session_state
+    project, experiment = ss.get(KEY_PROJECT), ss.get(KEY_EXPERIMENT)
+    if not project or not experiment or not choices:
+        return
+    opened = ss.get("opened_asset")
+    opened_label = opened[0] if opened and opened[1] == experiment else None
+    kinds = list(choices)
+    with st.expander("📌 Pin to paper" + (f" — {KIND_TITLES[kinds[0]]}" if len(kinds) == 1 else ""), expanded=False):
+        kind = kinds[0] if len(kinds) == 1 else keyed_selectbox("As", kinds, f"{key}_kind", kinds[0], format_func=KIND_TITLES.get)
+        engine = engine_for(db_path())
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            label = keyed(st.text_input, "LaTeX label", f"{key}_label", opened_label or suggested_label or default_label(kind, experiment),
+                          help="tab:… for tables, fig:… for figures; also the file name under tables/ or figures/").strip()
+        existing = get_asset(project, label, engine=engine) if label else None
+        with c2:
+            status = keyed_selectbox("Status", ["planned", "draft", "final"], f"{key}_status",
+                                     existing.status.value if existing and existing.status.value != "dropped" else "planned")
+        if caption is None:
+            caption = keyed(st.text_area, "Caption in the manuscript (blank = auto-generated)", f"{key}_caption",
+                            existing.caption if existing else "", height=70)
+        where = active_where()
+        st.caption(f"Renders **{experiment}**" + (f" with filter {where_text(where)}" if where else "") + f" as {KIND_TITLES[kind]}"
+                   + (f". `{label}` exists ({existing.kind} of {existing.experiment}); pinning replaces what it renders." if existing else "."))
+        with st.expander("Options that will be saved"):
+            st.json(choices[kind])
+        if st.button("Pin", key=f"{key}_button", disabled=not label, type="primary"):
+            save_asset(project, label, kind=kind, experiment=experiment, options=choices[kind], filters=where,
+                       caption=caption if caption is not None else None, status=status,
+                       fingerprint=records_fingerprint(records), engine=engine)
+            ss["opened_asset"] = (label, experiment)
+            st.success(f"Pinned `{label}`. It is listed on the Paper page; `results-tracker export paper -p {project}` renders it.")
 
 
 def fmt_for(defs: dict[str, dict[str, Any]], metric: str) -> str:

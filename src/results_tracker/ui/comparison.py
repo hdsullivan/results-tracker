@@ -10,8 +10,8 @@ import streamlit as st
 from .. import aggregate as agg
 from .charts import comparison_bars
 from .tables import comparison_html, flat_html
-from .common import (active_where, fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db,
-                     sidebar_filter, where_text)
+from .common import (active_where, fmt_for, hib_map, load_metric_defs, load_records, pin_to_paper, select_project_experiment,
+                     sidebar_db, sidebar_filter, where_text)
 
 BASE_KEYS = ["method", "dataset", "instance", "seed"]
 
@@ -86,6 +86,10 @@ def render() -> None:
     buf = io.StringIO()
     df.to_csv(buf, index=False)
     st.download_button("Download CSV", buf.getvalue(), file_name=f"{experiment}-comparison.csv", mime="text/csv")
+    if len(group_by) <= 2:
+        pin_to_paper({"comparison-table": {"rows": group_by[0], "cols": group_by[1] if len(group_by) == 2 else None,
+                                           "metrics": metrics, "std": "pm" if show_std else "none"}},
+                     records=recs, key="cmp_pin")
 
     st.subheader("Chart")
     metric = st.selectbox("Metric", metrics, key="chart_metric")
