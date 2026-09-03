@@ -1,0 +1,435 @@
+<title>Results Tracker Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #fdfcf9;
+    --ink: #1b1d22;
+    --ink-soft: #3d424b;
+    --muted: #6b7280;
+    --rule: #cfd3da;
+    --hair: #e6e8ec;
+    --accent: #1f77b4;
+    --accent-soft: #e6f0f8;
+    --code-bg: #f3f4f6;
+    --warn: #b7791f;
+    --serif: "Source Serif 4", "Times New Roman", Times, Georgia, serif;
+    --mono: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #15171b; --ink: #e8e6e1; --ink-soft: #c9c7c1; --muted: #9aa0aa; --rule: #4a4f58; --hair: #2b2f36;
+      --accent: #6aaee0; --accent-soft: #1d2b39; --code-bg: #1e2126; --warn: #d9a441;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #15171b; --ink: #e8e6e1; --ink-soft: #c9c7c1; --muted: #9aa0aa; --rule: #4a4f58; --hair: #2b2f36;
+    --accent: #6aaee0; --accent-soft: #1d2b39; --code-bg: #1e2126; --warn: #d9a441;
+  }
+  html { color-scheme: light dark; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--serif); font-size: 17px; line-height: 1.55;
+         margin: 0; padding: 0 20px; font-variant-numeric: oldstyle-nums; }
+  main { max-width: 68ch; margin: 0 auto; padding: 48px 0 96px; }
+  header.front { border-bottom: 2px solid var(--ink); padding-bottom: 20px; margin-bottom: 36px; }
+  .eyebrow { font-variant: small-caps; letter-spacing: 0.12em; font-size: 0.82rem; color: var(--muted); margin: 0 0 6px; }
+  h1 { font-size: 2.35rem; line-height: 1.1; font-weight: 700; margin: 0 0 12px; text-wrap: balance; letter-spacing: -0.01em; }
+  .lede { font-size: 1.15rem; color: var(--ink-soft); margin: 0 0 10px; text-wrap: pretty; }
+  .meta { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); margin: 0; }
+  h2 { font-size: 1.55rem; font-weight: 700; line-height: 1.2; margin: 56px 0 8px; text-wrap: balance; letter-spacing: -0.005em; }
+  h2 .num { color: var(--accent); font-variant-numeric: lining-nums; margin-right: 0.45em; }
+  h3 { font-size: 1.12rem; font-weight: 600; margin: 30px 0 6px; text-wrap: balance; }
+  p { margin: 0 0 14px; text-wrap: pretty; }
+  ul, ol { margin: 0 0 14px; padding-left: 1.3em; }
+  li { margin: 0 0 5px; }
+  li > ul { margin-top: 4px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code, kbd { font-family: var(--mono); font-size: 0.84em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre { font-family: var(--mono); font-size: 0.8rem; line-height: 1.5; background: var(--code-bg); border-left: 3px solid var(--accent);
+        padding: 12px 16px; margin: 10px 0 18px; overflow-x: auto; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .idea { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 22px; margin: 22px 0 26px; padding: 16px 0 6px;
+          border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+  .idea h3 { margin: 0 0 4px; font-size: 1rem; font-variant: small-caps; letter-spacing: 0.06em; }
+  .idea p { font-size: 0.93rem; color: var(--ink-soft); margin: 0; }
+  .idea code { font-size: 0.78em; }
+  .tablewrap { overflow-x: auto; margin: 12px 0 22px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; font-variant-numeric: tabular-nums lining-nums; }
+  caption { caption-side: top; text-align: left; font-variant: small-caps; letter-spacing: 0.06em; font-size: 0.8rem; color: var(--muted);
+            padding: 0 0 6px; }
+  thead th { text-align: left; font-weight: 600; border-top: 1.5px solid var(--ink); border-bottom: 1px solid var(--ink); padding: 6px 10px 6px 0; }
+  tbody td { vertical-align: top; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--hair); }
+  tbody tr:last-child td { border-bottom: 1.5px solid var(--ink); }
+  td code, th code { white-space: nowrap; }
+  .note { border-left: 3px solid var(--warn); padding: 8px 14px; margin: 14px 0 18px; color: var(--ink-soft); font-size: 0.95rem;
+          background: transparent; }
+  .note strong { color: var(--ink); }
+  .page-hint { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); border: 1px solid var(--rule); padding: 8px 12px;
+               margin: 0 0 28px; }
+  .steps li { margin-bottom: 8px; }
+  figure.flow { margin: 18px 0 22px; }
+  figure.flow svg { width: 100%; height: auto; display: block; }
+  figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
+  footer { margin-top: 56px; padding-top: 14px; border-top: 1px solid var(--rule); font-size: 0.85rem; color: var(--muted); }
+  @media (max-width: 640px) { .idea { grid-template-columns: 1fr; gap: 14px; } body { font-size: 16px; } }
+  @media print {
+    @page { size: A4; margin: 18mm 18mm 20mm; }
+    :root { --paper: #fff; --ink: #000; --ink-soft: #222; --muted: #555; --rule: #999; --hair: #ccc; --accent: #1f77b4;
+            --code-bg: #f2f2f2; --warn: #8a5a00; }
+    html { color-scheme: light; }
+    body { font-size: 11pt; padding: 0; }
+    main { max-width: none; padding: 0; }
+    .page-hint { display: none; }
+    h2 { break-before: page; margin-top: 0; }
+    h2.first { break-before: auto; }
+    h3, caption, thead { break-after: avoid; }
+    pre, table, .idea, .note, figure { break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+    a[href^="http"]::after { content: " (" attr(href) ")"; font-family: var(--mono); font-size: 0.8em; color: var(--muted); }
+    pre { font-size: 8.5pt; }
+    table { font-size: 9.5pt; }
+  }
+</style>
+
+<main>
+<header class="front">
+  <p class="eyebrow">results-tracker · user guide</p>
+  <h1>Plan, run and publish a paper's experiments from one database</h1>
+  <p class="lede">A guide to wiring results-tracker into an existing research repository and using its GUI as the dashboard for
+    planning studies, tracking what has run, comparing results, and pinning the tables and figures that go into the manuscript.</p>
+  <p class="meta">results-tracker 1.x · branch recipe-layer · September 2026 · companion to docs/INTEGRATION.md and docs/RECIPES.md</p>
+</header>
+
+<p class="page-hint">Print with your browser's Print → Save as PDF. Each numbered section starts on a new page.</p>
+
+<h2 class="first"><span class="num">0</span>Three ideas</h2>
+<p>Everything in the tracker is built from three objects. Once these are clear, every page and command is a view of one of them.</p>
+<div class="idea">
+  <div><h3>Run</h3><p>One execution of one method on one dataset, optionally one instance (image) and one seed, with a
+    <code>config</code> dict of every knob and a <code>metrics</code> dict of the numbers you would put in a table. Runs live in
+    <em>experiments</em>; experiments in a <em>project</em> (one per paper).</p></div>
+  <div><h3>Study</h3><p>A planned experiment as data: which problem, which grid of conditions, which method arms, and either a swept knob
+    or a full model plus single-knob ablation arms. A JSON file in <code>studies/</code>; the runner turns it into runs and resumes when
+    interrupted.</p></div>
+  <div><h3>Asset</h3><p>One table or figure of the manuscript, pinned from a GUI view: experiment, filter and rendering options. The Paper
+    page lists them, says when their data moved, and <code>export paper</code> regenerates all of them into stable file names.</p></div>
+</div>
+<p>The experiment <em>type</em> only decides how runs are grouped on screen: a <strong>comparison</strong> is methods × metrics,
+  a <strong>sweep</strong> is one metric against one knob, an <strong>ablation</strong> is every single-knob change against the full model.
+  Nothing else is declared up front; methods, datasets and metrics are created the first time they are logged.</p>
+
+<figure class="flow" aria-label="Workflow from repository to manuscript">
+<svg viewBox="0 0 760 150" xmlns="http://www.w3.org/2000/svg" role="img">
+  <g font-family="Source Serif 4, Georgia, serif" font-size="13" fill="currentColor" style="color: var(--ink)">
+    <rect x="8" y="30" width="130" height="58" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="73" y="54" text-anchor="middle" font-weight="600">Declare</text>
+    <text x="73" y="72" text-anchor="middle" font-size="11.5" fill="var(--muted)">Method · Problem · knobs</text>
+    <rect x="164" y="30" width="130" height="58" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="229" y="54" text-anchor="middle" font-weight="600">Plan</text>
+    <text x="229" y="72" text-anchor="middle" font-size="11.5" fill="var(--muted)">study specs (Studies page)</text>
+    <rect x="320" y="30" width="130" height="58" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="385" y="54" text-anchor="middle" font-weight="600">Run</text>
+    <text x="385" y="72" text-anchor="middle" font-size="11.5" fill="var(--muted)">recipe run → runs in SQLite</text>
+    <rect x="476" y="30" width="130" height="58" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="541" y="54" text-anchor="middle" font-weight="600">Look</text>
+    <text x="541" y="72" text-anchor="middle" font-size="11.5" fill="var(--muted)">tables, sweeps, curves …</text>
+    <rect x="632" y="30" width="120" height="58" rx="3" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+    <text x="692" y="54" text-anchor="middle" font-weight="600" fill="var(--accent)">Publish</text>
+    <text x="692" y="72" text-anchor="middle" font-size="11.5" fill="var(--muted)">pin → export paper</text>
+    <g stroke="currentColor" stroke-width="1.2" fill="currentColor">
+      <line x1="138" y1="59" x2="160" y2="59"/><polygon points="160,55 166,59 160,63"/>
+      <line x1="294" y1="59" x2="316" y2="59"/><polygon points="316,55 322,59 316,63"/>
+      <line x1="450" y1="59" x2="472" y2="59"/><polygon points="472,55 478,59 472,63"/>
+      <line x1="606" y1="59" x2="628" y2="59"/><polygon points="628,55 634,59 628,63"/>
+    </g>
+    <path d="M 385 88 L 385 118 L 692 118 L 692 92" fill="none" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="538" y="134" text-anchor="middle" font-size="11.5" fill="var(--muted)">new runs → the Paper page marks affected assets stale</text>
+  </g>
+</svg>
+<figcaption>Fig. 1. The loop the GUI supports. Steps 1 to 6 of this guide follow it in order.</figcaption>
+</figure>
+
+<h2><span class="num">1</span>Connect an existing repository</h2>
+<p>Budget about an hour: install, decide where the database lives, instrument the one place your script already has the config,
+  the metrics and the output folder, then import whatever results you already have.</p>
+<h3>1.1 Install into the environment your experiments run in</h3>
+<pre><code>pip install -e ~/Documents/Research/results-tracker        # logging API only needs SQLModel
+pip install -e "~/Documents/Research/results-tracker[ui]"   # adds Streamlit, Plotly, pandas, matplotlib</code></pre>
+<p>The GUI can live in a different environment from the experiments (a plain <code>.venv</code> without torch); section 2.3
+  explains how it still plans studies. One SQLite file per paper, next to the manuscript, works well:</p>
+<pre><code>export RESULTS_TRACKER_DB=~/Documents/Research/adaptivePnP-paper-workspace/results.db
+results-tracker init</code></pre>
+<h3>1.2 Declare metrics and methods once</h3>
+<pre><code>results-tracker metric define psnr --unit dB --fmt .2f
+results-tracker metric define nrmse --lower --fmt .4f
+results-tracker method define dpir --label 'DPIR~\cite{zhang2021}' --baseline --position 1
+results-tracker method define adaptive_pnp --label AdaptivePnP --position 9   # ours: last row</code></pre>
+<p>Direction decides what is bold, unit and format appear in every header and cell, labels carry the citation, and
+  <em>position</em> fixes the row order of every table. All of this is also editable on the <strong>Settings</strong> page.</p>
+<h3>1.3 Instrument the script</h3>
+<p>The only call you need is <code>log_run</code>. Log the whole config, not just the varied knob, because ablations are computed
+  as config diffs and a knob you did not log cannot be diffed. Metrics are numbers; put flags in <code>config</code>.</p>
+<pre><code>from results_tracker import log_run
+
+log_run("deblur-main", project="adaptive-pnp", experiment_type="comparison",
+        method=method, dataset="CBSD68", instance=f"img{idx:02d}", seed=seed,
+        config={"K": K, "lambda": lam, "kernel": kernel, "noise": noise, "denoiser": denoiser},
+        metrics={"psnr": psnr, "ssim": ssim, "runtime_s": t},
+        artifacts_dir=str(out_dir))          # reconstruction.png, ground_truth.png, measurement.png</code></pre>
+<p>Re-running a script is safe: a run with the same experiment, method, dataset, instance, seed and config is a duplicate
+  <em>setting</em> and is skipped, so <em>n</em> never inflates. Tag the full model of an ablation with <code>tags=["base"]</code>;
+  change exactly one config key per variant.</p>
+<h3>1.4 Import what you already have</h3>
+<pre><code>results-tracker import paper_results/metrics.csv -e deblur-main -p adaptive-pnp \
+    --method-col method --dataset-col dataset --instance-col image_idx --seed-col seed \
+    --config-col K --config-col kernel_idx --config-col noise_level --dry-run     # then without --dry-run
+results-tracker import reported_baselines.csv -e deblur-main -p adaptive-pnp --source reported</code></pre>
+<p>Numbers copied from a paper go in as <code>source=reported</code>: they appear with <em>n</em> = 1 and no std, the audit
+  lists the datasets they do not cover, and they get hollow markers in trade-off plots.</p>
+<h3>1.5 Open the GUI</h3>
+<pre><code>results-tracker ui                       # uses $RESULTS_TRACKER_DB; falls back to a free port if 8501 is busy</code></pre>
+<p>The browser tab title names the database file. The sidebar has the database (with a dropdown of recently opened ones),
+  the project, the experiment, the pooled experiments and the filter; these are one selection shared by every page and mirrored in
+  the URL, so a view can be bookmarked or pasted into notes.</p>
+
+<h2><span class="num">2</span>Declare what the repository can run</h2>
+<p>The recipe layer lets the repository describe its methods and problems once, so comparisons, sweeps and ablations become
+  specs instead of hand-written grid loops. A <strong>Method</strong> reconstructs; its behaviour is fully described by the knobs it
+  declares. A <strong>Problem</strong> poses instances under conditions (kernel, noise, dose) and scores estimates.</p>
+<h3>2.1 A method and a problem</h3>
+<pre><code>from results_tracker.recipe import Method, Problem, Knob, Estimate, Instance, registry
+
+@registry.method
+class AdaptivePnP(Method):
+    key, label, citation = "adaptive_pnp", "AdaptivePnP", ""
+    knobs = (Knob("algorithm", "choice", "pgm", choices=("pgm", "admm")),
+             Knob("K", "int", 20, bounds=(1, 500), doc="iteration budget"),
+             Knob("beta", "float", 0.5, bounds=(0.0, 1.0), doc="EMA weight"),
+             Knob("reg_strength", "float", 1.0, bounds=(0.1, 10.0), log=True),
+             Knob("denoiser", "choice", "drunet", choices=("drunet", "dncnn_blind")))
+    def setup(self, problem, config):            # once per study per distinct setup_key
+        return load_denoiser(config["denoiser"])
+    def reconstruct(self, instance, config, state):
+        x_hat, info = pnp_recon(instance.measurement, instance.forward, state, **config)
+        return Estimate(x_hat, {"iterations": info["iters"], "curves": info["curves"]})
+
+@registry.problem
+class Deblurring(Problem):
+    key = "deblurring"
+    conditions = (Knob("kernel", "int", 0, bounds=(0, 11)), Knob("noise", "float", 0.03, bounds=(0.0, 0.2)))
+    splits = ("test", "validation")
+    metric_definitions = {"psnr": ("dB", True, ".2f"), "ssim": ("", True, ".3f")}
+    def dataset_name(self, split): return "CBSD68" if split == "test" else "DIV2K"
+    def instances(self, condition, split, n, seed): ...   # yield Instance(name, measurement, reference, forward)
+    def metrics(self, estimate, instance): ...</code></pre>
+<p>Everything that changes a result is a knob; a knob that is set but not declared is an error. Numeric scalars in
+  <code>diagnostics</code> become metrics of the run; a <code>curves</code> dict of per-iteration lists goes to the run's
+  <code>diagnostics.json</code>, which the <strong>Curves</strong> page reads. The condition goes into every run's
+  <code>config</code> next to the method's knobs, so tables can group by <code>config.kernel</code> and ablations pool over it.</p>
+<h3>2.2 Check the declarations</h3>
+<pre><code>results-tracker recipe knobs adaptive_pnp -i adaptivepnp.recipes
+results-tracker recipe validate studies/deblurring/compare-K5.json          # lists the jobs, runs nothing</code></pre>
+<h3>2.3 Let the GUI plan without the compute environment</h3>
+<p>The GUI's environment often lacks torch or the data. Write the declarations next to the specs, from the environment that
+  has them; the Studies page reads <code>knobs.json</code> whenever a spec's imports fail there.</p>
+<pre><code>conda run -n adaptivePnP results-tracker recipe export-knobs -i adaptivepnp.recipes -o studies/knobs.json</code></pre>
+
+<h2><span class="num">3</span>Plan studies</h2>
+<p>A study spec is a JSON file under the project's studies directory (set it once on Settings → Project, or
+  <code>$RESULTS_TRACKER_STUDIES</code>, else <code>studies/</code> next to the database). The <strong>Studies</strong> page reads
+  every spec there and compares it with the database.</p>
+<pre><code>{
+  "name": "deblurring-ema-beta",  "kind": "sweep",  "project": "adaptive-pnp",
+  "problem": "deblurring",  "imports": ["adaptivepnp.recipes"],
+  "conditions": {"kernel": [0, 1, 2, 3], "noise": [0.03, 0.05]},
+  "methods": [{"method": "adaptive_pnp", "config": {"algorithm": "admm"}}],
+  "sweep": {"knob": "beta", "values": [0.0, 0.25, 0.5, 0.75, 1.0]},
+  "split": "test",  "n_instances": 20,  "seeds": [0, 1],
+  "feeds": ["fig:beta"],                              # the paper assets this study produces data for
+  "artifacts_dir": "results/tracker_artifacts"
+}</code></pre>
+<div class="tablewrap"><table>
+<caption>Table I. Study kinds</caption>
+<thead><tr><th>kind</th><th>extra field</th><th>what <code>expand</code> produces</th><th>page that shows it</th></tr></thead>
+<tbody>
+<tr><td><code>comparison</code></td><td>—</td><td>one job per method arm</td><td>Comparison, Visual, Trade-off</td></tr>
+<tr><td><code>sweep</code></td><td><code>sweep: {knob, values}</code></td><td>one job per arm × value</td><td>Sweep (metric against the knob)</td></tr>
+<tr><td><code>ablation</code></td><td><code>ablation: {base, arms}</code></td><td>the full model (tagged <code>base</code>) plus one job per arm;
+  an arm is <code>{knob: value}</code> or <code>{"label", "set": {…}}</code> for a joint change</td><td>Ablation</td></tr>
+</tbody></table></div>
+<p>Every job runs on every instance of every condition and seed. A study over the whole kernel × noise grid that sweeps one knob is a
+  <em>sweep</em>, not an ablation: the Sweep page plots the metric against the knob and pools or splits the conditions.</p>
+<h3>3.1 What the Studies page shows</h3>
+<ul>
+  <li><strong>Progress per spec:</strong> jobs, runs done / expected, failed, running, a progress bar, and
+    <strong>time left</strong> (pending runs × the median <code>runtime_s</code> of the study's completed runs). The page sums the
+    compute left over unfinished studies.</li>
+  <li><strong>The grid:</strong> arms down, conditions across, each cell coloured done / running / partial / failed / missing.
+    Completed is derived from the database with the same config fingerprint the runner's resume uses, so page and runner never disagree.</li>
+  <li><strong>Feeds:</strong> which paper assets the study produces data for; the Paper page shows each asset's readiness from this.</li>
+  <li><strong>Pending-only spec:</strong> a download of the spec narrowed to the unfinished part of its grid, to hand the rest to another
+    machine that can reach the same database file. It resumes, so nothing is recomputed.</li>
+  <li><strong>Edit / Clone:</strong> loads the spec into the form below, under its own file name or as a copy for the K = 2 / 5 / 10 family.</li>
+</ul>
+<h3>3.2 Planning a new study in the form</h3>
+<ol class="steps">
+  <li>Name, kind, project, problem, split, instances per job, seeds, description, and the asset labels it feeds.</li>
+  <li>Conditions: one value or a comma-separated list per condition knob; the grid is their product.</li>
+  <li>Method arms: pick the method, open its knobs, change only what differs from the defaults (only those are written to the spec).</li>
+  <li>For a sweep, the swept knob and its values; for an ablation, one or several knobs per arm from widgets, with a label for a joint change.</li>
+  <li>Read the job count, check the spec preview, <em>Save spec</em>. The page prints the command to run it.</li>
+</ol>
+
+<h2><span class="num">4</span>Run studies</h2>
+<pre><code>results-tracker recipe run studies/deblurring-ema-beta.json --db paper/results.db
+results-tracker recipe run studies/deblurring-ema-beta-pending.json --db paper/results.db   # the pending-only spec</code></pre>
+<p>Running is resumable: settings already logged as completed are skipped, failed ones are recomputed, and a crash or a
+  non-finite estimate becomes a <em>failed</em> run with the message in its notes while the grid keeps going. While a setting computes,
+  a <em>running</em> row stands in for it, so the Overview and the Studies grid show work in flight; a hard crash leaves that row
+  visible instead of nothing. The runner never deletes anything.</p>
+<p>Where things land: one run per instance in the database; images and <code>diagnostics.json</code> under
+  <code>&lt;artifacts_dir&gt;/&lt;study&gt;/&lt;method&gt;/&lt;arm&gt;/&lt;condition&gt;/&lt;seed&gt;/&lt;instance&gt;/</code>; without an artifacts
+  folder the diagnostics still go to <code>&lt;database&gt;.diagnostics/</code>. The runner also records the study's description and
+  swept knob on the experiment, which the Sweep page and the Overview headline default to.</p>
+<div class="note"><strong>Two machines.</strong> The database is one SQLite file. Run where that file lives, or on a filesystem both
+  machines can reach reliably; the pending-only spec is how you split a grid. The GUI can open the file read-mostly at the same time
+  and picks up new runs on <em>Refresh</em>.</div>
+<p>From a <code>run_study</code> call in Python you can also pass <code>problem_options</code> (device, data root: machine facts that stay out
+  of the run config), <code>provenance</code> (a dependency's commit, appended to every run's notes) and <code>observers</code> that fire
+  after each logged run.</p>
+
+<h2><span class="num">5</span>Look at results</h2>
+<p>Every experiment page loads the selected experiment, applies the sidebar <strong>filter</strong>, and drops failed runs from the
+  numbers (they are counted on the Overview). The filter has the CLI's <code>--where</code> grammar, so anything you see can be
+  reproduced on the command line: <code>--where 'config.noise=0.01' --where 'config.K=[2,5]'</code>.</p>
+<div class="tablewrap"><table>
+<caption>Table II. Pages</caption>
+<thead><tr><th>page</th><th>shows</th><th>watch for</th></tr></thead>
+<tbody>
+<tr><td>Overview</td><td>experiments with stage, run counts, headline per experiment, recent runs (ids link to Run detail), notes</td>
+  <td>failed and running counts; the paper line (pinned, final, stale)</td></tr>
+<tr><td>Comparison</td><td>methods × metrics, mean ± std, best bold, second underlined; bar chart; <em>Per instance</em>: box plots,
+  instance × method table, instances ranked by your gain over a baseline</td>
+  <td>the coverage audit: rows pooled over different datasets are not comparable</td></tr>
+<tr><td>Sweep</td><td>metric against the study's swept knob, one line per arm or condition, band or error bars, heatmap for two knobs;
+  plateau and sensitivity; <em>Selection</em>: winner per group with a boundary flag</td>
+  <td>a winner at a grid edge means widen the grid, not "tuned"</td></tr>
+<tr><td>Ablation</td><td>✓/✗ matrix per variant, deltas, effect sizes with verdicts (clear / likely / within noise)</td>
+  <td>"within noise" means run more seeds or drop the claim</td></tr>
+<tr><td>Visual</td><td>ground truth | measurement | baselines → proposed, zoom insets, error maps, several comparisons stacked</td>
+  <td>panel metrics recomputed from the images and compared with the logged numbers</td></tr>
+<tr><td>Curves</td><td>a per-iteration diagnostic (PSNR, step size, σ̂/σ) averaged over runs, lines per arm or condition, normalised</td>
+  <td>the band: a wide one usually means a diverging condition is pooled in</td></tr>
+<tr><td>Trade-off</td><td>two metrics against each other, one series per method joined along K, hollow markers for baselines and reported</td>
+  <td>log x for runtime</td></tr>
+<tr><td>Run detail</td><td>one run: metrics, config, diff against another run, artifacts as a figure strip, logs; delete with confirmation</td>
+  <td><code>?run=&lt;id&gt;</code> in the URL opens a run directly</td></tr>
+</tbody></table></div>
+<h3>5.1 Three habits that make tables honest</h3>
+<ul>
+  <li><strong>Pool deliberately.</strong> With several datasets the Comparison page keeps dataset as a row key by default. When you pool
+    experiments with <em>Also include experiments</em> (the main table with K across columns from three studies), group by
+    <code>experiment</code> or the config key that differs.</li>
+  <li><strong>Name your groupings.</strong> A <em>value map</em> (Settings → Value maps) derives a labelled field from a raw one:
+    <code>config.kernel</code> 0–3 → isotropic, 4–7 → anisotropic, 8–11 → motion becomes <code>derived.kernel_type</code>, usable as a row,
+    column or filter key everywhere; columns follow the rule order.</li>
+  <li><strong>Read the caption.</strong> Every on-screen table and figure carries an IEEE-style caption stating the aggregation unit,
+    <em>n</em>, and what is pooled. If the caption surprises you, the table will surprise a reviewer.</li>
+</ul>
+
+<h2><span class="num">6</span>Publish the paper</h2>
+<p>Under every table and figure is a <strong>Pin to paper</strong> expander. It saves the current view as an asset: experiment,
+  pooled experiments, filter and rendering options, with a LaTeX label (<code>tab:main</code>, <code>fig:beta</code>), a status and a caption.
+  Pinning the same label again replaces what it renders and marks the old export as no longer current.</p>
+<div class="tablewrap"><table>
+<caption>Table III. Asset kinds and where they are pinned</caption>
+<thead><tr><th>kind</th><th>pinned on</th><th>file</th></tr></thead>
+<tbody>
+<tr><td>comparison-table, ablation-table, sweep-table, selection-table</td><td>Comparison, Ablation, Sweep, Export</td><td><code>tables/&lt;label&gt;.tex</code> (booktabs, provenance comment with the filter)</td></tr>
+<tr><td>sweep-figure, ablation-figure, comparison-figure</td><td>Sweep, Ablation, Export</td><td><code>figures/&lt;label&gt;.pdf</code> + <code>.tex</code> snippet</td></tr>
+<tr><td>visual-figure</td><td>Visual, Export</td><td>PDF + snippet + <code>.json</code> provenance (every panel's source file)</td></tr>
+<tr><td>curves-figure, tradeoff-figure, distribution-figure</td><td>Curves, Trade-off, Comparison → Per instance</td><td>PDF + snippet</td></tr>
+<tr><td>runs-csv</td><td>Export</td><td><code>data/&lt;label&gt;.csv</code></td></tr>
+</tbody></table></div>
+<h3>6.1 The Paper page</h3>
+<p>Assets in manuscript order with kind, status (planned / draft / final / dropped), experiments, filter, <strong>Data</strong>
+  (completed / planned runs of the studies that feed it) and <strong>State</strong>: never exported, current, or <em>stale</em> when
+  runs were added or replaced since the export. Edit status, order, label, caption and notes; <em>Open in …</em> restores the view
+  on the page that configures it; <em>Write to directory</em> or a zip renders everything.</p>
+<pre><code>results-tracker export paper -p adaptive-pnp -o paper/assets      # tables/, figures/, data/, preamble.tex, MANIFEST.json
+results-tracker asset list -p adaptive-pnp                         # which assets are stale
+results-tracker asset set fig:beta -p adaptive-pnp --status final</code></pre>
+<p>In the manuscript, <code>\input{tables/tab-main}</code> and <code>\includegraphics{figures/fig-beta}</code>; the Makefile has one target.
+  Never edit numbers in the generated files: every <code>.tex</code> starts with a provenance comment (database, experiment, run count,
+  filter, timestamp) and a re-export replaces it.</p>
+<pre><code>assets:
+	results-tracker export paper -p $(P) -o assets</code></pre>
+
+<h2><span class="num">7</span>Keep the project organised</h2>
+<ul>
+  <li><strong>Stages.</strong> Settings → Experiments marks an experiment <em>paper</em>, <em>exploratory</em> or <em>superseded</em>.
+    Superseded experiments leave every selector unless a sidebar checkbox shows them, so old attempts stop cluttering the menus without
+    being deleted (<code>results-tracker experiment set NAME -p P --stage superseded</code>).</li>
+  <li><strong>Notes.</strong> A dated line per decision on the Overview ("beta = 0.5 chosen: plateau in deblurring-ema-beta"), or attached
+    to an asset on the Paper page so the reasoning sits next to the table it justifies (<code>results-tracker note add</code>).</li>
+  <li><strong>Method order and primary metric.</strong> Settings → Methods fixes the row order of every table; Settings → Project sets the
+    metric the Overview headline and default figures use, and the project's studies directory.</li>
+  <li><strong>One database per paper,</strong> committed with the manuscript at the submitted revision; specs in <code>studies/</code>,
+    committed with the code. Method keys are stable identifiers; display labels can change without touching runs.</li>
+</ul>
+
+<h2><span class="num">8</span>A working week</h2>
+<ol class="steps">
+  <li><strong>Monday.</strong> Studies page: what is planned, what is done, how much compute is left. Clone last week's spec for the next K,
+    save, run it where the GPU is.</li>
+  <li><strong>While it runs.</strong> Overview shows running rows; Curves shows whether the new arm behaves per iteration; a diverging
+    condition shows up as a wide band and a 6 dB row on the Sweep page long before the grid finishes.</li>
+  <li><strong>When it finishes.</strong> Sweep → Selection picks the tuned value and writes it into the comparison spec; Comparison →
+    Per instance ranks the images for the qualitative figure; Visual builds it with the same instance on every panel.</li>
+  <li><strong>Before the meeting.</strong> Pin the views that will be in the paper, set their status, add a note with the decision.
+    <code>export paper</code>, rebuild the manuscript, and read the Paper page: nothing stale, everything final.</li>
+  <li><strong>Before submission.</strong> The audit on every table shows all cells present or the gaps are explained in the text; every
+    claimed ablation component is <em>clear</em>; the sweep plateau matches the chosen default; panel metrics agree with the tables;
+    <code>MANIFEST.json</code> goes in the supplementary material.</li>
+</ol>
+
+<h2><span class="num">9</span>Reference</h2>
+<div class="tablewrap"><table>
+<caption>Table IV. Command-line summary</caption>
+<thead><tr><th>task</th><th>command</th></tr></thead>
+<tbody>
+<tr><td>open the GUI</td><td><code>results-tracker ui --db results.db</code></td></tr>
+<tr><td>define a metric / method</td><td><code>metric define psnr --unit dB</code> · <code>method define dpir --label … --baseline --position 1</code></td></tr>
+<tr><td>import results</td><td><code>import metrics.csv -e EXP -p PROJ --config-col K --dry-run</code></td></tr>
+<tr><td>declarations for the GUI</td><td><code>recipe export-knobs -i pkg.recipes -o studies/knobs.json</code></td></tr>
+<tr><td>check / run a study</td><td><code>recipe validate spec.json</code> · <code>recipe run spec.json --db results.db</code></td></tr>
+<tr><td>quick tables in the terminal</td><td><code>table -e EXP --by method</code> · <code>sweep -e EXP --param beta --metric psnr</code> · <code>ablation -e EXP</code></td></tr>
+<tr><td>one export</td><td><code>export table -e EXP --cols derived.kernel_type --where 'config.noise=0.01' -o t.tex</code></td></tr>
+<tr><td>the paper</td><td><code>export paper -p PROJ -o paper/assets</code> · <code>asset list|set|rm</code></td></tr>
+<tr><td>value maps</td><td><code>valuemap set kernel_type -p PROJ --field config.kernel --rule 'isotropic = 0-3' --rule 'motion = 8-11'</code></td></tr>
+<tr><td>organise</td><td><code>experiment set EXP -p PROJ --stage superseded</code> · <code>note add "…" -p PROJ -e EXP</code></td></tr>
+<tr><td>remove a wrong run</td><td><code>delete 42</code> · <code>delete -e EXP --status failed</code></td></tr>
+</tbody></table></div>
+<div class="tablewrap"><table>
+<caption>Table V. Environment variables</caption>
+<thead><tr><th>variable</th><th>meaning</th></tr></thead>
+<tbody>
+<tr><td><code>RESULTS_TRACKER_DB</code></td><td>default database (else <code>./results.db</code>)</td></tr>
+<tr><td><code>RESULTS_TRACKER_STUDIES</code></td><td>studies directory for every project (a project's own setting wins)</td></tr>
+<tr><td><code>RESULTS_TRACKER_HOME</code></td><td>where the GUI keeps its recent-databases list (default <code>~/.results-tracker</code>)</td></tr>
+</tbody></table></div>
+<div class="tablewrap"><table>
+<caption>Table VI. Troubleshooting</caption>
+<thead><tr><th>symptom</th><th>fix</th></tr></thead>
+<tbody>
+<tr><td>the GUI shows a kernel × noise heatmap for a sweep</td><td>the swept knob is unknown: run the study with the current runner, or keep the spec (same name) in the studies directory so the page reads the knob from it</td></tr>
+<tr><td>a spec is "not runnable" on the Studies page</td><td>its module cannot be imported in the GUI's environment: write <code>studies/knobs.json</code> with <code>recipe export-knobs</code> from the repo's environment</td></tr>
+<tr><td>a metric is ranked the wrong way</td><td>Settings → Metrics, or <code>metric define NAME --lower</code></td></tr>
+<tr><td>"ambiguous base" on the Ablation page</td><td>tag the full model's runs <code>base</code>, or pick the base run in the sidebar</td></tr>
+<tr><td>a page shows fewer runs than expected</td><td>check the sidebar filter (it applies on every page) and the superseded checkbox</td></tr>
+<tr><td>edits to the tracker's code do not show</td><td>restart <code>results-tracker ui</code>; a running Streamlit does not reload imported modules reliably</td></tr>
+<tr><td>the Paper page says stale</td><td>runs changed since the export: <em>Write to directory</em> again and rebuild the manuscript</td></tr>
+<tr><td>an older database</td><td>opening it adds any new columns automatically; nothing to migrate by hand</td></tr>
+</tbody></table></div>
+<footer>results-tracker guide · generated from the code on the <code>recipe-layer</code> branch, September 2026 · longer references:
+  <code>docs/INTEGRATION.md</code>, <code>docs/RECIPES.md</code>, <code>docs/GUI_ROADMAP.md</code>.</footer>
+</main>
