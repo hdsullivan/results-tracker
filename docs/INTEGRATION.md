@@ -258,6 +258,14 @@ results-tracker ui                         # uses $RESULTS_TRACKER_DB
 
 - **Overview** — is everything there? Failed runs are counted, not hidden. The
   "results at a glance" table is the paper's story in three lines.
+- **One selection for every page.** Project, experiment and the *Filter* in the
+  sidebar are shared: pick `deblur-main` with `config.noise = 0.01` on the
+  Comparison page and the Sweep, Visual, Run detail and Export pages show the
+  same runs. The selection is mirrored in the URL
+  (`?experiment=deblur-main&where=config.noise%3D0.01`), so a view can be
+  bookmarked or pasted into notes and slides. The filter has the CLI's `--where`
+  grammar (`config.K=[2,5]` means any of); the Export page prints the equivalent
+  flags and records the filter in every table's provenance comment.
 - **Comparison** — check the audit before trusting a table: `7/8 cells
   present, 1 missing` means a method was never run on a dataset, and "rows
   pooled over different datasets" means a pooled mean compares methods on
@@ -366,6 +374,7 @@ many runs — useful as a supplementary artifact.
 | The comparison table overflows the column | Follow the width hint: `--std small`, `--font footnotesize`, drop a metric, or `--env 'table*'` |
 | Wrong run logged | `results-tracker delete 42` (or `delete -e exp --status failed`), or the *Delete this run* expander on the Run detail page; both show what goes and ask first. Note the deletion in the commit message |
 | GUI shows stale data | Click *Refresh* in the sidebar (results are cached per database modification time) |
+| A page shows fewer runs than expected | Check the sidebar *Filter*: it applies on every page until cleared, and the caption says `n of m runs match` |
 | GUI shows a different database than the one you launched | Another GUI was already running; the launch says so and prints its own port. The browser tab title names the database file, and the sidebar *Database* box switches it |
 | Port 8501 busy | `results-tracker ui` picks the next free port and prints it |
 

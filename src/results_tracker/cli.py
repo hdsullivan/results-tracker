@@ -44,7 +44,7 @@ console = Console()
 err_console = Console(stderr=True)
 
 DbOpt = typer.Option(None, "--db", help="SQLite file (default: $RESULTS_TRACKER_DB or ./results.db).")
-WhereOpt = typer.Option([], "--where", help="Keep only runs with field=value, e.g. config.K=5 or method=dpir (repeatable; numbers compare numerically).")
+WhereOpt = typer.Option([], "--where", help="Keep only runs with field=value, e.g. config.K=5 or method=dpir (repeatable; numbers compare numerically; a JSON list such as config.K=[2,5] means any of).")
 
 
 def _parse_kv(items: list[str]) -> dict:

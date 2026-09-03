@@ -52,12 +52,14 @@ def test_comparison_page_table_and_chart(demo_db):
     assert "<b>" in md and 'class="ieee-paper"' in md  # IEEE-look table with a bolded best
     assert "PSNR (dB) ↑" in md
     # group by method and dataset -> dataset column groups (cmidrules)
-    at.sidebar.multiselect[0].set_value(["method", "dataset"]).run()
+    rows_box = [ms for ms in at.sidebar.multiselect if ms.label == "Rows grouped by"][0]
+    rows_box.set_value(["method", "dataset"]).run()
     assert not at.exception
     md = "\n".join(m.value for m in at.markdown)
     assert "<span>Set12</span>" in md and "<span>CBSD68</span>" in md
     # three keys -> flat layout
-    at.sidebar.multiselect[0].set_value(["method", "dataset", "seed"]).run()
+    rows_box = [ms for ms in at.sidebar.multiselect if ms.label == "Rows grouped by"][0]
+    rows_box.set_value(["method", "dataset", "seed"]).run()
     assert not at.exception
     assert "Ours / Set12 / 0" in "\n".join(m.value for m in at.markdown)
 
@@ -276,3 +278,74 @@ def test_studies_page_derives_progress_and_saves_new_specs(toy_studies_db):
     at = _run("studies")
     names = set(at.dataframe[0].value["experiment"])
     assert "smoke-plan" in names
+
+
+def _sidebar_multiselect(at, label):
+    return [ms for ms in at.sidebar.multiselect if ms.label == label][0]
+
+
+def test_selection_is_shared_and_mirrored_in_the_url(demo_db):
+    # the URL seeds the selection ...
+    at = AppTest.from_string("from results_tracker.ui import sweep\nsweep.render()\n", default_timeout=30)
+    at.query_params["experiment"] = "main-comparison"
+    at.run()
+    assert not at.exception
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    assert exp_box.value.startswith("main-comparison")
+    # ... a new choice is written back to the URL and to the shared session entry
+    exp_box.select([o for o in exp_box.options if o.startswith("lambda-sweep")][0]).run()
+    assert not at.exception
+    assert at.query_params["experiment"] == ["lambda-sweep"] and at.query_params["project"] == ["demo-paper"]
+    assert at.session_state["experiment_name"] == "lambda-sweep"
+    assert "db" not in at.query_params  # the default database is not spelled out
+    # ... and another page opens on the experiment chosen here
+    at2 = AppTest.from_string("from results_tracker.ui import export\nexport.render()\n", default_timeout=30)
+    at2.session_state["experiment_name"] = "main-comparison"
+    at2.session_state["project_name"] = "demo-paper"
+    at2.run()
+    assert not at2.exception
+    assert [sb for sb in at2.sidebar.selectbox if sb.label == "Experiment"][0].value.startswith("main-comparison")
+    assert at2.sidebar.radio[0].value == "Comparison table (LaTeX)"
+
+
+def test_where_filter_is_shared_and_matches_the_cli(demo_db):
+    at = _run("comparison")
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    fields = _sidebar_multiselect(at, "Filter on")
+    assert "dataset" in fields.options and "status" not in fields.options  # constant fields are not offered
+    assert "config.iters" in fields.options  # unset for the reported DPIR run, 50 elsewhere: that does vary
+    fields.set_value(["dataset"]).run()
+    assert not at.exception
+    _sidebar_multiselect(at, "dataset").set_value(["Set12"]).run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert "Set12" not in md or "CBSD68" not in md  # one dataset left -> no dataset column groups
+    caption = "\n".join(c.value for c in at.sidebar.caption) + "\n".join(c.value for c in at.caption)
+    assert "runs match · dataset = Set12" in caption and "filter: dataset = Set12" in caption
+    assert at.query_params["where"] == ["dataset=Set12"]  # same grammar as --where
+    assert at.session_state["where"] == {"dataset": ["Set12"]}
+    # the URL form is understood by the CLI parser and by another page
+    from results_tracker import aggregate as agg
+    assert agg.parse_where(at.query_params["where"]) == {"dataset": "Set12"}
+    at2 = AppTest.from_string("from results_tracker.ui import export\nexport.render()\n", default_timeout=30)
+    at2.query_params["experiment"] = "main-comparison"
+    at2.query_params["where"] = ["dataset=Set12", "method=[\"TV\",\"Ours\"]"]
+    at2.run()
+    assert not at2.exception
+    code = "\n".join(c.value for c in at2.code)
+    assert "Filter: --where 'dataset=Set12' --where 'method=[\"Ours\",\"TV\"]'" in code  # provenance comment
+    assert "PnP-BM3D" not in code and "TV [1]" in code
+    assert any("Filtered to" in c.value for c in at2.caption)
+    # a filter that leaves nothing is reported, not silently emptied
+    at3 = AppTest.from_string("from results_tracker.ui import sweep\nsweep.render()\n", default_timeout=30)
+    at3.query_params["experiment"] = "lambda-sweep"
+    at3.query_params["where"] = "config.lambda=[0.1,0.3]"
+    at3.run()
+    assert not at3.exception
+    assert any("6 of 15 runs match" in c.value for c in at3.sidebar.caption)  # 2 lambdas x 3 seeds, of 5 x 3 (one failed)
+    _sidebar_multiselect(at3, "config.lambda").set_value([]).run()
+    _sidebar_multiselect(at3, "Filter on").set_value(["seed"]).run()
+    _sidebar_multiselect(at3, "seed").set_value(["0"]).run()
+    assert not at3.exception
+    assert at3.query_params["where"] == ["seed=0"]

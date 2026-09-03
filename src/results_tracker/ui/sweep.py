@@ -13,7 +13,7 @@ from ..export.latex import sweep_latex
 from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
 from .tables import figure_caption_html, generic_html, sweep_html
-from .common import fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .common import active_where, fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db, sidebar_filter, where_text
 
 GROUP_KEYS = ["method", "dataset", "instance"]
 
@@ -24,11 +24,17 @@ def render() -> None:
     project, experiment = select_project_experiment(prefer="sweep")
     if experiment is None:
         return
-    recs = agg.completed(load_records(project, experiment))
+    recs = load_records(project, experiment)
     defs = load_metric_defs()
     if not recs:
-        st.info("No completed runs in this experiment.")
+        st.info("No runs in this experiment.")
         return
+    recs = agg.completed(sidebar_filter(recs))
+    if not recs:
+        if not active_where():
+            st.info("No completed runs in this experiment.")
+        return
+    filt = f" · filter: {where_text()}" if active_where() else ""
 
     all_keys = sorted({k for r in recs for k in agg.flatten(r["config"])})
     varying = agg.varying_config_keys(recs)
@@ -61,7 +67,7 @@ def render() -> None:
             st.warning("No runs have both parameters set.")
             return
         best = grid.best(hib)
-        st.caption(f"{experiment} · {len(recs)} runs · {metric} {arrow} over {param_x} × {param_y} · "
+        st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} over {param_x} × {param_y} · "
                    f"best at {param_x}={best[0]}, {param_y}={best[1]}: {grid.cells[best].format(fmt)}")
         st.plotly_chart(sweep_heatmap(grid.xs, grid.ys, grid.matrix(), param_x, param_y, metric, fmt, hib, best),
                         theme=None, width="stretch")
@@ -101,10 +107,10 @@ def render() -> None:
 
     if len(series) == 1:
         (g, s), = series.items()
-        st.caption(f"{experiment} · {len(recs)} runs · {metric} {arrow} vs {param_x} · "
+        st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} vs {param_x} · "
                    f"best {param_x} = **{best[g]}** ({dict(s)[best[g]].format(fmt)})")
     else:
-        st.caption(f"{experiment} · {len(recs)} runs · {metric} {arrow} vs {param_x} · best per line: " +
+        st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} vs {param_x} · best per line: " +
                    ", ".join(f"{' / '.join(map(str, g))} → {b}" for g, b in best.items()))
 
     st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best),

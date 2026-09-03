@@ -301,6 +301,9 @@ def test_parse_where_and_filter_records():
     assert agg.filter_records(recs, agg.parse_where(["method=b"])) == [recs[1]]
     assert agg.filter_records(recs, {"seed": 1}) == [recs[2]]
     assert agg.filter_records(recs, {"config.K": "10"}) == [recs[1]]  # string form of a number matches too
+    assert agg.filter_records(recs, {"method": ["b", "zzz"]}) == [recs[1]]  # a list value means any of
+    assert agg.parse_where(["config.K=[5,10]"]) == {"config.K": [5, 10]}  # the JSON list form of --where
+    assert agg.filter_records(recs, agg.parse_where(["config.K=[5,10]"])) == recs
     with pytest.raises(ValueError):
         agg.parse_where(["nonsense"])
 

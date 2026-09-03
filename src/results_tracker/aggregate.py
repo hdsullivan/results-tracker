@@ -81,7 +81,8 @@ def parse_where(items: Iterable[str]) -> dict[str, Any]:
     return out
 
 
-def _same_value(a: Any, b: Any) -> bool:
+def same_value(a: Any, b: Any) -> bool:
+    """Loose equality for filters: 5 matches 5.0 and '5'; True matches 'true'."""
     if isinstance(a, bool) or isinstance(b, bool):
         return a == b or str(a).lower() == str(b).lower()
     if isinstance(a, Number) and isinstance(b, Number):
@@ -93,10 +94,12 @@ def filter_records(records: Iterable[Record], where: Mapping[str, Any]) -> list[
     """Runs whose fields equal every value in `where`: method, dataset, seed, instance, status, config.<key>.
 
     Numbers compare numerically (5 matches 5.0); everything else by equality or by string form, so a
-    value typed on a command line matches the stored one."""
+    value typed on a command line matches the stored one. A list value keeps runs matching *any* of its
+    elements (`config.K=[2,5]`), which is how the GUI filter and a multi-valued `--where` are expressed."""
     recs = list(records)
     for k, v in where.items():
-        recs = [r for r in recs if _same_value(get_field(r, k), v)]
+        wanted = list(v) if isinstance(v, (list, tuple, set)) else [v]
+        recs = [r for r in recs if any(same_value(get_field(r, k), w) for w in wanted)]
     return recs
 
 

@@ -11,7 +11,7 @@ from ..export.figures import ablation_figure, figure_bytes, figure_tex, to_grays
 
 from .. import aggregate as agg
 from .charts import ablation_deltas
-from .common import fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .common import active_where, fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db, sidebar_filter, where_text
 from .run_detail import run_label
 from .tables import ablation_html, figure_caption_html, generic_html
 
@@ -24,10 +24,15 @@ def render() -> None:
     project, experiment = select_project_experiment(prefer="ablation")
     if experiment is None:
         return
-    recs = agg.completed(load_records(project, experiment))
+    recs = load_records(project, experiment)
     defs = load_metric_defs()
     if not recs:
-        st.info("No completed runs in this experiment.")
+        st.info("No runs in this experiment.")
+        return
+    recs = agg.completed(sidebar_filter(recs))
+    if not recs:
+        if not active_where():
+            st.info("No completed runs in this experiment.")
         return
     metrics_all = agg.metric_names(recs)
 
@@ -60,7 +65,8 @@ def render() -> None:
 
     # --- component matrix: which knobs each variant changed
     keys = sorted({k for r in rows for k in r.diff})
-    st.caption(f"{experiment} · {len(recs)} runs · {len(rows)} variants · {len(keys)} ablated settings · "
+    st.caption(f"{experiment} · {len(recs)} runs" + (f" · filter: {where_text()}" if active_where() else "")
+               + f" · {len(rows)} variants · {len(keys)} ablated settings · "
                f"**bold** = full model")
 
     st.markdown(ablation_html(rows, metrics, defs, relative=relative, number=1), unsafe_allow_html=True)

@@ -26,7 +26,7 @@ from ..export.visual import (
     make_visual,
     panel_metrics_rows,
 )
-from .common import load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .common import active_where, load_metric_defs, load_records, select_project_experiment, sidebar_db, sidebar_filter
 from .tables import figure_caption_html, generic_html
 
 NONE = "— none —"
@@ -43,9 +43,18 @@ def render() -> None:
     project, experiment = select_project_experiment(prefer="comparison")
     if experiment is None:
         return
-    recs = agg.completed(load_records(project, experiment))
+    recs = load_records(project, experiment)
     defs = load_metric_defs()
+    if not recs:
+        st.info("No runs in this experiment.")
+        return
+    recs = agg.completed(sidebar_filter(recs))
+    if not recs:
+        return
     with_art = [r for r in recs if r.get("artifacts_dir")]
+    if not with_art and active_where():
+        st.info("No completed run matching the filter has an `artifacts_dir`.")
+        return
     if not with_art:
         st.info("No runs in this experiment have an `artifacts_dir`. Log runs with `artifacts_dir=...` pointing at a "
                 "folder that holds the reconstruction images (same file name for every method).")

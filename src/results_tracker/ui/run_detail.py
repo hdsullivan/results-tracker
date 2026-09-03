@@ -10,7 +10,7 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..api import delete_runs
-from .common import db_path, engine_for, fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .common import db_path, engine_for, fmt_for, load_metric_defs, load_records, select_project_experiment, sidebar_db, sidebar_filter
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 LOG_EXT = {".log", ".txt", ".out", ".err"}
@@ -114,6 +114,9 @@ def render() -> None:
     defs = load_metric_defs()
     if not recs:
         st.info("No runs in this experiment.")
+        return
+    recs = sidebar_filter(recs)
+    if not recs:
         return
 
     by_id = {r["run_id"]: r for r in recs}

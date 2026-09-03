@@ -15,7 +15,8 @@ from ..export.figures import ablation_figure, comparison_figure, figure_bytes, f
 from typing import Optional
 
 from ..export.latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
-from .common import db_path, hib_map, load_catalog, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .common import (active_where, db_path, hib_map, load_catalog, load_metric_defs, load_records, select_project_experiment,
+                     sidebar_db, sidebar_filter, where_cli, where_text)
 from .tables import ablation_html, comparison_html, generic_html, sweep_html
 
 KINDS = ["Comparison table (LaTeX)", "Ablation table (LaTeX)", "Sweep table (LaTeX)",
@@ -67,15 +68,23 @@ def render() -> None:
     if experiment is None:
         return
     recs_all = load_records(project, experiment)
-    recs = agg.completed(recs_all)
     defs = load_metric_defs()
+    if not recs_all:
+        st.info("No runs in this experiment.")
+        return
+    recs_all = sidebar_filter(recs_all)
+    recs = agg.completed(recs_all)
     if not recs:
-        st.info("No completed runs in this experiment.")
+        if not active_where():
+            st.info("No completed runs in this experiment.")
         return
     exp_type = recs[0].get("experiment_type") or "comparison"
     metrics_all = agg.metric_names(recs)
     hib = hib_map(defs)
-    prov = provenance_note(db_path(), experiment, len(recs_all))
+    prov = provenance_note(db_path(), experiment, len(recs_all), extra=f"Filter: {where_cli()}" if active_where() else "")
+    if active_where():
+        st.caption(f"Filtered to {len(recs_all)} runs: {where_text()} · on the command line add `{where_cli()}`; "
+                   "the filter is recorded in the provenance comment of every table.")
 
     with st.sidebar:
         st.markdown("**Export**")

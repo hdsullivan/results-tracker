@@ -50,6 +50,11 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 - Metric direction lives in the `Metric` table; guessed from the name on first log, override with
   `results-tracker metric define`.
 - Streamlit widgets: use `width="stretch"` (not the deprecated `use_container_width`).
+- Experiment pages load records in a fixed order: `select_project_experiment` → `load_records` → `sidebar_filter`
+  → `agg.completed`. Project, experiment and the `where` filter live in `st.session_state` under the `KEY_*` names
+  in `ui/common.py` and are mirrored into `st.query_params`. Selectors are rendered from those values (`index=`),
+  filter multiselects through `_keyed_multiselect` (one key shared by every page, pruned to the current options
+  before rendering); never give a shared selector a per-page widget key, or the choice is lost on page switch.
 - Colours and chart style: both the GUI (`ui/charts.py`, Plotly) and the print exports
   (`export/figures.py`, matplotlib) follow the lab's paper style ported from
   `adaptivePnP-paper-workspace/.../utils/ablation_utils.py::set_paper_style` (tab10 colours, filled

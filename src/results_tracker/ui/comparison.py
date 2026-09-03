@@ -10,7 +10,8 @@ import streamlit as st
 from .. import aggregate as agg
 from .charts import comparison_bars
 from .tables import comparison_html, flat_html
-from .common import fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db
+from .common import (active_where, fmt_for, hib_map, load_metric_defs, load_records, select_project_experiment, sidebar_db,
+                     sidebar_filter, where_text)
 
 BASE_KEYS = ["method", "dataset", "instance", "seed"]
 
@@ -39,6 +40,9 @@ def render() -> None:
     if not recs:
         st.info("No runs in this experiment.")
         return
+    recs = sidebar_filter(recs)
+    if not recs:
+        return
 
     config_keys = sorted({k for r in recs for k in agg.flatten(r["config"])})
     all_metrics = agg.metric_names(recs)
@@ -65,6 +69,7 @@ def render() -> None:
 
     n_runs = len(pool)
     st.caption(f"{experiment} · {n_runs} completed runs" + (f" ({n_failed} failed excluded)" if n_failed else "")
+               + (f" · filter: {where_text()}" if active_where() else "")
                + " · mean ± std over everything not in the row key · **bold** best, <u>underlined</u> second", unsafe_allow_html=True)
     for msg in agg.coverage_audit(pool, group_by):
         st.warning("Rows are pooled over different " + msg)
