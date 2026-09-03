@@ -17,7 +17,15 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..export.figures import figure_bytes, figure_tex, to_grayscale_png
-from ..export.visual import ZOOM_FRACTION, build_panels, guess_roles, list_image_files, make_visual, panel_metrics_rows
+from ..export.visual import (
+    ZOOM_FRACTION,
+    build_panels,
+    convention_for,
+    guess_roles,
+    list_image_files,
+    make_visual,
+    panel_metrics_rows,
+)
 from .common import load_metric_defs, load_records, select_project_experiment, sidebar_db
 from .tables import figure_caption_html, generic_html
 
@@ -158,12 +166,13 @@ def _comparison(i: int, *, recs, defs, experiment, dataset, pool, image, referen
     if not row_key:
         chosen = agg.select_runs(pool_sel, methods=methods or None)
         panels, ref_panel, _ = build_panels(chosen, image, defs, metrics=metrics, reference=reference, data_range=data_range)
-        headers, rows, warns = panel_metrics_rows(chosen, panels, ref_panel, defs, metrics=metrics or ("psnr",))
+        conv = convention_for(chosen)
+        headers, rows, warns = panel_metrics_rows(chosen, panels, ref_panel, defs, metrics=metrics or ("psnr",), convention=conv)
         st.subheader("Panel metrics")
         st.markdown(generic_html(headers, rows, number=i, left_cols=1,
-                                 caption="Metrics of the shown images: as logged with the run, and PSNR (and SSIM, Gaussian window "
-                                         "σ = 1.5) recomputed from the displayed reconstruction against the ground truth (luminance, "
-                                         "10 px border dropped, data range 1). A gap flags a mismatch between the figure and the table."),
+                                 caption="Metrics of the shown images: as logged with the run, and " + conv.describe()
+                                         + " against the ground truth. A gap flags a mismatch between the figure and the table."
+                                         + (f" Convention recorded by the run: {conv.note}." if conv.note else "")),
                     unsafe_allow_html=True)
         for w in warns:
             st.warning(w)

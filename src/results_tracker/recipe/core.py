@@ -104,6 +104,9 @@ class Problem(ABC):
     metric_definitions: ClassVar[Mapping[str, tuple[str, bool, str]]] = {}
     #: shared display range for saved images; None = each image's own min/max (avoid for comparisons)
     display_range: ClassVar[Optional[tuple[float, float]]] = (0.0, 1.0)
+    #: how `metrics` computes PSNR/SSIM, so the Visual page's audit can recompute them the same way
+    #: (see `results_tracker.export.visual.MetricConvention`); None = the tracker's luminance default
+    metric_convention: ClassVar[Optional[dict[str, Any]]] = None
 
     @classmethod
     def condition_space(cls) -> KnobSpace:

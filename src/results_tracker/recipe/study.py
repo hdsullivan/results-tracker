@@ -392,7 +392,9 @@ def run_study(
                     problem.save_artifacts(run_dir, inst, est)
                 (run_dir / "diagnostics.json").write_text(json.dumps(
                     {"method": job.method, "arm": job.arm, "config": _to_plain(full_config), "ok": est.ok,
-                     "message": est.message, **rest}, indent=2, default=str))
+                     "message": est.message,
+                     **({"metric_convention": dict(problem.metric_convention)} if problem.metric_convention else {}),
+                     **rest}, indent=2, default=str))
                 artifacts = str(run_dir)
 
             notes = "; ".join(part for part in (est.message[:400], provenance_note) if part)

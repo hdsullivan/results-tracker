@@ -10,8 +10,8 @@ from results_tracker import aggregate as agg  # noqa: E402
 from results_tracker.export.figures import figure_tex, ieee_preamble, to_grayscale_png, figure_bytes  # noqa: E402
 from results_tracker.export.visual import (  # noqa: E402
     IEEE_TEXTWIDTH_IN, Panel, PanelRow, build_panels, build_rows, crop, error_map, list_image_files, load_image,
-    guess_roles, luminance, panel_metrics_rows, panel_psnr, panel_ssim, psnr, reconstruction_figure, save_visual, ssim,
-    zoom_region,
+    MetricConvention, convention_for, guess_roles, luminance, panel_metrics_rows, panel_psnr, panel_ssim, psnr,
+    reconstruction_figure, save_visual, score, ssim, ssim_uniform, zoom_region,
 )
 
 DEFS = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"}, "ssim": {"unit": "", "higher_is_better": True, "fmt": ".3f"}}
@@ -290,3 +290,48 @@ def test_panel_metrics_include_ssim_when_logged(art):
     headers, rows, warns = panel_metrics_rows(recs, panels, ref, DEFS, metrics=["psnr", "ssim"])
     assert headers[-2:] == ["SSIM (from image)", "Δ"] and all(len(r) == len(headers) for r in rows)
     assert any("SSIM" in w for w in warns)  # the fixture's invented ssim of 0.9 does not match the image
+
+
+def test_uniform_ssim_and_rgb_score_conventions():
+    rng = np.random.default_rng(3)
+    ref = rng.random((40, 40, 3))
+    same = ssim_uniform(ref[..., 0], ref[..., 0])
+    assert same == pytest.approx(1.0)
+    noisy = np.clip(ref + rng.normal(0, 0.05, ref.shape), 0, 1)
+    rgb_uniform = MetricConvention(channels="rgb", ssim_window="uniform", border=4)
+    p_rgb, s_rgb = score(noisy, ref, rgb_uniform)
+    p_lum, s_lum = score(noisy, ref, MetricConvention(border=4))
+    assert 20 < p_rgb < 40 and 0 < s_rgb < 1 and p_rgb != p_lum and s_rgb != s_lum
+    # rgb PSNR is the MSE over every channel of the border-cropped arrays
+    a, b = noisy[4:-4, 4:-4], ref[4:-4, 4:-4]
+    assert p_rgb == pytest.approx(10 * np.log10(1.0 / np.mean((a - b) ** 2)))
+    d = rgb_uniform.__dict__ | {"unknown": 1}
+    assert MetricConvention.from_dict(d) == rgb_uniform and "uniform 7×7" in rgb_uniform.describe()
+    assert MetricConvention.from_dict(None) == MetricConvention()
+
+
+def test_panel_audit_scores_the_recorded_convention_on_raw_arrays(art, tmp_path):
+    """A run that scored the unclipped RGB estimate with skimage's SSIM: the audit must reproduce it, not
+    the tracker's luminance/Gaussian default, and must read the raw array rather than the clipped PNG."""
+    _, all_recs = art
+    recs = [r for r in all_recs if r["method"] == "Ours"]
+    d = tmp_path / "Ours"
+    gt = load_image(d / "ground_truth.png")
+    gt_rgb = np.repeat(gt[..., None], 3, axis=2)
+    raw = gt_rgb + np.random.default_rng(1).normal(0, 0.03, gt_rgb.shape)  # unclipped: some values leave [0, 1]
+    assert raw.max() > 1.0
+    conv = MetricConvention(channels="rgb", ssim_window="uniform", border=4, source="reconstruction_raw.npy",
+                            reference_source="ground_truth_raw.npy", note="rgb uniform")
+    np.save(d / "reconstruction_raw.npy", raw.astype(np.float32))
+    np.save(d / "ground_truth_raw.npy", gt_rgb.astype(np.float32))
+    _png(d / "reconstruction.png", raw.mean(axis=2))
+    (d / "diagnostics.json").write_text(json.dumps({"metric_convention": conv.__dict__}))
+    p_logged, s_logged = score(raw.astype(np.float32), gt_rgb.astype(np.float32), conv)
+    recs[0]["metrics"] = {"psnr": p_logged, "ssim": s_logged}
+    assert convention_for(recs) == conv
+    panels, ref, _ = build_panels(recs, "reconstruction.png", DEFS, metrics=["psnr", "ssim"], reference="ground_truth.png")
+    headers, rows, warns = panel_metrics_rows(recs, panels, ref, DEFS, metrics=["psnr", "ssim"])
+    assert warns == [] and rows[0][3] == f"{p_logged:.2f}"
+    # the tracker default would disagree with those numbers (different channels, window, and the clipped PNG)
+    _, rows_default, warns_default = panel_metrics_rows(recs, panels, ref, DEFS, metrics=["psnr", "ssim"], convention=MetricConvention(border=4))
+    assert warns_default

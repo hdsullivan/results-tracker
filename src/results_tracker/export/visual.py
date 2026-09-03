@@ -696,6 +696,122 @@ def panel_ssim(img: np.ndarray, ref: np.ndarray, border: int = METRIC_BORDER_CRO
     return ssim(a[bc:a.shape[0] - bc, bc:a.shape[1] - bc], b[bc:b.shape[0] - bc, bc:b.shape[1] - bc], data_range)
 
 
+# --------------------------------------------------------------------------- metric conventions
+
+@dataclass
+class MetricConvention:
+    """How a run's logged PSNR/SSIM were computed, so the audit can recompute them the same way.
+
+    The tracker's default is luminance PSNR and Gaussian-window SSIM on the *shown* image. A repo that
+    scores differently (per-channel RGB, a uniform window, the unclipped float estimate) declares its
+    convention on its recipe `Problem` (`metric_convention`); the runner writes it into every run's
+    `diagnostics.json`, and `panel_metrics_rows` picks it up from there. `source` / `reference_source`
+    name array files in the run folder to score instead of the displayed PNG (e.g. the raw estimate)."""
+
+    channels: str = "luminance"  # luminance | rgb (per-channel, averaged; PSNR over all channels)
+    ssim_window: str = "gaussian"  # gaussian (sigma) | uniform (size x size, sample covariance, like skimage's default)
+    ssim_sigma: float = 1.5
+    ssim_size: int = 7
+    border: int = METRIC_BORDER_CROP
+    data_range: float = 1.0
+    source: Optional[str] = None
+    reference_source: Optional[str] = None
+    note: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Optional[Mapping[str, Any]]) -> "MetricConvention":
+        if not d:
+            return cls()
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    def describe(self) -> str:
+        chan = "luminance" if self.channels == "luminance" else "RGB, per channel"
+        win = f"Gaussian window σ = {self.ssim_sigma:g}" if self.ssim_window == "gaussian" else f"uniform {self.ssim_size}×{self.ssim_size} window"
+        src = f"the {self.source} array saved with the run" if self.source else "the displayed image"
+        return f"PSNR and SSIM ({chan}, {win}, {self.border} px border dropped, data range {self.data_range:g}) recomputed from {src}"
+
+
+def _crop_border(a: np.ndarray, border: int) -> np.ndarray:
+    if border <= 0 or min(a.shape[:2]) <= 2 * border + 2:
+        return a
+    return a[border:a.shape[0] - border, border:a.shape[1] - border]
+
+
+def _uniform_filter(x: np.ndarray, size: int) -> np.ndarray:
+    """Mean over size x size windows, 'valid' region, via cumulative sums (float64)."""
+    x = x.astype(np.float64)
+    c = np.cumsum(np.cumsum(np.pad(x, ((1, 0), (1, 0))), axis=0), axis=1)
+    return (c[size:, size:] - c[:-size, size:] - c[size:, :-size] + c[:-size, :-size]) / (size * size)
+
+
+def ssim_uniform(a: np.ndarray, b: np.ndarray, size: int = 7, data_range: float = 1.0) -> float:
+    """Mean SSIM of two 2-D arrays with a uniform window and sample covariance.
+
+    Exactly skimage.metrics.structural_similarity's default (win_size=7, gaussian_weights=False,
+    use_sample_covariance=True): local moments over the window, the N/(N-1) covariance factor, and the
+    (size-1)//2 border of the SSIM map dropped before averaging."""
+    a, b = a.astype(np.float64), b.astype(np.float64)
+    if a.shape != b.shape:
+        raise ValueError(f"shape mismatch {a.shape} vs {b.shape}")
+    if min(a.shape) < size:
+        raise ValueError(f"image too small for a {size}x{size} SSIM window")
+    n = size * size
+    cov_norm = n / (n - 1.0)
+    ux, uy = _uniform_filter(a, size), _uniform_filter(b, size)
+    uxx, uyy, uxy = _uniform_filter(a * a, size), _uniform_filter(b * b, size), _uniform_filter(a * b, size)
+    vx, vy, vxy = cov_norm * (uxx - ux * ux), cov_norm * (uyy - uy * uy), cov_norm * (uxy - ux * uy)
+    c1, c2 = (0.01 * data_range) ** 2, (0.03 * data_range) ** 2
+    s = ((2 * ux * uy + c1) * (2 * vxy + c2)) / ((ux**2 + uy**2 + c1) * (vx + vy + c2))
+    # skimage computes the map with 'reflect' padding then crops (size-1)//2; the valid-region moments
+    # above are already interior, so only the remaining pad has to go for the same set of pixels
+    return float(s.mean())
+
+
+def score(img: np.ndarray, ref: np.ndarray, conv: MetricConvention) -> tuple[float, float]:
+    """(PSNR, SSIM) of `img` against `ref` under `conv`. Arrays are HxW or HxWx3 in the metric's data range."""
+    a, b = _crop_border(np.asarray(img, dtype=np.float64), conv.border), _crop_border(np.asarray(ref, dtype=np.float64), conv.border)
+    if a.shape != b.shape:
+        raise ValueError(f"shape mismatch {a.shape} vs {b.shape}")
+    if conv.channels == "rgb" and a.ndim == 3:
+        p = psnr(a, b, conv.data_range)  # MSE over every channel, skimage's peak_signal_noise_ratio on an RGB array
+        if conv.ssim_window == "uniform":
+            s = float(np.mean([ssim_uniform(a[..., c], b[..., c], conv.ssim_size, conv.data_range) for c in range(a.shape[2])]))
+        else:
+            s = float(np.mean([ssim(a[..., c], b[..., c], conv.data_range, conv.ssim_sigma) for c in range(a.shape[2])]))
+        return p, s
+    la, lb = luminance(a), luminance(b)
+    p = psnr(la, lb, conv.data_range)
+    s = ssim_uniform(la, lb, conv.ssim_size, conv.data_range) if conv.ssim_window == "uniform" else ssim(la, lb, conv.data_range, conv.ssim_sigma)
+    return p, s
+
+
+def convention_for(records: Iterable[Mapping[str, Any]]) -> MetricConvention:
+    """The metric convention recorded with these runs (first `diagnostics.json` that declares one), else the default."""
+    for r in records:
+        d = r.get("artifacts_dir")
+        if not d:
+            continue
+        path = Path(d).expanduser() / "diagnostics.json"
+        if path.is_file():
+            try:
+                spec = json.loads(path.read_text()).get("metric_convention")
+            except (OSError, ValueError):
+                continue
+            if spec:
+                return MetricConvention.from_dict(spec)
+    return MetricConvention()
+
+
+def _array_for(run_dir: Optional[Path], name: Optional[str]) -> Optional[np.ndarray]:
+    if run_dir is None or not name:
+        return None
+    path = run_dir / name
+    if not path.is_file():
+        return None
+    return np.load(path) if path.suffix == ".npy" else load_image(path)
+
+
 def panel_metrics_rows(
     records: Sequence[Mapping[str, Any]],
     panels: Sequence[Panel],
@@ -704,12 +820,21 @@ def panel_metrics_rows(
     metrics: Sequence[str] = ("psnr", "ssim"),
     tolerance_db: float = 0.05,
     tolerance_ssim: float = 0.005,
+    convention: Optional[MetricConvention] = None,
 ) -> tuple[list[str], list[list[str]], list[str]]:
     """Rows for a 'panel metrics' table: logged metrics per shown run plus PSNR (and SSIM when logged)
     recomputed from the image.
 
+    The recomputation follows `convention` (default: the one the runs recorded, see `convention_for`; else
+    the tracker's luminance/Gaussian default). With a convention naming `source` arrays, the raw array saved
+    with each run is scored instead of the displayed PNG, so the audit asks "is this the image the number was
+    computed on?" rather than "do two metric implementations agree?".
+
     Returns (headers, rows, warnings). A gap between logged and recomputed values beyond the tolerances is
     flagged: it usually means the logged number was computed on a different image, crop or data range."""
+    conv = convention if convention is not None else convention_for(records)
+    ref_dir = Path(reference.path).expanduser().parent if (reference is not None and reference.path) else None
+    ref_array = _array_for(ref_dir, conv.reference_source)
     by_id = {r.get("run_id"): r for r in records if r.get("run_id") is not None}
     by_title = {(plain_label(r.get("method_label")) or r.get("method")): r for r in records}
     want_ssim = reference is not None and "ssim" in metrics
@@ -733,8 +858,12 @@ def panel_metrics_rows(
             v = logged.get(m)
             row.append("—" if v is None else format(v, defs.get(m, {}).get("fmt", ".2f")))
         if reference is not None:
+            run_dir = Path(rec["artifacts_dir"]).expanduser() if rec and rec.get("artifacts_dir") else (Path(p.path).parent if p.path else None)
+            img = _array_for(run_dir, conv.source)
+            img = p.image if img is None else img
+            ref_img = reference.image if ref_array is None else ref_array
             try:
-                comp = panel_psnr(p.image, reference.image)
+                comp, cs = score(img, ref_img, conv)
             except ValueError as e:
                 row += ["—", str(e)]
                 rows.append(row)
@@ -750,20 +879,15 @@ def panel_metrics_rows(
                     warnings.append(f"{p.title}: logged PSNR {float(lv):.2f} dB vs {comp:.2f} dB recomputed from the shown image "
                                     f"(Δ {d:+.2f} dB). Different image, crop, border or data range?")
             if want_ssim:
-                try:
-                    cs = panel_ssim(p.image, reference.image)
-                except ValueError:
-                    row += ["—", "—"]
+                row.append(f"{cs:.3f}")
+                ls = logged.get("ssim")
+                if ls is None:
+                    row.append("—")
                 else:
-                    row.append(f"{cs:.3f}")
-                    ls = logged.get("ssim")
-                    if ls is None:
-                        row.append("—")
-                    else:
-                        ds = cs - float(ls)
-                        row.append(f"{ds:+.3f}")
-                        if abs(ds) > tolerance_ssim:
-                            warnings.append(f"{p.title}: logged SSIM {float(ls):.3f} vs {cs:.3f} recomputed from the shown image "
-                                            f"(Δ {ds:+.3f}). Different implementation, window or data range?")
+                    ds = cs - float(ls)
+                    row.append(f"{ds:+.3f}")
+                    if abs(ds) > tolerance_ssim:
+                        warnings.append(f"{p.title}: logged SSIM {float(ls):.3f} vs {cs:.3f} recomputed from the shown image "
+                                        f"(Δ {ds:+.3f}). Different implementation, window or data range?")
         rows.append(row)
     return headers, rows, warnings
