@@ -17,6 +17,7 @@ from ..api import delete_asset, list_assets, update_asset
 from ..export.paper import EXPORT_STATUSES, KIND_TITLES, mark_exported, render_paper, write_paper, zip_paper
 from ..export.paper import staleness as asset_staleness
 from .common import db_path, engine_for, keyed, keyed_selectbox, load_records, page_url, select_project, sidebar_db
+from .studies import default_studies_dir, load_planned, studies_feeding
 from .tables import generic_html
 
 STATE_HELP = ("never exported: pinned but not yet in a paper export · current: the exported files were rendered from exactly "
@@ -44,6 +45,9 @@ def render() -> None:
         return
 
     states = {a.label: asset_staleness(a, load_records(project, a.experiment)) for a in assets}
+    studies_dir = default_studies_dir(db_path())
+    planned = load_planned(studies_dir) if studies_dir.is_dir() else []
+    readiness = {a.label: _readiness(planned, project, a) for a in assets}
     counts = Counter(s for s, _ in states.values())
     active = [a for a in assets if a.status.value != "dropped"]
     c1, c2, c3, c4 = st.columns(4)
@@ -56,9 +60,11 @@ def render() -> None:
     for a in assets:
         state, detail = states[a.label]
         rows.append([a.position, a.label, KIND_TITLES.get(a.kind, a.kind), a.status.value, a.experiment,
-                     agg.where_text(a.filters or {}) or "—", state, detail, _fmt_ts(a.exported_at) if a.exported_at else "—"])
-    st.markdown(generic_html(["#", "Label", "Kind", "Status", "Experiment", "Filter", "State", "Detail", "Exported"], rows,
-                             caption=f"Paper assets of {project} in manuscript order. {STATE_HELP}.", number=1, left_cols=9),
+                     agg.where_text(a.filters or {}) or "—", readiness[a.label], state, detail, _fmt_ts(a.exported_at) if a.exported_at else "—"])
+    st.markdown(generic_html(["#", "Label", "Kind", "Status", "Experiment", "Filter", "Data", "State", "Detail", "Exported"], rows,
+                             caption=f"Paper assets of {project} in manuscript order. Data: completed / planned runs of the studies that "
+                                     f"feed the asset (a spec's `feeds`, else the study producing its experiment). {STATE_HELP}.",
+                             number=1, left_cols=10),
                 unsafe_allow_html=True)
 
     st.subheader("Asset")
@@ -69,6 +75,19 @@ def render() -> None:
 
     st.divider()
     _export_section(project, engine)
+
+
+def _readiness(planned, project: str, a) -> str:
+    """`done/expected runs` over the studies feeding the asset, or `—` when no spec produces it."""
+    feeding = studies_feeding(planned, project, a.label, a.experiment)
+    if not feeding:
+        return "—"
+    exp = sum(p.totals[0] for p in feeding)
+    done = sum(p.totals[1] for p in feeding)
+    running = sum(p.totals[3] for p in feeding)
+    if any(p.jobs is None for p in feeding):
+        return "spec not runnable"
+    return f"{done}/{exp} runs" + (f" · {running} running" if running else "") + ("" if done < exp else " ✓")
 
 
 def _asset_detail(a, project: str, engine) -> None:

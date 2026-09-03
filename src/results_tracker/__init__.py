@@ -17,6 +17,7 @@ from .api import (
     log_run,
     run_records,
     save_asset,
+    set_experiment,
     update_asset,
 )
 from .db import get_engine, resolve_db_path
@@ -24,6 +25,7 @@ from .models import Asset, AssetStatus, Dataset, Experiment, ExperimentType, Met
 
 __all__ = [
     "log_run",
+    "set_experiment",
     "save_asset",
     "get_asset",
     "list_assets",

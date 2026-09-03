@@ -1054,8 +1054,30 @@ def recipe_validate(spec: Path, imports: list[str] = ImportOpt):
     console.print(t)
 
 
+@recipe_app.command("export-knobs")
+def recipe_export_knobs(
+    out: Path = typer.Option(..., "--out", "-o", help="Where to write the declarations, e.g. studies/knobs.json."),
+    imports: list[str] = ImportOpt,
+):
+    """Write the declared knobs of every registered method and problem as JSON, so a GUI without this
+    environment's compute libraries can still plan and validate studies (the Studies page reads
+    `<studies dir>/knobs.json` when a spec's imports fail)."""
+    from .recipe import registry, save_declarations
+
+    _import_all(imports)
+    if not registry.methods and not registry.problems:
+        console.print("[red]nothing registered; pass the module that declares methods and problems with -i[/]")
+        raise typer.Exit(code=1)
+    path = save_declarations(registry, out)
+    console.print(f"[green]wrote[/] {path}  ({len(registry.methods)} methods, {len(registry.problems)} problems)")
+
+
 @recipe_app.command("knobs")
-def recipe_knobs(ref: str = typer.Argument(..., help="Method or problem: registry key or module:Class."), imports: list[str] = ImportOpt):
+def recipe_knobs(
+    ref: str = typer.Argument(..., help="Method or problem: registry key or module:Class."),
+    imports: list[str] = ImportOpt,
+    as_json: bool = typer.Option(False, "--json", help="Print the declaration as JSON instead of a table."),
+):
     """Show the declared parameter space of a method (knobs) or a problem (conditions)."""
     from .recipe import registry
 
@@ -1070,6 +1092,9 @@ def recipe_knobs(ref: str = typer.Argument(..., help="Method or problem: registr
         except KeyError as e:
             console.print(f"[red]{e}[/]")
             raise typer.Exit(code=1)
+    if as_json:
+        typer.echo(json.dumps({"key": cls.key, "kind": kind, "label": cls.label, "knobs": knobs.to_list()}, indent=2, default=str))
+        return
     t = Table("knob", "kind", "default", "choices / bounds", "log", "doc", title=f"{kind} {cls.key!r}: {cls.label or cls.key}")
     for k in knobs:
         t.add_row(k.name, k.kind, repr(k.default), str(list(k.choices)) if k.choices else (str(list(k.bounds)) if k.bounds else ""),

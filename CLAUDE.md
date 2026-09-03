@@ -14,6 +14,7 @@ results-tracker ui --db demo.db      # GUI on http://localhost:8501 (falls back 
 results-tracker export table -e main-comparison --db demo.db
 results-tracker export bundle -p demo-paper -o /tmp/bundle.zip --db demo.db   # a default table/figure per experiment
 results-tracker export paper -p demo-paper -o paper_assets --db demo.db        # the pinned paper assets (Paper page / asset list)
+results-tracker recipe export-knobs -i results_tracker.recipe.toy -o specs/knobs.json  # declarations so the GUI can plan without the repo
 python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Chrome + websocket-client
 ```
 
@@ -40,8 +41,9 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
   `pin_to_paper` expander; `ui/paper.py` lists and exports the pinned assets; `ui/charts.py` (Plotly)
   and `ui/tables.py` (HTML in the IEEEtran/booktabs look) mirror the export styling on screen.
 - `recipe/` — `knobs.py` (declared parameter spaces), `core.py` (`Method`, `Problem`, `Instance`, `Estimate`, registry),
-  `study.py` (`Study` spec, `expand`, resumable `run_study` that calls `log_run`), `toy.py` (numpy phantom deblurring,
-  the recipe demo). Core is array-library agnostic; only `toy.py` imports numpy.
+  `study.py` (`Study` spec with `feeds`, `expand`, `pending_subset`, resumable `run_study` that logs `running` rows and
+  calls `log_run`), `declared.py` (knob declarations as JSON → planning-only stand-in classes), `toy.py` (numpy phantom
+  deblurring, the recipe demo). Core is array-library agnostic; only `toy.py` imports numpy.
 - `cli.py` — Typer app; `export`, `metric` and `recipe` are sub-apps.
 - `demo.py` — deterministic synthetic paper used by tests and the pitch.
 

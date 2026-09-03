@@ -149,6 +149,27 @@ value with the best mean metric, per group.
 Runs are logged as `experiment = study name`, `method = key`, `dataset = problem.dataset_name(split)`,
 `instance = Instance.name`, `seed`, `config = condition ∪ knobs`. Re-running is a resume: settings
 already logged as completed are skipped, failed ones are recomputed. The runner never deletes anything.
+While a setting computes, a `running` row stands in for it (replaced by the result; `mark_running=False`
+turns this off), so the GUI shows work in flight and a hard crash leaves a visible trace. The runner also
+records the study's description and swept knob on the experiment (`Experiment.swept_params`), which the
+Sweep page and the Overview headline default to.
+
+Two optional spec fields serve planning: `"feeds": ["tab:main", "fig:beta"]` names the paper assets the
+study produces data for (the Paper page shows each asset's completed / planned runs from that), and
+`"tags"` go onto every run. `pending_subset(study, pending_jobs, methods)` narrows a spec to the part of
+its grid that still holds work (the Studies page offers it as a download) so another machine can take
+over the rest; it resumes against the same database.
+
+### Planning without the compute environment
+
+The GUI often runs where torch or the data are not installed. Write the declarations next to the specs:
+
+```bash
+results-tracker recipe export-knobs -i adaptivepnp.recipes -o studies/knobs.json
+```
+
+The Studies page (and `load_study_classes(study, load_declarations(path), import_modules=False)`) uses
+those stand-in classes to expand and validate specs when a spec's `imports` fail; they cannot run.
 
 ## 4. Why the spec is the boundary
 

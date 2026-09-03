@@ -351,3 +351,94 @@ def test_select_best_is_the_tuning_rule(engine):
     by_seed = agg.select_best(recs, "reg", "psnr", group_by=["seed"])
     assert set(by_seed) == {(0,), (1,), (2,)}
     assert agg.select_best(recs, "reg", "psnr", higher_is_better=False)[()] == 0.0003
+
+
+# --------------------------------------------------------------------------- planning layer
+
+def test_pending_subset_narrows_the_grid_and_stays_runnable():
+    comparison, sweep, _ = toy_studies()
+    from results_tracker.recipe import load_study_classes, pending_subset
+
+    problem_cls, methods = load_study_classes(comparison)
+    jobs = expand(comparison, problem_cls, methods)
+    pending = [j for j in jobs if j.condition["blur"] == 2.0 and j.seed == 1 and j.method != "gd"]
+    sub = pending_subset(comparison, pending, methods)
+    assert sub.name == comparison.name and sub.conditions == {"blur": [2.0], "noise": [0.01, 0.05]} and sub.seeds == [1]
+    assert [a.method for a in sub.methods] == ["wiener", "adaptive-gd"] and "pending subset" in sub.description
+    assert len(expand(sub, problem_cls, methods)) == 4  # 2 noise x 2 arms; the original grid had 24 jobs
+    assert "feeds" not in sub.to_dict()  # empty lists stay out of the spec
+    problem_cls, methods = load_study_classes(sweep)
+    jobs = expand(sweep, problem_cls, methods)
+    sub = pending_subset(sweep, [j for j in jobs if j.config["reg"] in (0.001, 0.03)], methods)
+    assert sub.sweep.values == [0.001, 0.03] and sub.seeds == [0, 1, 2]
+    with pytest.raises(ValueError):
+        pending_subset(sweep, [], methods)
+
+
+def test_feeds_round_trip(tmp_path):
+    study, *_ = toy_studies()
+    study.feeds = ["tab:main", "fig:visual"]
+    study.save(tmp_path / "s.json")
+    assert json.loads((tmp_path / "s.json").read_text())["feeds"] == ["tab:main", "fig:visual"]
+    assert Study.load(tmp_path / "s.json").feeds == ["tab:main", "fig:visual"]
+
+
+class Peeker(Method):
+    """Records how many `running` rows the database holds while it works."""
+
+    key = "peeker"
+    knobs = (Knob("k", "int", 1),)
+    engine = None
+    seen: list = []
+
+    def reconstruct(self, instance, config, state):
+        Peeker.seen.append(len(get_runs(status="running", engine=Peeker.engine)))
+        return Estimate(instance.measurement)
+
+
+def test_running_rows_and_swept_knob_are_recorded(engine):
+    from results_tracker import list_experiments
+
+    reg = Registry()
+    reg.problem(ToyDeblurring)
+    reg.method(Peeker)
+    Peeker.engine, Peeker.seen = engine, []
+    study = Study("peek", "sweep", "toy-deblur", [Arm("peeker")], sweep=Sweep("k", [1, 2]), conditions={"blur": [1.0], "noise": [0.05]},
+                  n_instances=2, description="watching the running rows", project=PROJECT)
+    report = run_study(study, engine=engine, registry=reg, log=None)
+    assert report.logged == 4 and Peeker.seen == [1, 1, 1, 1]  # exactly the current setting was `running` each time
+    runs = get_runs(experiment="peek", project=PROJECT, engine=engine)
+    assert len(runs) == 4 and {r.status.value for r in runs} == {"completed"}  # every running row was replaced
+    exp = next(e for e in list_experiments(PROJECT, engine=engine) if e.name == "peek")
+    assert exp.swept_params == ["k"] and exp.description == "watching the running rows" and exp.type.value == "sweep"
+    Peeker.seen = []
+    run_study(study, engine=engine, registry=reg, log=None, mark_running=False)
+    assert Peeker.seen == []  # resumed: nothing ran
+
+
+def test_declarations_plan_without_the_real_classes(tmp_path):
+    from results_tracker.recipe import declared_registry, export_declarations, load_study_classes, registry, save_declarations
+    from results_tracker.recipe.declared import load_declarations
+
+    import results_tracker.recipe.toy  # noqa: F401  registers into the default registry
+
+    decl = export_declarations(registry)
+    assert {m["key"] for m in decl["methods"]} >= {"wiener", "gd", "adaptive-gd"} and decl["problems"][0]["key"] == "toy-deblur"
+    path = save_declarations(registry, tmp_path / "knobs.json")
+    reg = load_declarations(path)
+    comparison, sweep, ablation = toy_studies()
+    for study in (comparison, sweep, ablation):
+        real_p, real_m = load_study_classes(study)
+        decl_p, decl_m = load_study_classes(study, reg, import_modules=False)
+        assert [(j.method, j.config, j.condition, j.seed, j.arm) for j in expand(study, decl_p, decl_m)] == \
+               [(j.method, j.config, j.condition, j.seed, j.arm) for j in expand(study, real_p, real_m)]
+    assert reg.methods["wiener"].is_baseline and reg.methods["adaptive-gd"].display_label() == AdaptiveGD.display_label()
+    assert reg.problems["toy-deblur"].splits == ("test", "validation") and reg.problems["toy-deblur"].metric_definitions["psnr"] == ("dB", True, ".2f")
+    with pytest.raises(RuntimeError):
+        reg.methods["wiener"]().reconstruct(None, {}, None)
+    assert declared_registry({"methods": [], "problems": []}).methods == {}
+    # CLI
+    r = runner.invoke(app, ["recipe", "export-knobs", "-i", "results_tracker.recipe.toy", "-o", str(tmp_path / "k2.json")])
+    assert r.exit_code == 0 and json.loads((tmp_path / "k2.json").read_text())["version"] == 1
+    r = runner.invoke(app, ["recipe", "knobs", "adaptive-gd", "-i", "results_tracker.recipe.toy", "--json"])
+    assert r.exit_code == 0 and json.loads(r.output)["knobs"][0]["name"]

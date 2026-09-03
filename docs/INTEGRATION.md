@@ -286,6 +286,13 @@ results-tracker ui                         # uses $RESULTS_TRACKER_DB
 Every page has a LaTeX expander and a paper-figure expander; the Export page has
 the full set of options (captions, labels, std style, widths).
 
+- **Studies** — every spec under the studies folder against the database: which
+  jobs are done, running, failed or missing, an estimate of the compute left
+  (pending runs × the median `runtime_s` of the study's completed runs), the
+  paper assets a study `feeds`, a downloadable pending-only spec for another
+  machine, and *Edit* / *Clone* into the form below. If the GUI's environment
+  cannot import the repo, `results-tracker recipe export-knobs -i <module> -o
+  studies/knobs.json` gives it the declarations it needs to plan.
 - **Pin to paper.** Under every table and figure (Comparison, Sweep, Ablation,
   Visual, Export) a *Pin to paper* expander saves the current view — experiment,
   filter and rendering options — as a paper **asset** with a LaTeX label

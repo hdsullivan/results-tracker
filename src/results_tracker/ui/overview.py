@@ -70,6 +70,8 @@ def glance_rows(cat: dict, recs: list[dict], defs: dict) -> list[list[Any]]:
         name = display_metric_name(primary)
         if e["type"] == "sweep":
             keys = agg.varying_config_keys(rs) or sorted({k for r in rs for k in agg.flatten(r["config"])})
+            declared = [k for k in e.get("swept_params") or [] if k in keys]
+            keys = declared + [k for k in keys if k not in declared]  # the study's own swept knob first
             if keys:
                 series = agg.sweep_series(rs, keys[0], primary)
                 s = series.get((), [])

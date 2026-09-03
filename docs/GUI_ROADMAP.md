@@ -68,6 +68,12 @@ stage column above; restoring an asset on the analysis pages themselves (only Ex
   headline then default to the real swept knob instead of the alphabetically first varying key (with
   conditions in the config, that is often `kernel`, not `beta`).
 
+Done 2026-09-03 (step 3): `feeds` on the spec and readiness on the Paper page; compute-left from median
+`runtime_s`; pending-only spec download; edit / clone into the form; ablation arms from knob widgets (single or
+joint `set`); `running` rows from `run_study`; `swept_params` recorded and used as the default swept knob;
+`recipe export-knobs` + `knobs.json` fallback on the Studies page. Not done: direct launch from the GUI (by design,
+last), `base_run_id` (the `base` tag covers ablations), per-machine shell blocks beyond the run/validate lines.
+
 ## 3. Views adaptivePnP needs
 
 - **Condition filter and facets**: ~~a shared sidebar `where` filter (`config.noise=0.01`, `config.K=5`) on
@@ -115,7 +121,7 @@ stage column above; restoring an asset on the analysis pages themselves (only Ex
 |---|---|---|
 | 1 | Shared `where` filter + shared selection / URL params (§3, §4) | done 2026-09-03 |
 | 2 | `Asset` table, Pin-to-paper on all pages, Paper page, `export paper` (§1) | done 2026-09-03 |
-| 3 | Study ↔ asset link, cost estimate, pending-only spec, edit / clone form, running status (§2) | 2 days |
+| 3 | Study ↔ asset link, cost estimate, pending-only spec, edit / clone form, running status (§2) | done 2026-09-03 |
 | 4 | Value maps + facets, cross-experiment tables, Settings page (§3, §4) | 2 days |
 | 5 | Curves page, two-metric scatter, distribution / instance picker, selection table (§3) | 3 days |
 | 6 | Overview via SQL, notes, small UX items (§4) | 1 day |

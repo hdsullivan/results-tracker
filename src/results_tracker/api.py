@@ -305,6 +305,34 @@ def delete_runs(run_ids: Iterable[int], db=None, engine=None) -> int:
         return len(rows)
 
 
+def set_experiment(
+    name: str,
+    *,
+    project: str = "default",
+    experiment_type: Union[str, ExperimentType, None] = None,
+    description: Optional[str] = None,
+    swept_params: Optional[Sequence[str]] = None,
+    base_run_id: Optional[int] = None,
+    db=None,
+    engine=None,
+) -> Experiment:
+    """Create or annotate an experiment: its description, the knob(s) a sweep varies (`swept_params`, what the
+    Sweep page and the Overview headline default to) and the ablation base run. `experiment_type` only matters
+    when the experiment does not exist yet."""
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        proj = get_or_create(s, Project, project)
+        exp = _get_or_create_experiment(s, proj, name, ExperimentType(experiment_type or "comparison"))
+        if description is not None:
+            exp.description = description
+        if swept_params is not None:
+            exp.swept_params = list(swept_params)
+        if base_run_id is not None:
+            exp.base_run_id = base_run_id
+        s.flush()
+        return exp
+
+
 # --------------------------------------------------------------------------- paper assets
 
 def save_asset(

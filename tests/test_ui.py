@@ -435,3 +435,89 @@ def test_page_url_carries_a_non_default_database(demo_db):
     assert not at.exception
     assert at.markdown[0].value == "export?project=p+q&asset=tab%3Am"
     assert at.markdown[1].value == "export?db=%2Fx%2Fother.db&project=p&asset=tab%3Am"
+
+
+def test_studies_planning_layer(toy_studies_db):
+    """Progress with running rows, compute-left estimate, pending-only spec, edit/clone, knob-driven ablation arms,
+    feeds, and the knobs.json fallback for specs whose modules cannot be imported."""
+    from results_tracker import get_asset, log_run, save_asset
+    from results_tracker.recipe import expand, load_study_classes, registry, save_declarations
+    from results_tracker.recipe.toy import PROJECT, toy_studies
+
+    db, studies = toy_studies_db
+    _, sweep, ablation = toy_studies()
+    problem_cls, methods = load_study_classes(sweep)
+    jobs = expand(sweep, problem_cls, methods)
+    for inst in ("phantom_00", "phantom_01", "phantom_02"):  # the first job done ...
+        log_run("reg-sweep", project=PROJECT, experiment_type="sweep", method=jobs[0].method, dataset="Phantoms", instance=inst,
+                seed=jobs[0].seed, config={**jobs[0].condition, **jobs[0].config}, metrics={"psnr": 20.0, "runtime_s": 2.0}, db=db, git_commit=None)
+    log_run("reg-sweep", project=PROJECT, method=jobs[1].method, dataset="Phantoms", instance="phantom_00", seed=jobs[1].seed,  # ... one in flight
+            config={**jobs[1].condition, **jobs[1].config}, metrics={}, status="running", db=db, git_commit=None)
+    spec = json.loads((studies / "reg-sweep.json").read_text())
+    spec["feeds"] = ["fig:reg"]
+    (studies / "reg-sweep.json").write_text(json.dumps(spec))
+    save_asset(PROJECT, "fig:reg", kind="sweep-figure", experiment="reg-sweep", options={"param": "reg", "metric": "psnr"}, db=db)
+    # a spec whose module does not exist here, plus the declarations that stand in for it
+    decl = json.loads((studies / "ablation.json").read_text())
+    decl.update(name="declared-ablation", imports=["no_such_module_xyz"])
+    (studies / "declared.json").write_text(json.dumps(decl))
+    import results_tracker.recipe.toy  # noqa: F401
+    save_declarations(registry, studies / "knobs.json")
+    st.cache_data.clear()
+
+    at = _run("studies")
+    table = at.dataframe[0].value
+    by_name = {row["experiment"]: row for _, row in table.iterrows()}
+    assert by_name["reg-sweep"]["runs done"] == 3 and by_name["reg-sweep"]["running"] == 1 and by_name["reg-sweep"]["status"] == "running"
+    assert by_name["reg-sweep"]["time left"] == "84 s"  # (45 - 3) pending runs x median 2.0 s
+    assert by_name["main-comparison"]["time left"] == "" and by_name["ablation"]["time left"] == "—"
+    assert by_name["reg-sweep"]["feeds"] == "fig:reg"
+    assert by_name["declared-ablation"]["status"] == "planned" and by_name["declared-ablation"]["jobs"] == 16  # expanded from knobs.json
+    captions = "\n".join(c.value for c in at.caption)
+    assert "Compute left: ~84 s" in captions and "no completed run to time yet" in captions and "knobs.json" in captions
+    assert not at.warning  # a spec covered by knobs.json is not "not runnable"
+
+    at.selectbox(key="studies_pick").select("reg-sweep.json").run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert "0/9 ▶1" in md and "running" in md and "3/9" in md  # seeds pooled per cell: 3 seeds x 3 instances
+    captions = "\n".join(c.value for c in at.caption)
+    assert "Feeds paper assets: `fig:reg` (planned)" in captions
+    assert "narrowed to the 14 unfinished jobs" in captions and "1 seed" not in captions  # 3 seeds remain, 4 sweep values
+    assert "3 seed(s)" in captions and "5 sweep values" in captions  # every value still has pending seeds
+    assert {m.label: m.value for m in at.metric}["time left"] == "84 s"
+
+    # edit: the form is prefilled with the spec; clone: same with a new name and no file
+    at.button(key="studies_edit").click().run()
+    assert not at.exception
+    assert at.text_input(key="new_name").value == "reg-sweep" and at.selectbox(key="new_kind").value == "sweep"
+    assert at.selectbox(key="new_sweep_knob").value == "reg" and at.text_input(key="new_sweep_values").value == "0.0003, 0.001, 0.003, 0.01, 0.03"
+    assert at.text_input(key="new_cond_blur").value == "1.5" and at.text_input(key="new_seeds").value == "0, 1, 2"
+    assert at.text_input(key="new_feeds").value == "fig:reg" and at.text_input(key="new_filename").value == "reg-sweep.json"
+    assert at.checkbox(key="new_overwrite").value is True and any("15 jobs" in s_.value for s_ in at.success)
+    at.button(key="studies_clone").click().run()
+    assert at.text_input(key="new_name").value == "reg-sweep-copy" and at.text_input(key="new_filename").value == ""
+
+    # an ablation planned with knob widgets: one single-knob arm and one labelled joint arm
+    at.text_input(key="new_name").input("abl-plan").run()
+    at.selectbox(key="new_kind").select("ablation").run()
+    at.text_input(key="new_feeds").input("fig:abl").run()
+    at.number_input(key="new_abl_n").set_value(2).run()
+    at.multiselect(key="new_abl_0_knobs").set_value(["adaptive"]).run()
+    at.checkbox(key="new_abl_0_adaptive").uncheck().run()
+    at.multiselect(key="new_abl_1_knobs").set_value(["prior", "warm_start"]).run()
+    at.selectbox(key="new_abl_1_prior").select("tikhonov").run()
+    at.checkbox(key="new_abl_1_warm_start").uncheck().run()
+    at.text_input(key="new_abl_1_label").input("quadratic, cold start").run()
+    assert not at.exception, at.exception
+    assert any("9 jobs" in s_.value for s_ in at.success), [s_.value for s_ in at.success]  # (base + 2 arms) x the cloned 3 seeds
+    at.button(key="new_save").click().run()
+    saved = json.loads((studies / "abl-plan.json").read_text())
+    assert saved["ablation"]["arms"] == [{"adaptive": False}, {"label": "quadratic, cold start", "set": {"prior": "tikhonov", "warm_start": False}}]
+    assert saved["feeds"] == ["fig:abl"] and saved["kind"] == "ablation"
+
+    # the Paper page reads readiness from the feeding study
+    at2 = _run("paper")
+    md = "\n".join(m.value for m in at2.markdown)
+    assert "3/45 runs · 1 running" in md and "fig:reg" in md
+    assert get_asset(PROJECT, "fig:reg", db=db).experiment == "reg-sweep"

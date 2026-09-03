@@ -69,7 +69,8 @@ def _load_catalog(path: str, mtime: float) -> dict[str, list[dict[str, Any]]]:
     engine = engine_for(path)
     projs = {p.id: p.name for p in list_projects(engine=engine)}
     exps = [
-        {"project": projs[e.project_id], "experiment": e.name, "type": e.type.value, "description": e.description}
+        {"project": projs[e.project_id], "experiment": e.name, "type": e.type.value, "description": e.description,
+         "swept_params": list(e.swept_params or [])}
         for e in list_experiments(engine=engine)
     ]
     return {"projects": [{"name": n} for n in projs.values()], "experiments": exps}
@@ -402,6 +403,14 @@ def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], k
                        fingerprint=records_fingerprint(records), engine=engine)
             ss["opened_asset"] = (label, experiment)
             st.success(f"Pinned `{label}`. It is listed on the Paper page; `results-tracker export paper -p {project}` renders it.")
+
+
+def swept_params(project: Optional[str], experiment: Optional[str]) -> list[str]:
+    """The knob(s) the experiment declares it sweeps (set by the recipe runner), else []."""
+    for e in load_catalog()["experiments"]:
+        if e["project"] == project and e["experiment"] == experiment:
+            return list(e.get("swept_params") or [])
+    return []
 
 
 def fmt_for(defs: dict[str, dict[str, Any]], metric: str) -> str:

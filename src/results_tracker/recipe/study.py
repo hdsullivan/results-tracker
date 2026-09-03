@@ -13,13 +13,14 @@ import importlib
 import json
 import math
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
-from ..api import _resolve_engine, _to_plain, define_method, define_metric, get_metric_defs, has_run, log_run
+from ..api import _resolve_engine, _to_plain, define_method, define_metric, get_metric_defs, has_run, log_run, set_experiment
 from ..models import Method as MethodRow
 from .core import Estimate, Instance, Method, Problem, Registry, registry as default_registry
 
@@ -80,6 +81,7 @@ class Study:
     tags: list[str] = field(default_factory=list)
     description: str = ""
     imports: list[str] = field(default_factory=list)  # modules to import first (they register their classes)
+    feeds: list[str] = field(default_factory=list)  # paper asset labels this study produces the data for (tab:main, fig:beta)
 
     # ------------------------------------------------------------------ (de)serialisation
 
@@ -268,13 +270,37 @@ def _define(problem: Problem, method_classes: Iterable[type[Method]], engine) ->
             define_method(cls.key, label=cls.display_label(), is_baseline=cls.is_baseline, engine=engine)
 
 
+def pending_subset(study: Study, pending: Sequence[Job], methods: Mapping[str, type[Method]]) -> Study:
+    """A copy of `study` narrowed to the part of its grid that still holds work: only the condition values,
+    seeds, sweep values and method arms that occur in `pending` jobs. A grid is a product, so this is a superset
+    of the pending cells; running it resumes, so nothing already logged is recomputed. Use it to hand the rest
+    of a study to another machine or to run one slice at a time."""
+    if not pending:
+        raise ValueError(f"study {study.name!r}: nothing is pending")
+    keyed = lambda v: (isinstance(v, str), v)  # noqa: E731
+    conditions = {k: sorted({j.condition[k] for j in pending}, key=keyed) for k in dict.fromkeys(k for j in pending for k in j.condition)}
+    seeds = sorted({j.seed for j in pending})
+    pending_keys = {j.method for j in pending}
+    arms = [arm for arm in study.methods if methods[arm.method].key in pending_keys]
+    sweep = None
+    if study.sweep is not None:
+        sweep = Sweep(study.sweep.knob, sorted({j.config[study.sweep.knob] for j in pending}, key=keyed))
+    note = f"pending subset of {study.name} written {datetime.now(timezone.utc):%Y-%m-%d}: {len(pending)} of the jobs"
+    return replace(study, conditions=conditions, seeds=seeds, methods=arms, sweep=sweep,
+                   description=f"{study.description} · {note}" if study.description else note)
+
+
 def load_study_classes(
-    study: Study, registry: Optional[Registry] = None
+    study: Study, registry: Optional[Registry] = None, *, import_modules: bool = True
 ) -> tuple[type[Problem], dict[str, type[Method]]]:
-    """Import the study's plugin modules and resolve its problem and method classes."""
+    """Import the study's plugin modules and resolve its problem and method classes.
+
+    With `import_modules=False` the study's `imports` are skipped and `registry` must already hold the classes
+    (a planning-only registry built from a knob declaration file, see `recipe.declared`)."""
     reg = registry or default_registry
-    for module in study.imports:
-        importlib.import_module(module)
+    if import_modules:
+        for module in study.imports:
+            importlib.import_module(module)
     problem_cls = reg.resolve_problem(study.problem)
     methods = {arm.method: reg.resolve_method(arm.method) for arm in study.methods}
     return problem_cls, methods
@@ -315,6 +341,7 @@ def run_study(
     provenance: Optional[Mapping[str, Any]] = None,
     observers: Sequence[StudyObserver] = (),
     log: Optional[Callable[[str], None]] = print,
+    mark_running: bool = True,
 ) -> Report:
     """Run every job of `study` on every instance and log one run per instance.
 
@@ -328,12 +355,16 @@ def run_study(
     `<database>.diagnostics/`, so a run's trajectory is never lost for want of an artifacts folder.
     `problem_options` are passed to the problem's constructor (device, data root); they describe the
     machine, not the experiment, so they stay out of the run config. `provenance` (e.g. a dependency's
-    commit) is appended to every run's notes. `observers` receive each logged run."""
+    commit) is appended to every run's notes. `observers` receive each logged run. With `mark_running` (default)
+    a `running` row is logged when a setting starts and replaced by the result, so the GUI shows work in flight
+    and a hard crash leaves a visible `running` row instead of nothing (the resume recomputes it)."""
     problem_cls, method_classes = load_study_classes(study, registry)
     problem = problem_cls(**dict(problem_options or {}))
     jobs = expand(study, problem_cls, method_classes)
     engine = _resolve_engine(engine, db)
     _define(problem, method_classes.values(), engine)
+    set_experiment(study.name, project=study.project, experiment_type=study.kind, description=study.description or None,
+                   swept_params=[study.sweep.knob] if study.sweep is not None else None, engine=engine)
     provenance_note = " ".join(f"{k}={v}" for k, v in (provenance or {}).items())
 
     methods: dict[str, Method] = {cls.key: cls() for cls in method_classes.values()}
@@ -364,6 +395,11 @@ def run_study(
             skey = (job.method, method.setup_key(job.config))
             if skey not in states:
                 states[skey] = method.setup(problem, job.config)
+            if mark_running:
+                log_run(study.name, project=study.project, experiment_type=study.kind, method=job.method, dataset=dataset,
+                        instance=inst.name, seed=job.seed, config=full_config, metrics={}, status="running",
+                        notes=f"started {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC", tags=[*study.tags, *job.tags],
+                        engine=engine, on_duplicate="replace")
             t0 = perf_counter()
             try:
                 est = method.reconstruct(inst, job.config, states[skey])

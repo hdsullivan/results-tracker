@@ -14,7 +14,7 @@ from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
 from .tables import figure_caption_html, generic_html, sweep_html
 from .common import (active_where, fmt_for, load_metric_defs, load_records, pin_to_paper, select_project_experiment, sidebar_db,
-                     sidebar_filter, where_text)
+                     sidebar_filter, swept_params, where_text)
 
 GROUP_KEYS = ["method", "dataset", "instance"]
 
@@ -47,7 +47,8 @@ def render() -> None:
 
     with st.sidebar:
         st.markdown("**Sweep**")
-        default_x = varying[0] if varying else all_keys[0]
+        declared = [k for k in swept_params(project, experiment) if k in all_keys]  # what the study said it sweeps
+        default_x = declared[0] if declared else (varying[0] if varying else all_keys[0])
         param_x = st.selectbox("Parameter (x)", all_keys, index=all_keys.index(default_x))
         second_opts = ["— none —"] + [k for k in all_keys if k != param_x]
         default_y = next((k for k in varying if k != param_x), None)
