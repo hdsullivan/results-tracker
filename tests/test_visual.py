@@ -318,7 +318,8 @@ def test_panel_audit_scores_the_recorded_convention_on_raw_arrays(art, tmp_path)
     d = tmp_path / "Ours"
     gt = load_image(d / "ground_truth.png")
     gt_rgb = np.repeat(gt[..., None], 3, axis=2)
-    raw = gt_rgb + np.random.default_rng(1).normal(0, 0.03, gt_rgb.shape)  # unclipped: some values leave [0, 1]
+    raw = gt_rgb + np.random.default_rng(1).normal(0, 0.03, gt_rgb.shape)
+    raw[:6, :6] += 0.4  # unclipped estimate: an overshoot the PNG cannot hold
     assert raw.max() > 1.0
     conv = MetricConvention(channels="rgb", ssim_window="uniform", border=4, source="reconstruction_raw.npy",
                             reference_source="ground_truth_raw.npy", note="rgb uniform")
