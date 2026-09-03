@@ -435,10 +435,32 @@ def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], k
 
 
 def swept_params(project: Optional[str], experiment: Optional[str]) -> list[str]:
-    """The knob(s) the experiment declares it sweeps (set by the recipe runner), else []."""
+    """The knob(s) the experiment declares it sweeps: recorded on the experiment by the recipe runner, else read
+    from a study spec of that name in the studies directory (runs logged before the runner recorded it), else []."""
     for e in load_catalog()["experiments"]:
         if e["project"] == project and e["experiment"] == experiment:
-            return list(e.get("swept_params") or [])
+            if e.get("swept_params"):
+                return list(e["swept_params"])
+            break
+    return _spec_sweep_knobs(project, experiment)
+
+
+@st.cache_data(show_spinner=False)
+def _spec_sweep_knobs(project: Optional[str], experiment: Optional[str]) -> list[str]:
+    import json
+
+    from .studies import default_studies_dir
+
+    studies_dir = default_studies_dir(db_path())
+    if not studies_dir.is_dir():
+        return []
+    for path in sorted(studies_dir.rglob("*.json")):
+        try:
+            d = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and d.get("name") == experiment and d.get("project", "default") == project and d.get("sweep"):
+            return [d["sweep"]["knob"]]
     return []
 
 

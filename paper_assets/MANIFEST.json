@@ -1,0 +1,41 @@
+{
+  "project": "toy-paper",
+  "source": "toy.db",
+  "generated": "2026-09-03 11:55",
+  "assets": [
+    {
+      "label": "tab:main-comparison",
+      "kind": "comparison-table",
+      "experiment": "main-comparison",
+      "status": "final",
+      "files": [
+        "tables/tab-main-comparison.tex"
+      ],
+      "runs": 48,
+      "note": "12/12 cells present \u00b7 8 value columns will likely overflow a single IEEE column. Remedies, in order: drop a metric, use std='small' or 'none', font='footnotesize', split by dataset, or env='table*'.",
+      "fingerprint": "f57e43488c2a",
+      "error": "",
+      "filters": [
+        "config.noise=0.05"
+      ]
+    },
+    {
+      "label": "fig:main-comparison",
+      "kind": "visual-figure",
+      "experiment": "main-comparison",
+      "status": "final",
+      "files": [
+        "figures/fig-main-comparison.pdf",
+        "figures/fig-main-comparison.tex",
+        "figures/fig-main-comparison.json"
+      ],
+      "runs": 48,
+      "note": "",
+      "fingerprint": "f57e43488c2a",
+      "error": "",
+      "filters": [
+        "config.noise=0.05"
+      ]
+    }
+  ]
+}

@@ -76,3 +76,14 @@ def test_comparison_bars_skip_missing_and_tight_range():
     ct1 = agg.comparison_table(recs, group_by=["method"])
     fig1 = charts.comparison_bars(ct1, "psnr", zero_based=True)
     assert fig1.layout.yaxis.range[0] == 0 and len(fig1.data) == 2
+
+
+def test_sweep_lines_with_categorical_values():
+    from results_tracker.aggregate import Stat
+    from results_tracker.ui.charts import sweep_lines
+
+    series = {(): [("none", Stat(27.0, 0.1, 2, 26.9, 27.1)), ("op_norm", Stat(28.0, 0.1, 2, 27.9, 28.1)), (True, Stat(28.5, 0.1, 2, 28.4, 28.6))]}
+    fig = sweep_lines(series, "rho_floor", "psnr", best_by_group={(): True})
+    assert fig.layout.xaxis.type == "category" and list(fig.layout.xaxis.categoryarray) == ["True", "none", "op_norm"]
+    ring = [t for t in fig.data if getattr(t.marker, "symbol", None) == "circle-open"][0]
+    assert list(ring.x) == ["True"]

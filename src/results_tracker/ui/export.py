@@ -250,9 +250,11 @@ def render() -> None:
             param = keyed_selectbox("Parameter", all_keys, "exp_param", varying[0] if varying else all_keys[0])
         with c2:
             metric = keyed_selectbox("Metric", metrics_all, "exp_metric", metrics_all[0])
-        group_opts = [k for k in ["method", "dataset"] if len({r.get(k) for r in recs}) > 1]
+        from .sweep import line_keys
+
         with c3:
-            by = keyed_multiselect("One column/line per", group_opts, "exp_by", [])
+            by = keyed_multiselect("One column/line per", line_keys(recs, param), "exp_by", [],
+                                   help="method arm, condition (config.noise, derived.kernel_type, ...)")
         series = {g: s for g, s in agg.sweep_series(recs, param, metric, group_by=by).items() if s}
         if not series:
             st.warning(f"No runs have `{param}` in their config.")

@@ -1,0 +1,62 @@
+{
+  "experiment": "main-comparison",
+  "dataset": "Phantoms",
+  "instance": "phantom_00",
+  "seed": 0,
+  "image": "reconstruction.png",
+  "reference": "toy_artifacts/main-comparison/wiener/wiener-f569c0b4/blur=1_noise=0.05/seed0/phantom_00/ground_truth.png",
+  "measurement": "toy_artifacts/main-comparison/wiener/wiener-f569c0b4/blur=1_noise=0.05/seed0/phantom_00/measurement.png",
+  "crop_box": [
+    23,
+    23,
+    19,
+    19
+  ],
+  "display_range": [
+    0.0,
+    1.0
+  ],
+  "error_vmax": null,
+  "mode": "image",
+  "kernel": null,
+  "rows": [],
+  "panels": [
+    {
+      "title": "Reference",
+      "path": "toy_artifacts/main-comparison/wiener/wiener-f569c0b4/blur=1_noise=0.05/seed0/phantom_00/ground_truth.png",
+      "kind": "reference"
+    },
+    {
+      "title": "Measurement",
+      "path": "toy_artifacts/main-comparison/wiener/wiener-f569c0b4/blur=1_noise=0.05/seed0/phantom_00/measurement.png",
+      "kind": "measurement"
+    },
+    {
+      "title": "Wiener",
+      "path": "toy_artifacts/main-comparison/wiener/wiener-f569c0b4/blur=1_noise=0.05/seed0/phantom_00/reconstruction.png",
+      "kind": "method",
+      "row": "",
+      "run_id": 13,
+      "seed": 0,
+      "instance": "phantom_00"
+    },
+    {
+      "title": "Tikhonov-GD",
+      "path": "toy_artifacts/main-comparison/gd/gd-fa689bbb/blur=1_noise=0.05/seed0/phantom_00/reconstruction.png",
+      "kind": "method",
+      "row": "",
+      "run_id": 17,
+      "seed": 0,
+      "instance": "phantom_00"
+    },
+    {
+      "title": "Ours",
+      "path": "toy_artifacts/main-comparison/adaptive-gd/adaptive-gd-378aa55a/blur=1_noise=0.05/seed0/phantom_00/reconstruction.png",
+      "kind": "method",
+      "row": "",
+      "run_id": 21,
+      "seed": 0,
+      "instance": "phantom_00"
+    }
+  ]
+}

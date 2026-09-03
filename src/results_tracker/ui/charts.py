@@ -161,12 +161,14 @@ def sweep_lines(
     groups = list(series_by_group)
     colors = color_for(groups)
     single = len(groups) == 1
+    xs_all = sorted({x for s in series_by_group.values() for x, _ in s}, key=lambda x: (isinstance(x, str), x))
+    numeric = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in xs_all)  # else a categorical axis
     for g in groups:
         series = series_by_group[g]
         if not series:
             continue
         name = " / ".join(map(str, g)) if g else metric
-        xs = [x for x, _ in series]
+        xs = [x if numeric else str(x) for x, _ in series]
         ys = [s.mean for _, s in series]
         sd = [s.std for _, s in series]
         ns = [s.n for _, s in series]
@@ -188,22 +190,24 @@ def sweep_lines(
         )
         best = (best_by_group or {}).get(g)
         if best is not None and best in dict(series):
+            bx = best if numeric else str(best)
             fig.add_scatter(
-                x=[best], y=[dict(series)[best].mean], mode="markers", showlegend=False, legendgroup=name,
+                x=[bx], y=[dict(series)[best].mean], mode="markers", showlegend=False, legendgroup=name,
                 hoverinfo="skip", name=f"{name} best",
                 marker=dict(symbol="circle-open", size=ms + 9, color=c, line=dict(color=c, width=2.2)),
             )
             if single:
-                fig.add_vline(x=best, line=dict(color=GUIDE, width=1.2, dash="dot"), layer="below")
+                fig.add_vline(x=bx, line=dict(color=GUIDE, width=1.2, dash="dot"), layer="below")
                 # annotations on a log axis take log10(x) in data coordinates
-                ax_x = math.log10(best) if (log_x and isinstance(best, (int, float)) and best > 0) else best
+                ax_x = math.log10(best) if (log_x and numeric and best > 0) else bx
                 fig.add_annotation(x=ax_x, y=1.0, yref="paper", text=f"best {param} = {best}", showarrow=False,
                                    yanchor="bottom", font=dict(size=SIZE_TICK, color="black"))
     ylabel = f"{metric} ({unit})" if unit else metric
     base_layout(fig, ytitle=ylabel, xtitle=param, legend_top=not single)
     fig.update_layout(hovermode="x unified")
-    if log_x:
-        xs_all = sorted({x for s in series_by_group.values() for x, _ in s})
+    if not numeric:
+        fig.update_xaxes(type="category", categoryorder="array", categoryarray=[str(x) for x in xs_all])
+    elif log_x:
         fig.update_xaxes(type="log", tickvals=xs_all, ticktext=[f"{x:g}" for x in xs_all], minor=dict(ticks=""))
     return fig
 

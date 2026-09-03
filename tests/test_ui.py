@@ -612,3 +612,70 @@ def test_comparison_pools_several_experiments_and_pins_them(demo_db):
     assert _sidebar_multiselect(at2, "Also include experiments").value == ["lambda-sweep"]
     assert at2.selectbox(key="exp_cols").value == "experiment"
     assert any("Pooling" in c.value for c in at2.caption)
+
+
+@pytest.fixture
+def condition_sweep_db(tmp_path, monkeypatch):
+    """A sweep over a knob on a 2-noise grid with two arms, plus a categorical sweep, logged like the recipe runner
+    does (condition next to the knobs in config) but without recording the swept knob on the experiment; a spec
+    of the same name in the studies folder declares it."""
+    from results_tracker import log_run
+
+    db = tmp_path / "s.db"
+    for noise in (0.01, 0.05):
+        for den in ("drunet", "dncnn"):
+            for beta in (0.0, 0.5, 1.0):
+                for seed in (0, 1):
+                    psnr = 30 - 100 * noise - (beta - 0.5) ** 2 * 4 + (1 if den == "drunet" else 0) + 0.1 * seed
+                    log_run("ema-beta", project="pnp", experiment_type="sweep", method="adaptive", dataset="CBSD68", seed=seed,
+                            config={"kernel": 3, "noise": noise, "denoiser": den, "beta": beta, "K": 20},
+                            metrics={"psnr": psnr, "runtime_s": 1.0}, db=db, git_commit=None)
+    for floor in ("none", "op_norm", "cr_bound"):
+        for seed in (0, 1):
+            log_run("rho-floor", project="pnp", experiment_type="sweep", method="adaptive", dataset="CBSD68", seed=seed,
+                    config={"kernel": 3, "noise": 0.01, "rho_floor": floor, "K": 20},
+                    metrics={"psnr": {"none": 27.0, "op_norm": 28.0, "cr_bound": 28.5}[floor] + 0.1 * seed}, db=db, git_commit=None)
+    studies = tmp_path / "studies"
+    studies.mkdir()
+    (studies / "ema_beta.json").write_text(json.dumps({"name": "ema-beta", "kind": "sweep", "project": "pnp", "problem": "deblurring",
+                                                       "methods": [{"method": "adaptive"}], "sweep": {"knob": "beta", "values": [0, 0.5, 1]}}))
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(db))
+    monkeypatch.setenv("RESULTS_TRACKER_STUDIES", str(studies))
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    return db
+
+
+def test_sweep_page_defaults_to_the_declared_knob_and_splits_by_condition(condition_sweep_db):
+    at = _run("sweep")
+    param_box = [sb for sb in at.sidebar.selectbox if sb.label == "Parameter (x)"][0]
+    assert param_box.value == "beta"  # from the spec, not the alphabetically first varying key (denoiser)
+    lines = [ms for ms in at.sidebar.multiselect if ms.label == "One line per"][0]
+    assert lines.options == ["config.denoiser", "config.noise"]  # varying conditions and arm knobs, not the swept knob
+    assert lines.value == []  # one method only; with several arms the default is one line per method
+    caption = "\n".join(c.value for c in at.caption)
+    assert "pooled over config.denoiser, config.noise" in caption and "best beta = **0.5**" in caption
+    lines.set_value(["config.noise"]).run()
+    assert not at.exception
+    caption = "\n".join(c.value for c in at.caption)
+    assert "best per line: 0.01 → 0.5, 0.05 → 0.5" in caption and "pooled over config.denoiser" in caption
+    lines.set_value(["config.denoiser", "config.noise"]).run()
+    assert not at.exception
+    md = "\n".join(m.value for m in at.markdown)
+    assert "drunet / 0.01" in md and "dncnn / 0.05" in md  # one sensitivity row per line
+    assert not at.warning
+    # a categorical swept knob plots on a category axis, best value ringed
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("rho-floor")][0]).run()
+    assert not at.exception
+    param_box = [sb for sb in at.sidebar.selectbox if sb.label == "Parameter (x)"][0]
+    assert param_box.value == "rho_floor"  # no spec: the only varying key
+    caption = "\n".join(c.value for c in at.caption)
+    assert "best rho_floor = **cr_bound**" in caption
+    assert [cb for cb in at.sidebar.checkbox if cb.label == "Log x axis"][0].disabled
+    # export page offers the same line splits and renders the print figure
+    at2 = _run("export")
+    at2.sidebar.radio[0].set_value("Sweep figure").run()
+    assert not at2.exception
+    at2.multiselect(key="exp_by").set_value(["config.noise"]).run()
+    assert not at2.exception and not at2.error

@@ -16,7 +16,14 @@ from .tables import figure_caption_html, generic_html, sweep_html
 from .common import (active_where, fmt_for, load_metric_defs, load_records, pin_to_paper, select_project_experiment, sidebar_db,
                      sidebar_filter, swept_params, where_text)
 
-GROUP_KEYS = ["method", "dataset", "instance"]
+GROUP_KEYS = ["method", "dataset", "instance"]  # base fields; config.* and derived.* keys are added when they vary
+
+
+def line_keys(records: list[dict], param_x: str) -> list[str]:
+    """Keys a sweep can be split into lines by: varying base fields, config keys (conditions such as noise, or an
+    arm's knob such as the denoiser) and derived fields, except the swept parameter itself."""
+    return [k for k in agg.grouping_keys(records, base=("method", "dataset", "instance"), varying_only=True)
+            if k != f"config.{param_x}"]
 
 
 def render() -> None:
@@ -51,12 +58,17 @@ def render() -> None:
         default_x = declared[0] if declared else (varying[0] if varying else all_keys[0])
         param_x = st.selectbox("Parameter (x)", all_keys, index=all_keys.index(default_x))
         second_opts = ["— none —"] + [k for k in all_keys if k != param_x]
-        default_y = next((k for k in varying if k != param_x), None)
+        # a heatmap only by default when nothing declares a 1-D sweep and exactly one other key varies;
+        # a recipe sweep also varies its conditions (kernel, noise), which are line splits, not a second axis
+        default_y = next((k for k in varying if k != param_x), None) if not declared and len(varying) == 2 else None
         param_y = st.selectbox("Second parameter (heatmap)", second_opts,
-                               index=second_opts.index(default_y) if default_y in second_opts and len(varying) > 1 else 0)
+                               index=second_opts.index(default_y) if default_y in second_opts else 0,
+                               help="Two swept parameters: mean metric per cell. Conditions of a 1-D sweep belong in 'One line per'.")
         metric = st.selectbox("Metric", metrics)
-        group_opts = [k for k in GROUP_KEYS if len({r.get(k) for r in recs}) > 1]
-        group_by = st.multiselect("One line per", group_opts, default=[])
+        group_opts = line_keys(recs, param_x)
+        group_by = st.multiselect("One line per", group_opts, default=["method"] if "method" in group_opts else [],
+                                  help="Split the pooled mean into lines: per method arm, per condition (config.noise, "
+                                       "derived.kernel_type, ...). Without a split every value pools all conditions and seeds.")
         show_band = st.checkbox("Shaded ± std band", value=True, help="Off: error bars instead.")
 
     hib = defs.get(metric, {}).get("higher_is_better", True)
@@ -108,12 +120,14 @@ def render() -> None:
     log_default = is_log_friendly(xs_all)
     log_x = st.sidebar.checkbox("Log x axis", value=log_default, disabled=not is_log_friendly(xs_all))
 
+    pooled = [k for k in line_keys(recs, param_x) if k not in group_by and k not in ("instance", "dataset")]
+    pool_note = f" · pooled over {', '.join(pooled)}" if pooled else ""
     if len(series) == 1:
         (g, s), = series.items()
-        st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} vs {param_x} · "
+        st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} vs {param_x}{pool_note} · "
                    f"best {param_x} = **{best[g]}** ({dict(s)[best[g]].format(fmt)})")
     else:
-        st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} vs {param_x} · best per line: " +
+        st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} vs {param_x}{pool_note} · best per line: " +
                    ", ".join(f"{' / '.join(map(str, g))} → {b}" for g, b in best.items()))
 
     st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best),
