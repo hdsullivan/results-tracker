@@ -19,3 +19,7 @@ toy_artifacts/
 # scratch exports from the Visual / Export pages
 /dpir_vs_adaptive.*
 /pnp_vs_adaptive.*
+
+# internal planning notes, not part of the public tool
+docs/GUI_ROADMAP.md
+PLAN.md

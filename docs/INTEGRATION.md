@@ -39,7 +39,7 @@ created the first time they are logged.
 Inside the environment your experiments run in:
 
 ```bash
-pip install -e ~/Documents/Research/results-tracker[ui]
+pip install -e /path/to/results-tracker[ui]
 ```
 
 (`[ui]` pulls Streamlit, Plotly, pandas and matplotlib; the logging API alone
@@ -50,7 +50,7 @@ Decide where the database lives. One SQLite file per paper, next to the
 manuscript, works well:
 
 ```bash
-export RESULTS_TRACKER_DB=~/Documents/Research/adaptivePnP-paper-workspace/results.db
+export RESULTS_TRACKER_DB=~/research/my-paper/results.db
 ```
 
 Put that line in the repo's `.envrc`, `activate` script or Makefile so every

@@ -10,9 +10,9 @@ traces back to a logged run; the table in the PDF is generated, not typed.
 (Overview, Comparison, Sweep, Ablation, Visual, Run detail, Export), and paper
 exports (booktabs LaTeX tables, IEEE-sized vector figures, qualitative image
 comparisons).
-See [PLAN.md](PLAN.md) for the design, [docs/PITCH.md](docs/PITCH.md) for the
-5-minute demo script, and **[docs/INTEGRATION.md](docs/INTEGRATION.md) for
-wiring an existing repo and manuscript to the tracker**.
+See [docs/PITCH.md](docs/PITCH.md) for the five-minute tour of why it exists, and
+**[docs/INTEGRATION.md](docs/INTEGRATION.md) for wiring an existing repo and
+manuscript to the tracker**.
 
 ## 5-minute tour
 

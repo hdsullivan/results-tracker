@@ -152,11 +152,11 @@
 <p>Budget about an hour: install, decide where the database lives, instrument the one place your script already has the config,
   the metrics and the output folder, then import whatever results you already have.</p>
 <h3>1.1 Install into the environment your experiments run in</h3>
-<pre><code>pip install -e ~/Documents/Research/results-tracker        # logging API only needs SQLModel
-pip install -e "~/Documents/Research/results-tracker[ui]"   # adds Streamlit, Plotly, pandas, matplotlib</code></pre>
+<pre><code>pip install -e /path/to/results-tracker        # logging API only needs SQLModel
+pip install -e "/path/to/results-tracker[ui]"   # adds Streamlit, Plotly, pandas, matplotlib</code></pre>
 <p>The GUI can live in a different environment from the experiments (a plain <code>.venv</code> without torch); section 2.3
   explains how it still plans studies. One SQLite file per paper, next to the manuscript, works well:</p>
-<pre><code>export RESULTS_TRACKER_DB=~/Documents/Research/adaptivePnP-paper-workspace/results.db
+<pre><code>export RESULTS_TRACKER_DB=~/research/my-paper/results.db
 results-tracker init</code></pre>
 <h3>1.2 Declare metrics and methods once</h3>
 <pre><code>results-tracker metric define psnr --unit dB --fmt .2f
@@ -431,5 +431,5 @@ results-tracker asset set fig:beta -p adaptive-pnp --status final</code></pre>
 <tr><td>an older database</td><td>opening it adds any new columns automatically; nothing to migrate by hand</td></tr>
 </tbody></table></div>
 <footer>results-tracker guide · generated from the code on the <code>recipe-layer</code> branch, September 2026 · longer references:
-  <code>docs/INTEGRATION.md</code>, <code>docs/RECIPES.md</code>, <code>docs/GUI_ROADMAP.md</code>.</footer>
+  <code>docs/INTEGRATION.md</code>, <code>docs/RECIPES.md</code>.</footer>
 </main>

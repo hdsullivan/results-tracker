@@ -22,7 +22,8 @@ python scripts/screenshot.py http://localhost:8501 docs/screenshots   # needs Ch
 
 - `docs/USER_GUIDE.html` — the printable user guide (connect a repo, declare, plan, run, look, publish); open in a browser and
   print to PDF. `docs/INTEGRATION.md` — how a lab repo adopts the tracker (instrumentation, import, Makefile, conventions).
-- `docs/PITCH.md` — competition demo script. `PLAN.md` — original design and phase status.
+- `docs/PITCH.md` — the five-minute demo script. `PLAN.md` and `docs/GUI_ROADMAP.md` are internal
+  planning notes, kept locally and gitignored: the repo is public, and they are written to the author.
 - `docs/RECIPES.md` — the recipe layer: declare a `Method` and a `Problem`, run comparison/sweep/ablation studies from JSON specs.
 
 ## Layout
