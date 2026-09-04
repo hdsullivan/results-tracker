@@ -243,3 +243,7 @@ run `base`, or the most common config is used).
 ```bash
 pytest
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

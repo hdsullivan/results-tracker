@@ -212,7 +212,7 @@ _CITE = re.compile(r"\s*~?\\cite[tp]?\{[^}]*\}")
 
 
 def plain_label(label: Optional[str]) -> Optional[str]:
-    """A method label without its LaTeX citation: `DPIR~\cite{zhang2021}` -> `DPIR`.
+    r"""A method label without its LaTeX citation: `DPIR~\cite{zhang2021}` -> `DPIR`.
 
     Labels may carry a `\cite{}` so LaTeX tables cite the baseline; figures, panel titles and the GUI
     cannot render it and show the bare name instead."""
@@ -222,7 +222,7 @@ def plain_label(label: Optional[str]) -> Optional[str]:
 
 
 def method_labels(records: Iterable[Record], latex: bool = False) -> dict[Any, str]:
-    """method name -> display label (from Method.label), for table row labels.
+    r"""method name -> display label (from Method.label), for table row labels.
 
     With `latex=False` (figures, HTML, panel titles) citations are stripped; LaTeX table exports pass
     `latex=True` to keep `label~\cite{key}` intact."""

@@ -1,4 +1,4 @@
-"""Paper figures in the lab's IEEE style (ported from adaptivePnP `ablation_utils.set_paper_style`).
+r"""Paper figures in the lab's IEEE style (ported from adaptivePnP `ablation_utils.set_paper_style`).
 
 - Times-like serif text: 8 pt base, 11 pt axis labels, 9 pt ticks, 11 pt legend, 10.5 pt bold panel captions.
 - Full boxed axes frame (0.8 pt) with inward major + minor ticks on all four sides, no grid.

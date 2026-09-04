@@ -11,3 +11,11 @@ build/
 demo_artifacts/
 specs/
 toy_artifacts/
+.ruff_cache/
+# `<db>.diagnostics/` -- where run_study parks curves when a study has no artifacts dir
+*.diagnostics/
+# machine-specific launch configs (absolute DB paths); keep local, do not publish
+.claude/launch.json
+# scratch exports from the Visual / Export pages
+/dpir_vs_adaptive.*
+/pnp_vs_adaptive.*
