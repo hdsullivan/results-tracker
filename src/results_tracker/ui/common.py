@@ -216,14 +216,46 @@ def _recent_file():
     return Path(os.environ.get(HOME_ENV) or (Path.home() / ".results-tracker")).expanduser() / "recent.json"
 
 
+def _canonical_db(path: str) -> str:
+    """One spelling per file: absolute, `~` expanded. A relative `results.db` written from another working directory
+    would otherwise sit next to the same file's full path -- or next to a *different* file with the same name."""
+    return path if path == ":memory:" else os.path.abspath(os.path.expanduser(path))
+
+
 def recent_dbs() -> list[str]:
-    """Databases opened before (newest first), kept in $RESULTS_TRACKER_HOME/recent.json (default ~/.results-tracker)."""
+    """Databases opened before (newest first), kept in $RESULTS_TRACKER_HOME/recent.json (default ~/.results-tracker).
+    Paths come back canonical and de-duplicated; directories (a half-typed path that was remembered) are dropped."""
     import json
 
     try:
-        return [p for p in json.loads(_recent_file().read_text()) if isinstance(p, str)]
+        raw = [p for p in json.loads(_recent_file().read_text()) if isinstance(p, str)]
     except (OSError, ValueError):
         return []
+    out: list[str] = []
+    for p in raw:
+        c = _canonical_db(p)
+        if c not in out and not os.path.isdir(c):
+            out.append(c)
+    return out
+
+
+def db_labels(paths: Sequence[str]) -> dict[str, str]:
+    """Display label per path: the file name alone when it is unique, else every file of that name gets as many
+    parent directories prepended as it takes to tell them apart (`adaptivePnP/results.db`, `results-tracker/results.db`).
+    Streamlit's selectbox returns the first option whose label matches, so two options must never share one."""
+    parts = {p: [x for x in os.path.normpath(p).split(os.sep) if x] or [p] for p in paths}
+    labels = {p: parts[p][-1] for p in paths}
+    depth = 1
+    while True:
+        clashes = {lbl for lbl in labels.values() if sum(1 for v in labels.values() if v == lbl) > 1}
+        if not clashes:
+            return labels
+        depth += 1
+        for p in paths:
+            if labels[p] in clashes and depth <= len(parts[p]):
+                labels[p] = os.path.join(*parts[p][-depth:])
+        if depth > max(len(v) for v in parts.values()):
+            return labels  # identical paths cannot be told apart; give up rather than loop
 
 
 def remember_db(path: str) -> None:
@@ -231,6 +263,7 @@ def remember_db(path: str) -> None:
 
     if path == ":memory:":
         return
+    path = _canonical_db(path)
     recent = [path] + [p for p in recent_dbs() if p != path]
     try:
         f = _recent_file()
@@ -246,10 +279,12 @@ def sidebar_db() -> str:
     remember_db(current)
     with st.sidebar:
         recent = recent_dbs()
+        canonical = _canonical_db(current)
         if len(recent) > 1:
-            pick = st.selectbox("Recent databases", recent, index=recent.index(current) if current in recent else 0,
-                                format_func=lambda p: os.path.basename(p) or p, help="Databases opened before; the full path is in the box below.")
-            if pick != current:
+            labels = db_labels(recent)
+            pick = st.selectbox("Recent databases", recent, index=recent.index(canonical) if canonical in recent else 0,
+                                format_func=lambda p: labels.get(p, p), help="Databases opened before; the full path is in the box below.")
+            if _canonical_db(pick) != canonical:
                 st.session_state[KEY_DB] = resolve_db_path(pick)
                 st.rerun()
         new = st.text_input("Database", value=current, help="SQLite file. Set $RESULTS_TRACKER_DB to change the default.")

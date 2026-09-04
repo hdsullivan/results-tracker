@@ -823,6 +823,37 @@ def test_overview_notes_stage_and_run_links(demo_db, tmp_path):
     assert recent == [str(demo_db)]
 
 
+def test_recent_databases_with_the_same_file_name_stay_distinct(demo_db, tmp_path):
+    """Two remembered databases called results.db must not collapse onto one dropdown label: Streamlit returns the
+    first option whose label matches, and the GUI then switched to the wrong file on the next rerun."""
+    import json as _json
+
+    from results_tracker import get_engine
+    from results_tracker.ui.common import _canonical_db, db_labels, recent_dbs
+
+    other = tmp_path / "elsewhere" / "results.db"
+    other.parent.mkdir()
+    get_engine(other).dispose()
+    home = Path(os.environ["RESULTS_TRACKER_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    # a relative spelling of the empty file, a directory typed by mistake, and the real database
+    (home / "recent.json").write_text(_json.dumps([os.path.relpath(other), ".", str(demo_db)]))
+
+    assert recent_dbs() == [str(other), str(demo_db)]  # canonical, the directory dropped
+    labels = db_labels(recent_dbs())
+    assert labels[str(other)] != labels[str(demo_db)]
+    assert all(lbl.endswith(os.path.basename(pth)) for pth, lbl in labels.items())
+    assert _canonical_db("~/x.db") == os.path.expanduser("~/x.db")
+
+    at = _run("comparison")
+    box = [sb for sb in at.sidebar.selectbox if sb.label == "Recent databases"][0]
+    assert box.value == _canonical_db(str(demo_db)) and len(set(box.format_func(o) for o in box.options)) == len(box.options)
+    at.run()  # a rerun must not drift to the other file
+    assert not at.exception
+    assert [t for t in at.sidebar.text_input if t.label == "Database"][0].value == _canonical_db(str(demo_db))
+    assert [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"], "selectors vanished: the database changed"
+
+
 def test_run_detail_opens_the_run_in_the_url(demo_db):
     from results_tracker import get_runs
 

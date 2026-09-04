@@ -432,6 +432,11 @@ def run_study(
                     metrics.update(problem.metrics(est, inst))
                 except Exception as e:
                     est = Estimate(est.x, est.diagnostics, False, f"metrics failed: {type(e).__name__}: {e}")
+                # an estimate can be finite yet far enough off that its error overflows (PSNR -inf, NRMSE inf);
+                # that is a diverged run, not a completed one with a strange score
+                bad = sorted(k for k, v in metrics.items() if isinstance(v, float) and not math.isfinite(v))
+                if est.ok and bad:
+                    est = Estimate(est.x, est.diagnostics, False, f"non-finite metric(s): {', '.join(bad)}")
             scalars, rest = _scalar_metrics(est.diagnostics)
             metrics.update({k: v for k, v in scalars.items() if k not in metrics})
             metrics.setdefault("runtime_s", runtime)

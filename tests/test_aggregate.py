@@ -316,3 +316,21 @@ def test_plain_label_strips_citations_for_figures_and_screens():
     recs[0]["method_label"] = r"DPIR~\cite{zhang2021plug}"
     assert agg.method_labels(recs) == {"dpir": "DPIR"}
     assert agg.method_labels(recs, latex=True) == {"dpir": r"DPIR~\cite{zhang2021plug}"}
+
+
+def test_summarize_skips_non_finite_values():
+    """A diverged run whose PSNR overflowed to -inf must not take a cell down (statistics.stdev raises on inf)."""
+    from results_tracker import aggregate as agg
+
+    st = agg.summarize([30.0, float("-inf"), 32.0, float("nan"), None])
+    assert st is not None and st.n == 2 and st.mean == 31.0 and st.min == 30.0
+    assert agg.summarize([float("inf"), float("nan")]) is None
+
+    recs = [
+        {"method": "m", "config": {"beta": b}, "metrics": {"psnr": p}, "status": "completed"}
+        for b, p in ((0.5, 30.0), (0.5, 31.0), (1.0, float("-inf")), (1.0, 29.0), (1.0, 28.0))
+    ]
+    series = agg.sweep_series(recs, "beta", "psnr")[()]
+    assert [x for x, _ in series] == [0.5, 1.0]
+    by_x = dict(series)
+    assert by_x[1.0].n == 2 and by_x[1.0].mean == 28.5 and by_x[0.5].n == 2

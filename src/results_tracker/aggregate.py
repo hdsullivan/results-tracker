@@ -9,6 +9,7 @@ import json
 import re
 from numbers import Number
 
+import math
 import statistics
 from dataclasses import dataclass, field
 from typing import Any, Callable, Hashable, Iterable, Mapping, Optional, Sequence
@@ -36,7 +37,11 @@ class Stat:
 
 
 def summarize(values: Iterable[Optional[float]]) -> Optional[Stat]:
-    vals = [float(v) for v in values if v is not None]
+    """Mean, sample std, n, min, max of the finite values; None when there are none.
+
+    None, NaN and ±inf are skipped: a diverged run whose PSNR overflowed to -inf must not take the whole cell down
+    (`statistics.stdev` raises on it). The survivor count is `n`, so a table can say how many runs a cell pools."""
+    vals = [float(v) for v in values if v is not None and math.isfinite(float(v))]
     if not vals:
         return None
     std = statistics.stdev(vals) if len(vals) > 1 else 0.0

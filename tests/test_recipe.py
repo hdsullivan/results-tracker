@@ -171,7 +171,7 @@ def test_run_toy_demo_logs_resumes_and_feeds_the_analysis(tmp_path, engine):
 
 class Crashy(Method):
     key = "crashy"
-    knobs = (Knob("mode", "choice", "raise", choices=("raise", "nan", "ok")),)
+    knobs = (Knob("mode", "choice", "raise", choices=("raise", "nan", "huge", "ok")),)
     calls = 0
 
     def reconstruct(self, instance, config, state):
@@ -180,6 +180,8 @@ class Crashy(Method):
             raise RuntimeError("boom")
         if config["mode"] == "nan":
             return Estimate(instance.measurement * float("nan"))
+        if config["mode"] == "huge":  # finite, but so far off that the squared error overflows
+            return Estimate(instance.measurement * 0.0 + 1e200)
         return Estimate(instance.measurement)
 
 
@@ -201,6 +203,19 @@ def test_failures_are_logged_not_raised_and_failed_settings_are_retried(engine):
     report = run_study(study, engine=engine, registry=reg, log=None)
     assert report.skipped == 2 and report.logged == 4 and Crashy.calls == 4
     assert len(get_runs(experiment="robust", project="p", engine=engine)) == 6
+
+
+def test_non_finite_metrics_mark_the_run_failed(engine):
+    """A finite estimate whose PSNR overflows to -inf is a diverged run, logged as failed with the metric named."""
+    reg = Registry()
+    reg.problem(ToyDeblurring)
+    reg.method(Crashy)
+    study = Study("overflow", "comparison", "toy-deblur", [Arm("crashy", {"mode": "huge"})], project="p", n_instances=1)
+    report = run_study(study, engine=engine, registry=reg, log=None)
+    assert report.logged == 1 and report.failed == 1
+    (rec,) = run_records(get_runs(experiment="overflow", project="p", engine=engine), engine=engine)
+    assert rec["status"] == "failed" and rec["notes"].startswith("non-finite metric(s): ")
+    assert "psnr" in rec["notes"]
 
 
 def test_registry_resolves_keys_and_import_paths():
