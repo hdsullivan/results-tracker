@@ -463,31 +463,35 @@ def ablation(
     experiment: str = typer.Option(..., "--experiment", "-e"),
     project: Optional[str] = typer.Option(None, "--project", "-p"),
     metrics: list[str] = typer.Option([], "--metric"),
+    by: list[str] = typer.Option(["method"], "--by",
+                                 help="A table per value of this field. Default `method`: two methods are two "
+                                      "ablations, each with its own full model. `--by ''` pools them into one table."),
     db: Optional[Path] = DbOpt,
 ):
-    """Ablation table: each config variant vs the base, with deltas."""
+    """Ablation table: each config variant vs the base, with deltas. One table per method by default."""
     engine = get_engine(db)
     recs = run_records(get_runs(experiment=experiment, project=project, engine=engine), engine=engine)
     defs = get_metric_defs(engine=engine)
     try:
-        rows = agg.ablation_table(recs, metrics=metrics or None)
+        tables = agg.ablation_tables(recs, by=[b for b in by if b], metrics=metrics or None)
     except agg.AmbiguousBaseError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(code=1)
-    names = rows[0].stats.keys() if rows else []
-    t = Table("variant", *[f"{m} (Δ)" for m in names], "n")
-    for r in rows:
-        cells = []
-        for m in names:
-            st = r.stats[m]
-            fmt = defs[m].fmt if m in defs else ".2f"
-            if st is None:
-                cells.append("—"); continue
-            d = r.delta[m]
-            ds = "" if r.is_base or d is None else f" ({d:+{fmt}})"
-            cells.append(st.format(fmt) + ds)
-        t.add_row(f"[bold]{r.label}[/]" if r.is_base else r.label, *cells, str(r.n))
-    console.print(t)
+    for group, rows in tables.items():
+        names = rows[0].stats.keys() if rows else []
+        t = Table("variant", *[f"{m} (Δ)" for m in names], "n", title=agg.group_heading(group, recs) or None)
+        for r in rows:
+            cells = []
+            for m in names:
+                st = r.stats[m]
+                fmt = defs[m].fmt if m in defs else ".2f"
+                if st is None:
+                    cells.append("—"); continue
+                d = r.delta[m]
+                ds = "" if r.is_base or d is None else f" ({d:+{fmt}})"
+                cells.append(st.format(fmt) + ds)
+            t.add_row(f"[bold]{r.label}[/]" if r.is_base else r.label, *cells, str(r.n))
+        console.print(t)
 
 
 @app.command()

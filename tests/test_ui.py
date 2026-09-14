@@ -1396,3 +1396,45 @@ def test_the_export_page_composes_pinned_figures_into_one(demo_db):
     assert at.image  # the composed preview
     assert any("Download PDF" in b.label for b in at.download_button)
     assert any("each panel is the pinned asset" in c.value.lower() for c in at.caption)
+
+
+def test_ablation_page_splits_by_method(demo_db):
+    """Two methods in one ablation experiment get a section each, not one pooled table.
+
+    The ADMM-style method carries `update_order`, which the PGM-style one has no notion of. Pooled,
+    that key is diffed and shows up as the ablated setting "- update_order", and the two full models
+    share one base. Split, each method keeps its own base and its own single change.
+    """
+    from results_tracker.api import log_run
+
+    for kernel in ("G1", "M2"):
+        for extra, method in (({"update_order": "data_first"}, "solver_admm"), ({}, "solver_pgm")):
+            for floor, psnr in (("window", 28.0), ("none", 22.0)):
+                log_run("two-method-ablation", project="demo-paper", method=method, dataset="D",
+                        instance=kernel, seed=0, config={"floor": floor, "kernel": kernel, **extra},
+                        metrics={"psnr": psnr + (0.5 if method == "solver_pgm" else 0.0)},
+                        experiment_type="ablation", tags=["base"] if floor == "window" else [], db=demo_db)
+
+    at = AppTest.from_string("from results_tracker.ui import ablation\nablation.render()\n", default_timeout=30)
+    at.run()
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    at = exp_box.select([o for o in exp_box.options if o.startswith("two-method-ablation")][0]).run()
+    assert not at.exception, at.exception
+
+    split = [ms for ms in at.sidebar.multiselect if ms.label == "Split by"][0]
+    assert split.value == ["method"], "method splits by default"
+    assert "seed" not in split.options, "seeds are repetitions to pool over, not an ablation axis"
+    assert [ms for ms in at.sidebar.multiselect if ms.label.startswith("Conditions")][0].value == ["kernel"]
+
+    heads = [h.value for h in at.subheader]
+    assert "solver_admm" in heads and "solver_pgm" in heads, heads
+    md = "\n".join(m.value for m in at.markdown)
+    assert "floor: window→none" in md
+    assert "update_order" not in md, "the method's own knob must not read as an ablated setting"
+    caption = "\n".join(c.value for c in at.caption)
+    assert "2 ablations, split by `method`" in caption and "pooled over `kernel`" in caption
+
+    # turning the split off is the old pooled behaviour, phantom setting and all
+    at = split.set_value([]).run()
+    assert not at.exception, at.exception
+    assert "update_order" in "\n".join(m.value for m in at.markdown)

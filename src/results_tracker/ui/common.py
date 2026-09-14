@@ -629,12 +629,16 @@ def reset_on_experiment_change(prefix: str, experiment: Optional[str]) -> None:
 
 def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], key: str,
                  suggested_label: Optional[str] = None, caption: Optional[str] = None,
-                 extra_experiments: Sequence[str] = ()) -> None:
+                 extra_experiments: Sequence[str] = (), extra_filters: Optional[Mapping[str, Any]] = None) -> None:
     """An expander that saves the current view as a paper asset (models.Asset) of the selected project.
 
     `choices` maps asset kind -> rendering options for that kind (one entry, or several to pick from). The
     asset is pinned to the current experiment and filter; `records` are the runs behind the view (for the
     fingerprint). `caption` fixes the manuscript caption; otherwise a text area asks for one.
+
+    `extra_filters` narrows the asset beyond the page filter, for a page showing several views at once: the
+    Ablation page splits by method, so each section pins the method it is actually showing rather than the
+    whole page. They merge into the page filter and win where the two name the same field.
     """
     from ..api import get_asset, save_asset
     from ..export.paper import KIND_TITLES, default_label, records_fingerprint
@@ -660,7 +664,7 @@ def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], k
         if caption is None:
             caption = keyed(st.text_area, "Caption in the manuscript (blank = auto-generated)", f"{key}_caption",
                             existing.caption if existing else "", height=70)
-        where = active_where()
+        where = {**active_where(), **dict(extra_filters or {})}
         st.caption(f"Renders **{experiment}**" + (f" + {', '.join(extra_experiments)}" if extra_experiments else "")
                    + (f" with filter {where_text(where)}" if where else "") + f" as {KIND_TITLES[kind]}"
                    + (f". `{label}` exists ({existing.kind} of {existing.experiment}); pinning replaces what it renders." if existing else "."))

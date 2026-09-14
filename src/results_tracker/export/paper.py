@@ -144,7 +144,8 @@ def figure_drawer(spec: Mapping[str, Any], records: Sequence[Record], defs: Mapp
     if kind == "ablation-figure":
         if not metric:
             raise ValueError("an ablation figure needs a `metric` option")
-        rows = agg.ablation_table(recs, base_run_id=o.get("base_run_id"), metrics=[metric])
+        rows = agg.ablation_table(recs, base_run_id=o.get("base_run_id"), metrics=[metric],
+                                  ignore_keys=o.get("ignore_keys"))
         if not any(r.is_base for r in rows):
             raise ValueError("no run matches the base config; tag the full model's runs `base`")
         d = defs.get(metric, {})
@@ -261,7 +262,8 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
             out.files.append((f"tables/{slug}.tex", tex.encode()))
             out.note = audit.summary() + (f" · {hint}" if hint else "")
         elif kind == "ablation-table":
-            rows = agg.ablation_table(recs, base_run_id=o.get("base_run_id"), metrics=o.get("metrics") or None)
+            rows = agg.ablation_table(recs, base_run_id=o.get("base_run_id"), metrics=o.get("metrics") or None,
+                                      ignore_keys=o.get("ignore_keys"))
             metrics = o.get("metrics") or (list(rows[0].stats) if rows else [])
             tex = ablation_latex(rows, metrics, defs, caption=caption, label=label, env=env, font=o.get("font"), std=o.get("std", "pm"),
                                  show_delta=o.get("show_delta", True), setting_columns=o.get("setting_columns", True), provenance=prov)

@@ -1013,6 +1013,9 @@ class AblationRow:
     delta: dict[str, Optional[float]]  # variant mean - base mean
     is_base: bool = False
     base_mean: dict[str, Optional[float]] = field(default_factory=dict)
+    #: the runs behind this arm, so a caller can name one of them (a pinned asset points at the base run
+    #: of the section it was pinned from, not at whatever run the page happened to be seeded with)
+    run_ids: list[Any] = field(default_factory=list)
 
     def rel_delta(self, metric: str) -> Optional[float]:
         """(variant - base) / |base| as a fraction; None when undefined."""
@@ -1092,9 +1095,75 @@ def ablation_table(
         rows.append(AblationRow(
             describe_diff(d), d, len(rs), stats, delta, is_base=(sig == ()),
             base_mean={m: (b.mean if b is not None else None) for m, b in base_stats.items()},
+            run_ids=[r["run_id"] for r in rs if r.get("run_id") is not None],
         ))
     rows.sort(key=lambda r: (not r.is_base, len(r.diff), r.label))
     return rows
+
+
+def ablation_tables(
+    records: Iterable[Record],
+    by: Sequence[str] = ("method",),
+    base_run_id: Optional[int] = None,
+    **kwargs: Any,
+) -> dict[GroupKey, list[AblationRow]]:
+    """One independent ablation per group of `by` -- by default one per method.
+
+    An ablation is a statement about a single method: its full model, the conditions that full model
+    was repeated on, and the settings it varies all live inside that method. Pooling two methods into
+    one table breaks all three. They share one base, so the second method's full model is reported as
+    a variant of the first's; and any config key only one of them carries is diffed as though it were
+    an ablated setting -- an `update_order` present on an ADMM method and absent on a PGM one reads as
+    the change "- update_order". Grouping first keeps each method's ablation intact.
+
+    Every group pools over the same conditions, resolved once across all the records, so the arms of
+    two methods stay comparable. `base_run_id` names a run, which can only be in one group; its
+    *settings* -- the config keys that vary across the experiment, minus the conditions -- are what
+    identify the full model, so each other group takes the run carrying those same setting values. A
+    setting a group does not have at all (`update_order` on a PGM method) does not stop it matching.
+    Groups with no such run fall back to `ablation_table`'s own choice (a run tagged 'base', else the
+    most common config), and raise `AmbiguousBaseError` if that cannot be decided either.
+
+    Remaining keyword arguments go to `ablation_table`. Groups whose runs yield no rows are dropped,
+    and an empty `by` reproduces `ablation_table` under the key `()`.
+    """
+    recs = list(records)
+    keys = list(by)
+    ignored = set(kwargs.pop("ignore_keys", None) or ()) if "ignore_keys" in kwargs else set(condition_keys(recs))
+    if not keys:
+        rows = ablation_table(recs, base_run_id=base_run_id, ignore_keys=sorted(ignored), **kwargs)
+        return {(): rows} if rows else {}
+    groups = group_records(recs, keys)
+    if keys == ["method"]:
+        order = {m: i for i, m in enumerate(method_order(recs))}
+        ordered = sorted(groups, key=lambda g: (order.get(g[0], len(order)), natural_key(g[0])))
+    else:
+        ordered = sorted(groups, key=lambda g: tuple(natural_key(v) for v in g))
+
+    ref = next((r for r in recs if r.get("run_id") == base_run_id), None) if base_run_id is not None else None
+    settings = {k for k in varying_config_keys(completed(recs))} - ignored
+    want = {k: v for k, v in flatten(ref["config"]).items() if k in settings} if ref is not None else {}
+
+    out: dict[GroupKey, list[AblationRow]] = {}
+    for g in ordered:
+        rs = groups[g]
+        mine = base_run_id if any(r.get("run_id") == base_run_id for r in rs) else None
+        if mine is None and want:
+            # the same full model in this group: a key the group never carries cannot disagree
+            twin = next((r for r in rs if all(flatten(r["config"]).get(k, v) == v for k, v in want.items())), None)
+            mine = twin.get("run_id") if twin is not None else None
+        rows = ablation_table(rs, base_run_id=mine, ignore_keys=sorted(ignored), **kwargs)
+        if rows:
+            out[g] = rows
+    return out
+
+
+def group_heading(group: GroupKey, records: Iterable[Record] = ()) -> str:
+    """A group key as a heading: a method shows its display label, the empty key is ''."""
+    if not group:
+        return ""
+    labels = method_labels(records)
+    return " · ".join(fmt_value(labels.get(v, v)) for v in group)
 
 
 # --------------------------------------------------------------------------- ablation effect sizes

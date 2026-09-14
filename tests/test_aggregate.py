@@ -411,3 +411,65 @@ def test_paired_comparison_counts_wins_in_the_metric_direction():
     pc_low = agg.paired_comparison(table_low, "ours", "base")
     assert (pc_low.wins, pc_low.losses) == (1, 4)  # the same numbers, now the other way round
     assert agg.paired_comparison(table, "ours", "nobody") is None
+
+
+def test_ablation_tables_splits_by_method_so_one_method_is_not_a_variant_of_another():
+    """Two methods in one ablation experiment: each gets its own table, own base, own diffs.
+
+    `update_order` is carried by the ADMM-style method only, exactly as a real solver knob would be.
+    Pooled into a single table it reads as the ablated setting "- update_order"; split by method it is
+    never diffed at all, because it does not vary inside either method.
+    """
+    recs = []
+    for kernel in ("G1", "M2"):
+        for extra, method in (({"update_order": "data_first"}, "admm"), ({}, "pgm")):
+            recs.append(rec(method, 0, {"floor": "window", "kernel": kernel, **extra}, tags=["base"], psnr=28.0))
+            recs.append(rec(method, 0, {"floor": "none", "kernel": kernel, **extra},
+                            psnr=22.0 if method == "admm" else 23.0))
+    pooled = agg.ablation_table(recs)
+    assert any("update_order" in r.label for r in pooled), "the pooled table diffs the method's own knob"
+
+    tables = agg.ablation_tables(recs)
+    assert list(tables) == [("admm",), ("pgm",)]
+    for group, rows in tables.items():
+        assert [r.label for r in rows] == ["full model", "floor: window→none"], group
+        assert rows[0].is_base and rows[0].n == 2 and rows[1].n == 2
+    assert tables[("admm",)][1].delta["psnr"] == -6.0
+    assert tables[("pgm",)][1].delta["psnr"] == -5.0
+
+
+def test_ablation_tables_finds_each_group_its_own_base_from_the_named_run():
+    """`base_run_id` names one run, which lives in one group; the others match on its settings.
+
+    A setting the group does not carry at all (`update_order` on the PGM method) must not stop it
+    matching, or the second group falls back and cannot pick a base.
+    """
+    recs = []
+    for kernel in ("G1", "M2"):
+        for extra, method in (({"update_order": "data_first"}, "admm"), ({}, "pgm")):
+            recs.append(rec(method, 0, {"floor": "window", "kernel": kernel, **extra}, psnr=28.0))
+            recs.append(rec(method, 0, {"floor": "none", "kernel": kernel, **extra}, psnr=22.0))
+    assert agg.condition_keys(recs) == []  # nothing is tagged 'base'
+    admm_base = next(r for r in recs if r["method"] == "admm" and r["config"]["floor"] == "window")
+
+    tables = agg.ablation_tables(recs, base_run_id=admm_base["run_id"], ignore_keys=["kernel"])
+    assert list(tables) == [("admm",), ("pgm",)]
+    for group, rows in tables.items():
+        assert [r.label for r in rows] == ["full model", "floor: window→none"], group
+        assert rows[0].run_ids and rows[0].is_base
+    # every group pools over the same conditions, so the arms stay comparable
+    assert all(r.n == 2 for rows in tables.values() for r in rows)
+
+
+def test_ablation_tables_without_a_split_is_ablation_table():
+    recs = [rec("m", 0, {"a": True}, tags=["base"], psnr=30.0), rec("m", 0, {"a": False}, psnr=28.0)]
+    assert list(agg.ablation_tables(recs, by=()).values())[0] == agg.ablation_table(recs)
+    assert agg.ablation_tables([], by=()) == {}
+    assert agg.ablation_tables([]) == {}
+
+
+def test_group_heading_uses_method_labels():
+    recs = [{**rec("dpir", 0, {"a": 1}), "method_label": r"DPIR~\cite{zhang2021}"}]
+    assert agg.group_heading(("dpir",), recs) == "DPIR"
+    assert agg.group_heading(("other",), recs) == "other"
+    assert agg.group_heading((), recs) == ""
