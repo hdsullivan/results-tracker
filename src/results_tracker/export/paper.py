@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 
 from .. import aggregate as agg
+from .. import plotstyle
 from .csv import runs_csv
 from .figures import (ablation_figure, comparison_figure, curves_figure, distribution_figure, figure_bytes, figure_tex,
-                      ieee_preamble, sweep_figure, tradeoff_figure)
+                      ieee_preamble, panel_figure, sweep_figure, tradeoff_figure)
 from .latex import ablation_latex, comparison_latex, provenance_note, selection_latex, sweep_latex, width_hint
 from .visual import make_visual
 
@@ -35,10 +36,10 @@ Record = dict[str, Any]
 
 KINDS = ("comparison-table", "ablation-table", "sweep-table", "selection-table",
          "sweep-figure", "ablation-figure", "comparison-figure", "visual-figure",
-         "curves-figure", "tradeoff-figure", "distribution-figure", "runs-csv")
+         "curves-figure", "tradeoff-figure", "distribution-figure", "panel-figure", "runs-csv")
 TABLE_KINDS = ("comparison-table", "ablation-table", "sweep-table", "selection-table")
 FIGURE_KINDS = ("sweep-figure", "ablation-figure", "comparison-figure", "visual-figure", "curves-figure", "tradeoff-figure",
-                "distribution-figure")
+                "distribution-figure", "panel-figure")
 #: which GUI page configures (and restores) an asset kind; kinds not listed live on the Export page
 KIND_PAGE = {"curves-figure": "curves", "tradeoff-figure": "tradeoff", "distribution-figure": "comparison", "selection-table": "sweep"}
 EXPORT_STATUSES = ("planned", "draft", "final")  # dropped assets are kept in the database but not rendered
@@ -48,7 +49,7 @@ KIND_TITLES = {
     "sweep-table": "Sweep table (LaTeX)", "sweep-figure": "Sweep figure", "ablation-figure": "Ablation figure",
     "comparison-figure": "Comparison figure", "visual-figure": "Visual comparison figure", "runs-csv": "Runs (CSV)",
     "selection-table": "Selection table (LaTeX)", "curves-figure": "Curves figure", "tradeoff-figure": "Trade-off figure",
-    "distribution-figure": "Distribution figure",
+    "distribution-figure": "Distribution figure", "panel-figure": "Multi-panel figure",
 }
 
 
@@ -102,10 +103,116 @@ class RenderedAsset:
         return d
 
 
+PANEL_KINDS = ("sweep-figure", "ablation-figure", "comparison-figure", "curves-figure", "tradeoff-figure", "distribution-figure")
+
+
+def figure_drawer(spec: Mapping[str, Any], records: Sequence[Record], defs: Mapping[str, Mapping[str, Any]], *,
+                  style: Optional["plotstyle.PlotStyle"] = None):
+    """`draw(into=None) -> Figure` for one quantitative figure asset.
+
+    Called with no argument it makes its own single-panel figure (what `render_asset` exports); called with an
+    axes it draws into that one, which is how `panel_figure` composes several assets into one figure without a
+    second implementation of any plot. Visual (image-grid) assets are not composable and are not covered here.
+    """
+    kind = spec["kind"]
+    if kind not in PANEL_KINDS:
+        raise ValueError(f"{kind} is not a composable figure; expected one of {PANEL_KINDS}")
+    o = dict(spec.get("options") or {})
+    recs = agg.completed(agg.filter_records(records, dict(spec.get("filters") or {})) if spec.get("filters") else records)
+    if not recs:
+        raise ValueError("no completed runs match")
+    hib = {k: v["higher_is_better"] for k, v in defs.items()}
+    metric = o.get("metric") or (spec.get("primary_metric") if spec.get("primary_metric") in agg.metric_names(recs) else None) or _primary_metric(recs)
+    unit = defs.get(metric, {}).get("unit", "") if metric else ""
+    default_ylabel = (f"{metric} ({unit})" if unit else metric) if metric else ""
+    width = _width(o.get("width", "single"))
+    xlim, ylim = plotstyle.parse_limits(o.get("xlim")), plotstyle.parse_limits(o.get("ylim"))
+    common = dict(width=width, height=o.get("height"), style=style, caption=o.get("panel_label") or None)
+
+    if kind == "sweep-figure":
+        param = o.get("param") or (agg.varying_config_keys(recs) or [None])[0]
+        if not param or not metric:
+            raise ValueError("a sweep asset needs `param` and `metric` options")
+        series = {g: s for g, s in agg.sweep_series(recs, param, metric, group_by=o.get("by") or []).items() if s}
+        if not series:
+            raise ValueError(f"no runs have `{param}` in their config")
+        best = {g: agg.best_sweep_value(s, hib.get(metric, True)) for g, s in series.items()}
+        return lambda into=None: sweep_figure(series, param, metric, xlabel=o.get("xlabel") or param,
+                                              ylabel=o.get("ylabel") or default_ylabel, band=o.get("band", True),
+                                              best_by_group=best, emphasize=o.get("emphasize") or (), log_x=o.get("log_x"),
+                                              by=o.get("by") or (), xlim=xlim, ylim=ylim, into=into, **common)
+    if kind == "ablation-figure":
+        if not metric:
+            raise ValueError("an ablation figure needs a `metric` option")
+        rows = agg.ablation_table(recs, base_run_id=o.get("base_run_id"), metrics=[metric])
+        if not any(r.is_base for r in rows):
+            raise ValueError("no run matches the base config; tag the full model's runs `base`")
+        d = defs.get(metric, {})
+        return lambda into=None: ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True),
+                                                 fmt=d.get("fmt", ".2f"),
+                                                 xlabel=o.get("xlabel") or (f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else "")),
+                                                 xlim=xlim, into=into, **common)
+    if kind == "comparison-figure":
+        if not metric:
+            raise ValueError("a comparison figure needs a `metric` option")
+        rows_key, cols_key = o.get("rows", "method"), o.get("cols", "dataset")
+        cols_key = None if cols_key in (None, "none") else cols_key
+        pt = agg.pivot_table(recs, rows_key, cols_key, metrics=[metric], higher_is_better=hib,
+                             row_order=agg.method_order(recs) if rows_key == "method" else agg.value_order(recs, rows_key),
+                             col_order=agg.value_order(recs, cols_key) if cols_key else None)
+        return lambda into=None: comparison_figure(pt, metric, ylabel=o.get("ylabel") or default_ylabel,
+                                                   emphasize=o.get("emphasize") or (), zero_based=o.get("zero_based", False),
+                                                   hatch=o.get("hatch", False), rows_key=rows_key, cols_key=cols_key, ylim=ylim,
+                                                   row_labels=agg.method_labels(recs) if rows_key == "method" else None,
+                                                   into=into, **common)
+    if kind == "curves-figure":
+        from ..curves import curve_series, normalise
+
+        curve = o.get("curve")
+        if not curve:
+            raise ValueError("a curves figure needs a `curve` option")
+        series = {g: normalise(cs, o.get("normalise", "value")) for g, cs in curve_series(recs, curve, o.get("by") or []).items()}
+        if not series:
+            raise ValueError(f"no run has a `{curve}` curve in its diagnostics.json")
+        return lambda into=None: curves_figure(series, curve, xlabel=o.get("xlabel") or "iteration",
+                                               ylabel=o.get("ylabel") or curve, band=o.get("band", True),
+                                               log_y=o.get("log_y", False), emphasize=o.get("emphasize") or (),
+                                               guide=o.get("guide"), by=o.get("by") or (), xlim=xlim, ylim=ylim,
+                                               into=into, **common)
+    if kind == "tradeoff-figure":
+        x_metric, y_metric = o.get("x_metric") or "runtime_s", o.get("y_metric") or metric
+        pts = agg.tradeoff_points(recs, x_metric, y_metric, series_key=o.get("series", "method"), path_key=o.get("path"))
+        if not pts:
+            raise ValueError(f"no run has both `{x_metric}` and `{y_metric}`")
+        hollow = set(o.get("hollow") or []) | ({r["method"] for r in recs if r.get("method_is_baseline") or r.get("source") == "reported"}
+                                               if o.get("hollow_baselines", True) else set())
+        return lambda into=None: tradeoff_figure(pts, x_metric, y_metric, xlabel=o.get("xlabel"), ylabel=o.get("ylabel"),
+                                                 log_x=o.get("log_x", True), hollow=hollow, annotate=o.get("annotate", True),
+                                                 emphasize=o.get("emphasize") or (), series_key=o.get("series", "method"),
+                                                 labels=agg.method_labels(recs) if o.get("series", "method") == "method" else None,
+                                                 xlim=xlim, ylim=ylim, into=into, **common)
+    # distribution-figure
+    if not metric:
+        raise ValueError("a distribution figure needs a `metric` option")
+    table = agg.instance_table(recs, metric, methods=o.get("methods") or None, higher_is_better=hib.get(metric, True))
+    if not table.methods:
+        raise ValueError(f"no per-instance runs with `{metric}` (runs need an `instance`)")
+    return lambda into=None: distribution_figure({m: table.values(m) for m in table.methods}, metric,
+                                                 ylabel=o.get("ylabel") or default_ylabel, emphasize=o.get("emphasize") or (),
+                                                 labels=agg.method_labels(recs), show_points=o.get("points", True),
+                                                 ylim=ylim, into=into, **common)
+
+
 def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mapping[str, Mapping[str, Any]], *,
-                 source: str = "") -> RenderedAsset:
+                 source: str = "", style: Optional["plotstyle.PlotStyle"] = None, resolve=None) -> RenderedAsset:
     """Render one asset spec (`label`, `kind`, `experiment`, `filters`, `options`, `caption`, `status`) from the
-    experiment's records. Errors end up in `.error`, never raised: one broken figure must not stop the paper."""
+    experiment's records. Errors end up in `.error`, never raised: one broken figure must not stop the paper.
+
+    `style` is the project's plot style (sizes, colours, label order); the per-view axis ranges travel in the
+    asset's own options as `xlim` / `ylim`, so a figure re-exports exactly as it looked when it was pinned.
+
+    `resolve(label) -> (spec, records)` is what a `panel-figure` uses to reach the figures it composes; without
+    it only the self-contained kinds can be rendered."""
     label, kind = spec["label"], spec["kind"]
     if kind not in KINDS:
         raise ValueError(f"unknown asset kind {kind!r}; expected one of {KINDS}")
@@ -128,6 +235,7 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
     unit = defs.get(metric, {}).get("unit", "") if metric else ""
     default_ylabel = (f"{metric} ({unit})" if unit else metric) if metric else ""
     width = _width(o.get("width", "double" if kind == "visual-figure" else "single"))
+    xlim, ylim = plotstyle.parse_limits(o.get("xlim")), plotstyle.parse_limits(o.get("ylim"))
     env = o.get("env", "table")
     env = None if env in (None, "none", "tabular") else env
 
@@ -172,35 +280,11 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
                                   std=o.get("std", "pm"), param_label=o.get("param_label"), provenance=prov)
                 out.files.append((f"tables/{slug}.tex", tex.encode()))
             else:
-                best = {g: agg.best_sweep_value(s, hib.get(metric, True)) for g, s in series.items()}
-                fig = sweep_figure(series, param, metric, xlabel=o.get("xlabel") or param, ylabel=o.get("ylabel") or default_ylabel,
-                                   band=o.get("band", True), best_by_group=best, width=width, height=o.get("height"),
-                                   emphasize=o.get("emphasize") or (), caption=o.get("panel_label") or None, log_x=o.get("log_x"))
-                add_figure(fig)
+                add_figure(figure_drawer(spec, records, defs, style=style)())
         elif kind == "ablation-figure":
-            if not metric:
-                raise ValueError("an ablation figure needs a `metric` option")
-            rows = agg.ablation_table(recs, base_run_id=o.get("base_run_id"), metrics=[metric])
-            if not any(r.is_base for r in rows):
-                raise ValueError("no run matches the base config; tag the full model's runs `base`")
-            d = defs.get(metric, {})
-            fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
-                                  xlabel=o.get("xlabel") or (f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else "")),
-                                  width=width, height=o.get("height"), caption=o.get("panel_label") or None)
-            add_figure(fig)
+            add_figure(figure_drawer(spec, records, defs, style=style)())
         elif kind == "comparison-figure":
-            if not metric:
-                raise ValueError("a comparison figure needs a `metric` option")
-            rows_key, cols_key = o.get("rows", "method"), o.get("cols", "dataset")
-            cols_key = None if cols_key in (None, "none") else cols_key
-            pt = agg.pivot_table(recs, rows_key, cols_key, metrics=[metric], higher_is_better=hib,
-                                 row_order=agg.method_order(recs) if rows_key == "method" else agg.value_order(recs, rows_key),
-                                 col_order=agg.value_order(recs, cols_key) if cols_key else None)
-            fig = comparison_figure(pt, metric, ylabel=o.get("ylabel") or default_ylabel, width=width, height=o.get("height"),
-                                    emphasize=o.get("emphasize") or (), zero_based=o.get("zero_based", False),
-                                    hatch=o.get("hatch", False), caption=o.get("panel_label") or None,
-                                    row_labels=agg.method_labels(recs) if rows_key == "method" else None)
-            add_figure(fig)
+            add_figure(figure_drawer(spec, records, defs, style=style)())
         elif kind == "visual-figure":
             zc = o.get("zoom_center") or (0.5, 0.5)
             crop = o.get("crop_box")
@@ -209,47 +293,22 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
                              methods=o.get("methods") or None, metrics=o.get("metrics") or ("psnr", "ssim"), mode=o.get("mode", "image"),
                              zoom=o.get("zoom", True), zoom_fraction=o.get("zoom_fraction", 0.3), zoom_center=(float(zc[0]), float(zc[1])),
                              crop_box=tuple(int(v) for v in crop) if crop else None, rows=o.get("rows"), width=width,
-                             auto_roles=o.get("image") is None, data_range=o.get("data_range"))
+                             auto_roles=o.get("image") is None, data_range=o.get("data_range"), style=style)
             out.files.append((f"figures/{slug}.pdf", figure_bytes(vr.fig, "pdf")))
             out.files.append((f"figures/{slug}.tex", figure_tex(f"figures/{slug}.pdf", caption=caption or vr.spec.caption_stub(),
                                                                 label=label, width=width).encode()))
             out.files.append((f"figures/{slug}.json", json.dumps(asdict(vr.spec), indent=2, default=str).encode()))
             out.note = "; ".join(vr.problems + [f"not shown: {k} — {why}" for k, why in vr.omitted.items()])
         elif kind == "curves-figure":
-            from ..curves import curve_series, normalise
+            from ..curves import curve_series
 
-            curve = o.get("curve")
-            if not curve:
-                raise ValueError("a curves figure needs a `curve` option")
-            series = {g: normalise(cs, o.get("normalise", "value")) for g, cs in curve_series(recs, curve, o.get("by") or []).items()}
-            if not series:
-                raise ValueError(f"no run has a `{curve}` curve in its diagnostics.json")
-            fig = curves_figure(series, curve, xlabel=o.get("xlabel") or "iteration", ylabel=o.get("ylabel") or curve,
-                                band=o.get("band", True), log_y=o.get("log_y", False), width=width, height=o.get("height"),
-                                emphasize=o.get("emphasize") or (), caption=o.get("panel_label") or None, guide=o.get("guide"))
-            add_figure(fig, f"{sum(cs.runs for cs in series.values())} runs with curves")
+            add_figure(figure_drawer(spec, records, defs, style=style)(),
+                       f"{sum(cs.runs for cs in curve_series(recs, o.get('curve'), o.get('by') or []).values())} runs with curves")
         elif kind == "tradeoff-figure":
-            x_metric, y_metric = o.get("x_metric") or "runtime_s", o.get("y_metric") or metric
-            pts = agg.tradeoff_points(recs, x_metric, y_metric, series_key=o.get("series", "method"), path_key=o.get("path"))
-            if not pts:
-                raise ValueError(f"no run has both `{x_metric}` and `{y_metric}`")
-            hollow = set(o.get("hollow") or []) | ({r["method"] for r in recs if r.get("method_is_baseline") or r.get("source") == "reported"}
-                                                  if o.get("hollow_baselines", True) else set())
-            fig = tradeoff_figure(pts, x_metric, y_metric, xlabel=o.get("xlabel"), ylabel=o.get("ylabel"), log_x=o.get("log_x", True),
-                                  hollow=hollow, annotate=o.get("annotate", True), width=width, height=o.get("height"),
-                                  emphasize=o.get("emphasize") or (), labels=agg.method_labels(recs) if o.get("series", "method") == "method" else None,
-                                  caption=o.get("panel_label") or None)
-            add_figure(fig)
+            add_figure(figure_drawer(spec, records, defs, style=style)())
         elif kind == "distribution-figure":
-            if not metric:
-                raise ValueError("a distribution figure needs a `metric` option")
-            table = agg.instance_table(recs, metric, methods=o.get("methods") or None, higher_is_better=hib.get(metric, True))
-            if not table.methods:
-                raise ValueError(f"no per-instance runs with `{metric}` (runs need an `instance`)")
-            fig = distribution_figure({m: table.values(m) for m in table.methods}, metric, ylabel=o.get("ylabel") or default_ylabel,
-                                      width=width, height=o.get("height"), emphasize=o.get("emphasize") or (), labels=agg.method_labels(recs),
-                                      show_points=o.get("points", True), caption=o.get("panel_label") or None)
-            add_figure(fig, f"{len(table.instances)} instances")
+            add_figure(figure_drawer(spec, records, defs, style=style)(),
+                       f"{len(agg.instance_table(recs, metric, methods=o.get('methods') or None).instances)} instances")
         elif kind == "selection-table":
             param = o.get("param")
             if not param or not metric:
@@ -261,6 +320,25 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
                                   param_label=o.get("param_label"), provenance=prov)
             out.files.append((f"tables/{slug}.tex", tex.encode()))
             out.note = f"{sum(s.at_boundary for s in sel)} of {len(sel)} winners at a grid boundary" if any(s.at_boundary for s in sel) else ""
+        elif kind == "panel-figure":
+            labels = [str(x) for x in (o.get("panels") or [])]
+            if not labels:
+                raise ValueError("a panel figure needs `panels`: the labels of the figures it composes")
+            if resolve is None:
+                raise ValueError("a panel figure can only be rendered where the other assets are available "
+                                 "(`export paper`, or the Export page)")
+            captions = list(o.get("captions") or [])
+            draws = []
+            for i, panel_label_ in enumerate(labels):
+                found = resolve(panel_label_)
+                if found is None:
+                    raise ValueError(f"no asset `{panel_label_}` in this project")
+                sub_spec, sub_records = found
+                draw = figure_drawer({**sub_spec, "primary_metric": spec.get("primary_metric")}, sub_records, defs, style=style)
+                text = captions[i] if i < len(captions) else None
+                draws.append((lambda into, d=draw: d(into), text or None))
+            add_figure(panel_figure(draws, width=width, height=o.get("height"), ncols=o.get("ncols"), style=style),
+                       f"{len(labels)} panels: {', '.join(labels)}")
         elif kind == "runs-csv":
             out.files.append((f"data/{slug}.csv", runs_csv(recs_all).encode()))
             out.runs = len(recs_all)
@@ -297,10 +375,11 @@ def render_paper(engine, project: str, *, source: str = "", statuses: Sequence[s
     """Render every asset of `project` whose status is in `statuses`, in manuscript order.
 
     `records_for(experiment) -> records` overrides how an experiment's runs are loaded (the GUI passes its cache)."""
-    from ..api import get_metric_defs, get_runs, list_assets, list_projects, run_records
+    from ..api import get_metric_defs, get_plot_style, get_runs, list_assets, list_projects, run_records
 
     defs = {k: {"unit": m.unit, "higher_is_better": m.higher_is_better, "fmt": m.fmt} for k, m in get_metric_defs(engine=engine).items()}
     primary = next((p.primary_metric for p in list_projects(engine=engine) if p.name == project), "") or None
+    style = get_plot_style(project, engine=engine)  # the project's look, for every figure it exports
     cache: dict[str, list[Record]] = {}
 
     def load(exp: str) -> list[Record]:
@@ -308,14 +387,25 @@ def render_paper(engine, project: str, *, source: str = "", statuses: Sequence[s
             cache[exp] = records_for(exp) if records_for else run_records(get_runs(experiment=exp, project=project, engine=engine), engine=engine)
         return cache[exp]
 
+    assets = list_assets(project, engine=engine)
+    by_label = {a.label: a for a in assets}
+
+    def resolve(label: str):
+        """A panel figure's sub-asset: its spec and the runs it draws from."""
+        a = by_label.get(label)
+        if a is None:
+            return None
+        return asset_spec(a), [r for exp in asset_experiments(a) for r in load(exp)]
+
     wanted = set(statuses)
     out = []
-    for a in list_assets(project, engine=engine):
+    for a in assets:
         status = a.status.value if hasattr(a.status, "value") else str(a.status)
         if status not in wanted:
             continue
         records = [r for exp in asset_experiments(a) for r in load(exp)]
-        out.append(render_asset({**asset_spec(a), "primary_metric": primary}, records, defs, source=source))
+        out.append(render_asset({**asset_spec(a), "primary_metric": primary}, records, defs, source=source, style=style,
+                                resolve=resolve))
     return out
 
 

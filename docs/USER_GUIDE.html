@@ -307,8 +307,9 @@ results-tracker recipe run studies/deblurring-ema-beta-pending.json --db paper/r
 <tbody>
 <tr><td>Overview</td><td>experiments with stage, run counts, headline per experiment, recent runs (ids link to Run detail), notes</td>
   <td>failed and running counts; the paper line (pinned, final, stale)</td></tr>
-<tr><td>Comparison</td><td>methods × metrics, mean ± std, best bold, second underlined; bar chart; <em>Per instance</em>: box plots,
-  instance × method table, instances ranked by your gain over a baseline</td>
+<tr><td>Comparison</td><td>methods × metrics, mean ± std, best bold, second underlined; bar chart; the runs behind any cell;
+  <em>Per instance</em>: box plots, instance × method table, instances ranked by your gain over a baseline, and how often
+  your method actually wins (paired sign test and Wilcoxon signed-rank, with a sentence to paste)</td>
   <td>the coverage audit: rows pooled over different datasets are not comparable</td></tr>
 <tr><td>Sweep</td><td>metric against the study's swept knob, one line per arm or condition, band or error bars, heatmap for two knobs;
   plateau and sensitivity; <em>Selection</em>: winner per group with a boundary flag</td>
@@ -321,6 +322,12 @@ results-tracker recipe run studies/deblurring-ema-beta-pending.json --db paper/r
   <td>the band: a wide one usually means a diverging condition is pooled in</td></tr>
 <tr><td>Trade-off</td><td>two metrics against each other, one series per method joined along K, hollow markers for baselines and reported</td>
   <td>log x for runtime</td></tr>
+<tr><td>Runs</td><td>every run of the project in one list: status, when, what the runner recorded; search across experiments;
+  the message of each failed run; the rows a killed job left <em>running</em>, with a button to clear the stale ones</td>
+  <td>failed and running runs are in no table — this is where they are accounted for</td></tr>
+<tr><td>Import</td><td>a CSV or JSON of existing results: the column mapping is shown, and a dry run counts what would be
+  imported and what is already there, before anything is written</td>
+  <td>a swept parameter landing in <em>metrics</em> — the page names the columns that look like one</td></tr>
 <tr><td>Run detail</td><td>one run: metrics, config, diff against another run, artifacts as a figure strip, logs; delete with confirmation</td>
   <td><code>?run=&lt;id&gt;</code> in the URL opens a run directly</td></tr>
 </tbody></table></div>
@@ -332,9 +339,33 @@ results-tracker recipe run studies/deblurring-ema-beta-pending.json --db paper/r
   <li><strong>Name your groupings.</strong> A <em>value map</em> (Settings → Value maps) derives a labelled field from a raw one:
     <code>config.kernel</code> 0–3 → isotropic, 4–7 → anisotropic, 8–11 → motion becomes <code>derived.kernel_type</code>, usable as a row,
     column or filter key everywhere; columns follow the rule order.</li>
+  <li><strong>Say how often, not just how much.</strong> A mean ± std hides whether a method wins on every image or on
+    barely half of them. Under <em>Per instance</em> the page pairs the two methods image by image and reports wins,
+    median gain and two-sided p-values (Wilcoxon signed-rank, and the sign test which ignores magnitudes) — the claim a
+    reviewer asks for. Both are computed on the instances of this dataset only, and neither corrects for comparing
+    several methods against one baseline.</li>
   <li><strong>Read the caption.</strong> Every on-screen table and figure carries an IEEE-style caption stating the aggregation unit,
     <em>n</em>, and what is pooled. If the caption surprises you, the table will surprise a reviewer.</li>
 </ul>
+
+<h3>5.2 Making a plot look the way you want</h3>
+<p>Two places control how every chart is drawn, and both feed the printed figures as well &mdash; the GUI is a preview of the PDF,
+  not a separate look.</p>
+<ul>
+  <li><strong>Sizes, in the sidebar (<em>Plot style</em>).</strong> Axis titles, tick labels, legend, in-plot text, hover text, the bold
+    panel caption, the extra size a pure-math label such as <code>$\lambda$</code> gets, line width and marker size. The numbers are the
+    points the paper figures use; on screen they are drawn about 1.35&times; larger so they read at browser distance.
+    <em>Scale every size &times;</em> multiplies all of them at once, and <em>Reset sizes and colours</em> returns to the lab's IEEE style.</li>
+  <li><strong>Axes, label order and colours, above each chart.</strong> A fixed range per axis (<code>28,34</code>; blank fits the data),
+    the order the values of a grouping key are drawn in (click them in the order you want; anything left out follows at the end), and
+    a colour per series.</li>
+</ul>
+<p>Sizes, colours and label order belong to the <strong>project</strong>: set them once and every page, every method and every exported
+  figure agrees &mdash; the order of <code>method</code> is the same on the Comparison bars, the Sweep legend and the Trade-off series.
+  Settings &rarr; Plots shows the whole style in one form, including what order is stored for which key. Palette hues follow the drawing
+  order (first blue, then red, green, purple, orange, brown, gray, pink), so reordering re-hues the series; pin a colour to keep it. An
+  axis <em>range</em> is a property of one view instead, so it is not shared &mdash; it is saved with the asset when you pin the figure,
+  and <code>results-tracker export paper</code> reproduces it exactly.</p>
 
 <h2><span class="num">6</span>Publish the paper</h2>
 <p>Under every table and figure is a <strong>Pin to paper</strong> expander. It saves the current view as an asset: experiment,
@@ -350,7 +381,17 @@ results-tracker recipe run studies/deblurring-ema-beta-pending.json --db paper/r
 <tr><td>curves-figure, tradeoff-figure, distribution-figure</td><td>Curves, Trade-off, Comparison → Per instance</td><td>PDF + snippet</td></tr>
 <tr><td>runs-csv</td><td>Export</td><td><code>data/&lt;label&gt;.csv</code></td></tr>
 </tbody></table></div>
-<h3>6.1 The Paper page</h3>
+<h3>6.1 Panels, and fixing a name</h3>
+<p>An IEEE figure is usually several panels under one number. Export &rarr; <strong>Multi-panel figure</strong> composes
+  figures you have already pinned: pick them in order, choose the layout, and each panel is drawn by the same code at the
+  same size, captioned (a), (b), (c). The composition is itself an asset, so <code>export paper</code> redraws it whenever
+  the figures it names change.</p>
+<p>An experiment's name is stored by every asset that renders it and every note that mentions it. Settings &rarr;
+  Experiments renames it everywhere at once (renaming onto an existing name merges the two), deletes a botched one with its
+  runs, and the Runs page moves a handful of mistagged runs into the right experiment. Study specs on disk still name the
+  old experiment; the page lists the ones to edit.</p>
+
+<h3>6.2 The Paper page</h3>
 <p>Assets in manuscript order with kind, status (planned / draft / final / dropped), experiments, filter, <strong>Data</strong>
   (completed / planned runs of the studies that feed it) and <strong>State</strong>: never exported, current, or <em>stale</em> when
   runs were added or replaced since the export. Edit status, order, label, caption and notes; <em>Open in …</em> restores the view

@@ -14,13 +14,14 @@ import subprocess
 import warnings
 from datetime import datetime, timezone
 from numbers import Number
-from typing import Any, Iterable, Optional, Sequence, Type, TypeVar, Union
+from typing import Any, Iterable, Mapping, Optional, Sequence, Type, TypeVar, Union
 
 from sqlmodel import Session, SQLModel, select
 
+from .aggregate import natural_key
 from .db import get_engine, session_scope
 from .models import (EXPERIMENT_STAGES, Asset, AssetStatus, Dataset, Experiment, ExperimentType, Method, Metric, Note, Project, Run,
-                     RunStatus, ValueMap)
+                     RunStatus, ValueMap, utcnow)
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -302,10 +303,116 @@ def list_methods(db=None, engine=None) -> list[Method]:
         return sorted(s.exec(select(Method)).all(), key=lambda m: (int(m.position or 0), m.name))
 
 
+def _experiment_row(session: Session, project: str, name: str) -> Experiment:
+    proj = session.exec(select(Project).where(Project.name == project)).first()
+    exp = session.exec(select(Experiment).where(Experiment.project_id == proj.id, Experiment.name == name)).first() if proj else None
+    if exp is None:
+        raise ValueError(f"no experiment {name!r} in project {project!r}")
+    return exp
+
+
+def rename_experiment(project: str, name: str, new_name: str, *, db=None, engine=None) -> dict[str, int]:
+    """Rename an experiment, taking its runs with it, and follow the name everywhere else it is stored.
+
+    An experiment's name is a foreign key in spirit only: pinned assets name it (their own experiment and the
+    ones they pool), and so do notes. A rename that did not update those would silently unpin half the paper.
+    When `new_name` already exists the runs are merged into it and the emptied row is dropped; the target keeps
+    its own type, description and stage. Study specs on disk still name the old experiment -- the GUI says so.
+    """
+    new_name = str(new_name).strip()
+    if not new_name:
+        raise ValueError("the new name cannot be empty")
+    engine = _resolve_engine(engine, db)
+    touched = {"runs": 0, "assets": 0, "notes": 0, "merged": 0}
+    with session_scope(engine) as s:
+        exp = _experiment_row(s, project, name)
+        if new_name == name:
+            return touched
+        target = s.exec(select(Experiment).where(Experiment.project_id == exp.project_id, Experiment.name == new_name)).first()
+        runs = list(s.exec(select(Run).where(Run.experiment_id == exp.id)).all())
+        if target is None:
+            exp.name = new_name
+        else:  # merge: the runs move, the emptied experiment goes
+            for r in runs:
+                r.experiment_id = target.id
+            s.delete(exp)
+            touched["merged"] = 1
+        touched["runs"] = len(runs)
+        for a in s.exec(select(Asset).where(Asset.project_id == exp.project_id)).all():
+            changed = False
+            if a.experiment == name:
+                a.experiment, changed = new_name, True
+            if name in (a.extra_experiments or []):
+                a.extra_experiments = [new_name if e == name else e for e in a.extra_experiments]
+                changed = True
+            if changed:
+                a.updated_at = utcnow()
+                touched["assets"] += 1
+        for n in s.exec(select(Note).where(Note.project_id == exp.project_id, Note.experiment == name)).all():
+            n.experiment = new_name
+            touched["notes"] += 1
+    return touched
+
+
+def delete_experiment(project: str, name: str, *, delete_runs: bool = False, db=None, engine=None) -> dict[str, int]:
+    """Delete an experiment. Refuses while it still has runs unless `delete_runs` says to take them with it.
+
+    Assets and notes that name it are left alone: they become the record of something that was deleted, which
+    the Paper page reports as "no data" rather than quietly rendering something else.
+    """
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        exp = _experiment_row(s, project, name)
+        runs = list(s.exec(select(Run).where(Run.experiment_id == exp.id)).all())
+        if runs and not delete_runs:
+            raise ValueError(f"{name!r} still has {len(runs)} run(s); pass delete_runs=True to remove them too")
+        for r in runs:
+            s.delete(r)
+        assets = [a for a in s.exec(select(Asset).where(Asset.project_id == exp.project_id)).all()
+                  if a.experiment == name or name in (a.extra_experiments or [])]
+        s.delete(exp)
+        return {"runs": len(runs), "assets_left_dangling": len(assets)}
+
+
+def move_runs(run_ids: Iterable[int], to_experiment: str, *, project: Optional[str] = None, db=None, engine=None) -> int:
+    """Move runs into another experiment of the same project, creating it if it does not exist yet.
+
+    For runs logged under a mistyped name, or a grid that belongs with its family. The runs keep everything
+    else; `log_run`'s duplicate protection does not apply retroactively, so a move can put two runs of the same
+    setting side by side -- the coverage audit on the Comparison page is what shows that.
+    """
+    ids = [int(i) for i in run_ids]
+    if not ids:
+        return 0
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        runs = list(s.exec(select(Run).where(Run.id.in_(ids))).all())  # type: ignore[attr-defined]
+        if not runs:
+            return 0
+        source = s.exec(select(Experiment).where(Experiment.id == runs[0].experiment_id)).first()
+        proj_id = source.project_id if source is not None else None
+        if project:
+            proj = s.exec(select(Project).where(Project.name == project)).first()
+            if proj is None:
+                raise ValueError(f"no project {project!r}")
+            proj_id = proj.id
+        target = s.exec(select(Experiment).where(Experiment.project_id == proj_id, Experiment.name == to_experiment)).first()
+        if target is None:
+            target = Experiment(project_id=proj_id, name=to_experiment,
+                                type=source.type if source is not None else ExperimentType.comparison)
+            s.add(target)
+            s.flush()
+        for r in runs:
+            r.experiment_id = target.id
+        return len(runs)
+
+
 def set_project(name: str, *, description: Optional[str] = None, primary_metric: Optional[str] = None,
-                studies_dir: Optional[str] = None, db=None, engine=None) -> Project:
+                studies_dir: Optional[str] = None, plot_style: Optional[Mapping[str, Any]] = None,
+                db=None, engine=None) -> Project:
     """Create or annotate a project; `primary_metric` is what the Overview headline and default figures use,
-    `studies_dir` where the Studies page looks for the project's specs."""
+    `studies_dir` where the Studies page looks for the project's specs, `plot_style` how its plots look
+    (`plotstyle.PlotStyle.to_dict()`; an empty mapping resets to the lab style)."""
     engine = _resolve_engine(engine, db)
     with session_scope(engine) as s:
         p = get_or_create(s, Project, name)
@@ -315,8 +422,22 @@ def set_project(name: str, *, description: Optional[str] = None, primary_metric:
             p.primary_metric = primary_metric
         if studies_dir is not None:
             p.studies_dir = str(studies_dir)
+        if plot_style is not None:
+            p.plot_style = dict(plot_style)
         s.flush()
         return p
+
+
+def get_plot_style(project: Optional[str], *, db=None, engine=None) -> "plotstyle.PlotStyle":
+    """The project's plot style, or the lab default when the project is unknown or has none stored."""
+    from . import plotstyle
+
+    if not project:
+        return plotstyle.DEFAULT
+    engine = _resolve_engine(engine, db)
+    with session_scope(engine) as s:
+        p = s.exec(select(Project).where(Project.name == project)).first()
+        return plotstyle.from_dict(p.plot_style if p else None)
 
 
 # --------------------------------------------------------------------------- notes
@@ -369,7 +490,8 @@ def experiment_summaries(project: Optional[str] = None, db=None, engine=None) ->
     engine = _resolve_engine(engine, db)
     with Session(engine) as s:
         projs = {p.id: p for p in s.exec(select(Project)).all()}
-        exps = [e for e in s.exec(select(Experiment).order_by(Experiment.name)).all() if not project or projs[e.project_id].name == project]
+        exps = sorted((e for e in s.exec(select(Experiment)).all() if not project or projs[e.project_id].name == project),
+                      key=lambda e: natural_key(e.name))
         counts: dict[int, dict[str, Any]] = {}
         for exp_id, status, n, last in s.exec(text("SELECT experiment_id, status, COUNT(*), MAX(timestamp) FROM run GROUP BY 1, 2")).all():
             c = counts.setdefault(exp_id, {"completed": 0, "failed": 0, "running": 0, "last": None})
@@ -628,12 +750,43 @@ def list_projects(db=None, engine=None) -> list[Project]:
 
 
 def list_experiments(project: Optional[str] = None, db=None, engine=None) -> list[Experiment]:
+    """Every experiment (of `project`) in natural name order: compare-K2, compare-K5, compare-K10."""
     engine = _resolve_engine(engine, db)
     with Session(engine) as s:
         stmt = select(Experiment)
         if project:
             stmt = stmt.join(Project).where(Project.name == project)
-        return list(s.exec(stmt.order_by(Experiment.name)).all())
+        return sorted(s.exec(stmt).all(), key=lambda e: natural_key(e.name))
+
+
+def experiment_activity(project: Optional[str] = None, db=None, engine=None) -> dict[tuple[str, str], dict[str, Any]]:
+    """(project, experiment) -> run counts by status and the last timestamp, in one grouped query.
+
+    What a selector needs to put an experiment with results before an empty or all-failed one, without the
+    cost of `experiment_summaries` (which also scans every run's metric keys).
+    """
+    from sqlalchemy import text
+
+    engine = _resolve_engine(engine, db)
+    with Session(engine) as s:
+        projs = {p.id: p.name for p in s.exec(select(Project)).all()}
+        exps = {e.id: e for e in s.exec(select(Experiment)).all()}
+        out: dict[tuple[str, str], dict[str, Any]] = {
+            (projs[e.project_id], e.name): {"completed": 0, "failed": 0, "running": 0, "runs": 0, "last": None}
+            for e in exps.values() if not project or projs[e.project_id] == project
+        }
+        for exp_id, status, n, last in s.exec(text("SELECT experiment_id, status, COUNT(*), MAX(timestamp) FROM run GROUP BY 1, 2")).all():
+            e = exps.get(exp_id)
+            if e is None:
+                continue
+            key = (projs[e.project_id], e.name)
+            if key not in out:
+                continue
+            row = out[key]
+            row[str(status).lower()] = n
+            row["runs"] += n
+            row["last"] = max(row["last"] or "", str(last or ""))
+        return out
 
 
 def get_metric_defs(db=None, engine=None) -> dict[str, Metric]:
@@ -665,6 +818,71 @@ def get_runs(
         if status:
             stmt = stmt.where(Run.status == RunStatus(status))
         return list(s.exec(stmt.order_by(Run.timestamp)).all())
+
+
+def _filter_runs(stmt, project, experiment, method, dataset, statuses, search, tag):
+    """Apply the run browser's filters to any `select(...)` over Run."""
+    from sqlalchemy import or_
+
+    stmt = stmt.join(Experiment, Run.experiment_id == Experiment.id)
+    if experiment:
+        stmt = stmt.where(Experiment.name == experiment)
+    if project:
+        stmt = stmt.join(Project, Experiment.project_id == Project.id).where(Project.name == project)
+    if method:
+        stmt = stmt.join(Method, Run.method_id == Method.id).where(Method.name == method)
+    if dataset:
+        stmt = stmt.join(Dataset, Run.dataset_id == Dataset.id).where(Dataset.name == dataset)
+    if statuses:
+        stmt = stmt.where(Run.status.in_([RunStatus(s) for s in statuses]))  # type: ignore[attr-defined]
+    if tag:
+        stmt = stmt.where(Run.tags.contains(tag))  # type: ignore[attr-defined]
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where(or_(Run.notes.like(like), Run.instance.like(like),  # type: ignore[union-attr]
+                              Run.config.like(like), Run.tags.like(like),  # type: ignore[union-attr]
+                              Run.hostname.like(like), Run.git_commit.like(like)))  # type: ignore[union-attr]
+    return stmt
+
+
+def query_runs(
+    *,
+    project: Optional[str] = None,
+    experiment: Optional[str] = None,
+    method: Optional[str] = None,
+    dataset: Optional[str] = None,
+    statuses: Sequence[str] = (),
+    search: str = "",
+    tag: Optional[str] = None,
+    newest_first: bool = True,
+    limit: Optional[int] = 200,
+    offset: int = 0,
+    db=None,
+    engine=None,
+) -> tuple[list[Run], dict[str, int]]:
+    """One page of runs plus the counts by status over everything that matches.
+
+    The run browser's query: several statuses at once, a substring search over what a run carries in text
+    (notes -- which is where a crash message ends up -- instance, config, tags, host, commit), newest first,
+    and a page at a time, so a database with 50k runs is never loaded into Python to show 50 rows.
+    """
+    from sqlalchemy import func
+
+    engine = _resolve_engine(engine, db)
+    args = (project, experiment, method, dataset, statuses, search, tag)
+    with Session(engine) as s:
+        counts_stmt = _filter_runs(select(Run.status, func.count(Run.id)), *args).group_by(Run.status)  # type: ignore[arg-type]
+        counts = {"completed": 0, "failed": 0, "running": 0}
+        for status, n in s.exec(counts_stmt).all():
+            counts[str(getattr(status, "value", status)).lower()] = n
+        counts["total"] = sum(counts.values())
+        stmt = _filter_runs(select(Run), *args)
+        stmt = stmt.order_by(Run.timestamp.desc(), Run.id.desc()) if newest_first else stmt.order_by(Run.timestamp, Run.id)  # type: ignore[union-attr]
+        if offset:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(s.exec(stmt).all()), counts
 
 
 def run_records(runs: Iterable[Run], db=None, engine=None) -> list[dict[str, Any]]:

@@ -13,9 +13,11 @@ from .. import aggregate as agg
 from ..export.figures import figure_bytes, figure_tex, to_grayscale_png, tradeoff_figure
 from .charts import tradeoff_scatter
 from .common import (
-    active_where, fmt_for, keyed, keyed_multiselect, keyed_selectbox, load_metric_defs, load_records_union, pin_to_paper,
-    reset_on_experiment_change, select_extra_experiments, select_project_experiment, sidebar_db, sidebar_filter, where_text,
+    active_where, completed_or_explain, excluded_note, fmt_for, keyed, keyed_multiselect, keyed_selectbox, load_metric_defs,
+    load_records_union, pin_to_paper, reset_on_experiment_change, select_extra_experiments, select_project_experiment,
+    sidebar_db, sidebar_filter, where_text,
 )
+from .styling import chart_controls, sidebar_plot_style
 from .tables import figure_caption_html, generic_html
 
 NONE = "— none —"
@@ -30,6 +32,9 @@ def prefill_from_asset(a) -> dict[str, Any]:
                      ("to_xlabel", "xlabel"), ("to_ylabel", "ylabel")):
         if opt in o and o[opt] is not None:
             pre[key] = o[opt]
+    for axis in ("xlim", "ylim"):
+        if o.get(axis):
+            pre[f"to_scatter:{a.experiment}_{axis}"] = ",".join(str(v) for v in o[axis])
     pre["to_path"] = o.get("path") or NONE
     return pre
 
@@ -47,7 +52,8 @@ def render() -> None:
     if not recs:
         st.info("No runs in this experiment.")
         return
-    recs = agg.completed(sidebar_filter(recs))
+    matched = sidebar_filter(recs)
+    recs = completed_or_explain(matched, of=recs)
     if not recs:
         return
     metrics = agg.metric_names(recs)
@@ -68,6 +74,7 @@ def render() -> None:
         log_x = keyed(st.checkbox, "Log x axis", "to_logx", True)
         hollow_base = keyed(st.checkbox, "Hollow markers for baselines / reported", "to_hollow_base", True)
         hollow_extra = keyed_multiselect("Also hollow", sorted({str(agg.get_field(r, series_key)) for r in recs}), "to_hollow", [])
+    style = sidebar_plot_style(project)
     path_key = None if path == NONE else path
     pts = agg.tradeoff_points(recs, x_metric, y_metric, series_key=series_key, path_key=path_key)
     if not pts:
@@ -79,11 +86,14 @@ def render() -> None:
     x_unit, y_unit = defs.get(x_metric, {}).get("unit", ""), defs.get(y_metric, {}).get("unit", "")
     xlabel_default = f"{x_metric} ({x_unit})" if x_unit else x_metric
     ylabel_default = f"{y_metric} ({y_unit})" if y_unit else y_metric
-    st.caption(f"{title} · {len(recs)} runs" + (f" · filter: {where_text()}" if active_where() else "")
+    st.caption(f"{title} · {len(recs)} runs" + excluded_note(matched) + (f" · filter: {where_text()}" if active_where() else "")
                + f" · {y_metric} against {x_metric}, one series per {series_key}" + (f", points along {path_key}" if path_key else "")
                + (f" · hollow: {', '.join(map(str, sorted(hollow)))}" if hollow else ""))
+    ctl = chart_controls(project, style, key=f"to_scatter:{experiment}", series=list(pts), series_key=series_key,
+                         series_labels=labels, x_name=x_metric, y_name=y_metric, log_x=log_x)
     st.plotly_chart(tradeoff_scatter(pts, x_metric, y_metric, x_fmt=fmt_for(defs, x_metric), y_fmt=fmt_for(defs, y_metric),
-                                     xlabel=xlabel_default, ylabel=ylabel_default, log_x=log_x, hollow=hollow, labels=labels),
+                                     xlabel=xlabel_default, ylabel=ylabel_default, log_x=log_x, hollow=hollow, labels=labels,
+                                     style=ctl.style, series_key=series_key, xlim=ctl.xlim, ylim=ctl.ylim),
                     theme=None, width="stretch")
     st.markdown(figure_caption_html(
         f"{y_metric} against {x_metric} (mean ± std per point" + (f", one point per {path_key}" if path_key else "") + ")."
@@ -104,7 +114,8 @@ def render() -> None:
             ylabel = keyed(st.text_input, "y label", "to_ylabel", ylabel_default)
         cap = keyed(st.text_input, "Panel caption", "to_panel", "", placeholder="a. Cost vs quality")
         pf = tradeoff_figure(pts, x_metric, y_metric, xlabel=xlabel, ylabel=ylabel, log_x=log_x, hollow=hollow, width=width,
-                             labels=labels, caption=cap or None)
+                             labels=labels, caption=cap or None, style=ctl.style, series_key=series_key,
+                             xlim=ctl.xlim, ylim=ctl.ylim)
         g1, g2 = st.columns([3, 1])
         gray = g2.checkbox("Grayscale", value=False, key="to_gray")
         png = figure_bytes(pf, "png", dpi=200)
@@ -114,5 +125,5 @@ def render() -> None:
         st.code(figure_tex(f"figures/{stem}.pdf", label=f"fig:{stem}", width=width), language="latex")
     pin_to_paper({"tradeoff-figure": {"x_metric": x_metric, "y_metric": y_metric, "series": series_key, "path": path_key, "log_x": log_x,
                                       "hollow_baselines": hollow_base, "hollow": hollow_extra, "width": width, "xlabel": xlabel,
-                                      "ylabel": ylabel, "panel_label": cap or None}},
+                                      "ylabel": ylabel, "panel_label": cap or None, **ctl.limit_options}},
                  records=recs, key="to_pin", suggested_label=f"fig:{experiment}-tradeoff", extra_experiments=extra)

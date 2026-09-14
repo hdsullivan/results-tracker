@@ -10,9 +10,11 @@ import streamlit as st
 from ..export.figures import ablation_figure, figure_bytes, figure_tex, to_grayscale_png
 
 from .. import aggregate as agg
+from ..plotstyle import VARIANT_KEY
 from .charts import ablation_deltas
-from .common import (active_where, fmt_for, hib_map, load_metric_defs, load_records, pin_to_paper, select_project_experiment,
-                     sidebar_db, sidebar_filter, where_text)
+from .common import (active_where, completed_or_explain, excluded_note, fmt_for, hib_map, load_metric_defs, load_records, pin_to_paper,
+                     select_project_experiment, sidebar_db, sidebar_filter, where_text)
+from .styling import chart_controls, sidebar_plot_style
 from .run_detail import run_label
 from .tables import ablation_html, figure_caption_html, generic_html
 
@@ -31,11 +33,10 @@ def render() -> None:
         st.info("No runs in this experiment.")
         return
     all_recs = sidebar_filter(recs)
-    recs = agg.completed(all_recs)
-    if not recs:
-        if not active_where():
-            st.info("No completed runs in this experiment.")
+    completed = completed_or_explain(all_recs, of=recs)
+    if not completed:
         return
+    recs = completed
     metrics_all = agg.metric_names(recs)
 
     with st.sidebar:
@@ -44,6 +45,7 @@ def render() -> None:
         base_choice = st.selectbox("Full model (base)", list(base_opts))
         metrics = st.multiselect("Metrics", metrics_all, default=metrics_all)
         relative = st.checkbox("Show Δ as % of base", value=False)
+    style = sidebar_plot_style(project)
 
     if not metrics:
         st.warning("Pick at least one metric.")
@@ -67,7 +69,7 @@ def render() -> None:
 
     # --- component matrix: which knobs each variant changed
     keys = sorted({k for r in rows for k in r.diff})
-    st.caption(f"{experiment} · {len(recs)} runs" + (f" · filter: {where_text()}" if active_where() else "")
+    st.caption(f"{experiment} · {len(recs)} runs" + excluded_note(all_recs) + (f" · filter: {where_text()}" if active_where() else "")
                + f" · {len(rows)} variants · {len(keys)} ablated settings · "
                f"**bold** = full model")
 
@@ -83,11 +85,13 @@ def render() -> None:
     hib_m = hib.get(metric, True)
     effects = agg.ablation_effects(rows, metric, hib_m)
     if variants and base_row is not None:
+        ctl = chart_controls(project, style, key=f"abl_deltas:{experiment}", series_key=VARIANT_KEY, colors=False,
+                             series=[r.label for r in variants], x_name=f"Δ {metric}", y_name=None)
         fig = ablation_deltas(
             [r.label for r in variants],
             [r.delta.get(metric) for r in variants],
             [(r.stats[metric].std if r.stats.get(metric) else 0.0) for r in variants],
-            metric, higher_is_better=hib_m, fmt=fmt, unit=unit,
+            metric, higher_is_better=hib_m, fmt=fmt, unit=unit, style=ctl.style, xlim=ctl.xlim,
         )
         st.plotly_chart(fig, theme=None, width="stretch")
         ns = sorted({r.n for r in rows})
@@ -124,7 +128,8 @@ def render() -> None:
             st.caption(f"Largest drop: **{worst.label}** ({worst.delta:+{fmt}} {metric}, {worst.verdict}).")
         with st.expander("Paper figure (matplotlib, IEEE style)"):
             pf = ablation_figure(rows, metric, higher_is_better=hib_m, fmt=fmt,
-                                 xlabel=f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else ""), width="single")
+                                 xlabel=f"$\\Delta$ {metric} vs. full model" + (f" ({unit})" if unit else ""), width="single",
+                                 style=ctl.style, xlim=ctl.xlim)
             g1, g2 = st.columns([3, 1])
             gray = g2.checkbox("Grayscale", value=False, key="abl_gray")
             png = figure_bytes(pf, "png", dpi=200)
@@ -135,8 +140,11 @@ def render() -> None:
 
     from ..export.latex import ablation_latex
 
+    abl_fig_opts = {"metric": metric, "base_run_id": base_opts[base_choice], "width": "single"}
+    if variants and base_row is not None:
+        abl_fig_opts["xlim"] = list(ctl.xlim) if ctl.xlim else None
     pin_to_paper({"ablation-table": {"metrics": metrics, "base_run_id": base_opts[base_choice]},
-                  "ablation-figure": {"metric": metric, "base_run_id": base_opts[base_choice], "width": "single"}},
+                  "ablation-figure": abl_fig_opts},
                  records=all_recs, key="abl_pin")
     with st.expander("LaTeX (booktabs table + figure snippet)"):
         st.code(ablation_latex(rows, metrics, defs), language="latex")

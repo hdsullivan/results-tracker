@@ -16,19 +16,13 @@ from .. import aggregate as agg
 from ..api import delete_asset, list_assets, update_asset
 from ..export.paper import EXPORT_STATUSES, KIND_PAGE, KIND_TITLES, asset_experiments, mark_exported, render_paper, write_paper, zip_paper
 from ..export.paper import staleness as asset_staleness
-from .common import db_path, engine_for, keyed, keyed_selectbox, load_records, load_records_union, page_url, select_project, sidebar_db
+from .common import (db_path, engine_for, fmt_timestamp as _fmt_ts, keyed, keyed_selectbox, load_records, load_records_union,
+                     page_url, select_project, sidebar_db)
 from .studies import default_studies_dir, load_planned, studies_feeding
 from .tables import generic_html
 
 STATE_HELP = ("never exported: pinned but not yet in a paper export · current: the exported files were rendered from exactly "
               "these runs · stale: runs were added, replaced or deleted since the export · no data: no completed run matches")
-
-
-def _fmt_ts(ts: Any) -> str:
-    try:
-        return (ts.astimezone() if ts.tzinfo is not None else ts).strftime("%Y-%m-%d %H:%M")
-    except Exception:  # noqa: BLE001
-        return "—"
 
 
 def render() -> None:

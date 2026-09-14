@@ -19,11 +19,13 @@ from ..export.figures import ablation_figure, comparison_figure, figure_bytes, f
 from ..export.latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
 from ..export.paper import KIND_PAGE, KIND_TITLES, KINDS
 from ..export.visual import ZOOM_FRACTION, guess_roles, list_image_files, make_visual
+from ..plotstyle import VARIANT_KEY
 from .common import (
-    active_where, db_path, hib_map, keyed, keyed_multiselect, keyed_radio, keyed_selectbox, load_catalog, load_metric_defs,
-    load_records, load_records_union, pin_to_paper, reset_on_experiment_change, select_extra_experiments, select_project_experiment,
-    sidebar_db, sidebar_filter, where_cli, where_text,
+    active_where, completed_or_explain, db_path, engine_for, hib_map, keyed, keyed_multiselect, keyed_radio, keyed_selectbox, load_catalog,
+    load_metric_defs, load_records, load_records_union, pin_to_paper, reset_on_experiment_change, select_extra_experiments,
+    select_project_experiment, sidebar_db, sidebar_filter, where_cli, where_text,
 )
+from .styling import chart_controls, sidebar_plot_style
 from .tables import ablation_html, comparison_html, generic_html, sweep_html
 
 BUNDLE = "Paper bundle (zip)"
@@ -50,6 +52,11 @@ def prefill_from_asset(a) -> dict[str, Any]:
         elif default is not None:
             pre[key] = default
 
+    def put_limits(chart: str) -> None:
+        for axis in ("xlim", "ylim"):
+            if o.get(axis):
+                pre[f"{chart}:{a.experiment}_{axis}"] = ",".join(str(v) for v in o[axis])
+
     k = a.kind
     if k == "comparison-table":
         table_opts()
@@ -67,12 +74,15 @@ def prefill_from_asset(a) -> dict[str, Any]:
         else:
             put("exp_xlabel", "xlabel"); put("exp_ylabel", "ylabel"); put("exp_width", "width"); put("exp_band", "band")
             put("exp_emph", "emphasize"); put("exp_height", "height", convert=float); put("exp_panel", "panel_label")
+            put_limits("exp_sweep")
     elif k == "ablation-figure":
         put("exp_metric", "metric"); put("exp_xlabel", "xlabel"); put("exp_width", "width"); put("exp_panel", "panel_label")
+        put_limits("exp_abl")
     elif k == "comparison-figure":
         put("exp_metric", "metric"); put("exp_rows", "rows"); put("exp_cols", "cols", convert=lambda v: v or "none")
         put("exp_ylabel", "ylabel"); put("exp_width", "width"); put("exp_emph", "emphasize"); put("exp_zero", "zero_based")
         put("exp_hatch", "hatch"); put("exp_panel", "panel_label")
+        put_limits("exp_cmp")
     elif k == "visual-figure":
         put("exp_vdataset", "dataset"); put("exp_vrows", "rows", default=NONE); put("exp_vseed", "seed")
         pre["exp_vmode"] = "Error maps" if o.get("mode") == "error" else "Reconstruction"
@@ -81,6 +91,61 @@ def prefill_from_asset(a) -> dict[str, Any]:
         if o.get("zoom_center"):
             pre["exp_vzc"] = float(o["zoom_center"][0])
     return pre
+
+
+def _panel_figure(project: Optional[str], defs: dict, style, pin) -> None:
+    """Compose pinned figures into one multi-panel figure: (a), (b), (c) under one number.
+
+    An IEEE figure is usually several panels sharing a caption. Pasting separately exported PDFs together in
+    LaTeX is where panel widths and font sizes stop matching; composed here they are drawn by the same code at
+    the same size. The panels are other *pinned* assets, so the composition regenerates with them.
+    """
+    from ..api import list_assets
+    from ..export.figures import panel_figure
+    from ..export.paper import PANEL_KINDS, asset_experiments, figure_drawer
+
+    assets = [a for a in list_assets(project, engine=engine_for(db_path())) if a.kind in PANEL_KINDS]
+    if len(assets) < 2:
+        st.info(f"Pin at least two figures first — a panel figure composes assets that already exist ({len(assets)} so far). "
+                "Every quantitative figure kind can be a panel; a visual image grid cannot.")
+        return
+    by_label = {a.label: a for a in assets}
+    picked = keyed_multiselect("Panels, in order", list(by_label), "exp_panels", [],
+                               format_func=lambda lbl: f"{lbl} — {KIND_TITLES[by_label[lbl].kind]} of {by_label[lbl].experiment}",
+                               help="Click them in the order they should appear; (a), (b), (c) follow that order.")
+    if not picked:
+        st.caption("Pick two or more figures.")
+        return
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        width = keyed_selectbox("Width", WIDTHS, "exp_panel_width", "double",
+                                help="A multi-panel figure is normally full page width (`figure*`).")
+    with c2:
+        ncols = int(keyed(st.number_input, "Columns", "exp_panel_cols", float(min(len(picked), 3)), min_value=1.0,
+                          max_value=4.0, step=1.0))
+    with c3:
+        height = keyed(st.number_input, "Height (in, 0 = auto)", "exp_panel_height", 0.0, min_value=0.0, max_value=12.0, step=0.2)
+    captions = []
+    cols = st.columns(min(len(picked), 4))
+    for i, lbl in enumerate(picked):
+        with cols[i % len(cols)]:
+            captions.append(keyed(st.text_input, f"({chr(ord('a') + i)}) caption", f"exp_panel_cap_{i}", "",
+                                  placeholder=by_label[lbl].experiment).strip())
+    draws = []
+    for lbl in picked:
+        a = by_label[lbl]
+        try:
+            spec = {"kind": a.kind, "experiment": a.experiment, "filters": dict(a.filters or {}), "options": dict(a.options or {})}
+            draws.append(figure_drawer(spec, load_records_union(project, asset_experiments(a)), defs, style=style))
+        except ValueError as e:
+            st.error(f"`{lbl}` cannot be drawn: {e}")
+            return
+    fig = panel_figure([(lambda ax, d=d: d(ax), c or None) for d, c in zip(draws, captions)],
+                       width=width, height=height or None, ncols=ncols, style=style)
+    _figure_block(fig, f"{'-'.join(l.split(':')[-1] for l in picked)}-panels", width)
+    st.caption("Each panel is the pinned asset as it renders on its own, so re-exporting the paper redraws this figure from "
+               "whatever those assets show then.")
+    pin({"panels": list(picked), "captions": captions, "ncols": ncols, "width": width, "height": height or None})
 
 
 def _latex_block(tex: str, filename: str, preview: Optional[str] = None) -> None:
@@ -134,12 +199,11 @@ def render() -> None:
     if not recs_all:
         st.info("No runs in this experiment.")
         return
-    recs_all = sidebar_filter(recs_all)
-    recs = agg.completed(recs_all)
+    matched = sidebar_filter(recs_all)
+    recs = completed_or_explain(matched, of=recs_all)
     if not recs:
-        if not active_where():
-            st.info("No completed runs in this experiment.")
         return
+    recs_all = matched
     exp_type = recs[0].get("experiment_type") or "comparison"
     metrics_all = agg.metric_names(recs)
     hib = hib_map(defs)
@@ -160,6 +224,7 @@ def render() -> None:
         st.markdown("**Export**")
         title = keyed_radio("What to export", TITLES, "exp_kind", KIND_TITLES[PREFERRED.get(exp_type, "comparison-table")])
     kind = KIND_BY_TITLE.get(title)
+    style = sidebar_plot_style(project)
 
     group_keys = agg.grouping_keys(recs)  # experiment (when pooled), method, dataset, ..., config.*, derived.*
     stem = experiment.replace(" ", "_")
@@ -285,11 +350,17 @@ def render() -> None:
                 height = keyed(st.number_input, "Height (in)", "exp_height", 3.1, min_value=1.0, max_value=8.0, step=0.1)
             cap = keyed(st.text_input, "Panel caption (bold, below)", "exp_panel", "", placeholder="a. PSNR vs λ")
             best = {g: agg.best_sweep_value(s, hib.get(metric, True)) for g, s in series.items()}
+            xs_all = sorted({x for s in series.values() for x, _ in s}, key=lambda x: (isinstance(x, str), x))
+            numeric_x = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in xs_all)
+            ctl = chart_controls(project, style, key=f"exp_sweep:{experiment}", series=list(series),
+                                 series_key=" / ".join(by), orders=() if numeric_x else [(param, xs_all)],
+                                 x_name=param if numeric_x else None, y_name=metric)
             fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel, band=band, best_by_group=best,
-                               width=width, height=height, emphasize=emph, caption=cap or None)
+                               width=width, height=height, emphasize=emph, caption=cap or None,
+                               style=ctl.style, by=by, xlim=ctl.xlim, ylim=ctl.ylim)
             _figure_block(fig, f"{stem}-{param}-{metric}", width)
             pin({"param": param, "metric": metric, "by": by, "xlabel": xlabel, "ylabel": ylabel, "width": width, "band": band,
-                 "emphasize": emph, "height": height, "panel_label": cap or None})
+                 "emphasize": emph, "height": height, "panel_label": cap or None, **ctl.limit_options})
 
     elif kind == "ablation-figure":
         c1, c2, c3 = st.columns(3)
@@ -310,10 +381,13 @@ def render() -> None:
             st.warning("No run matches the base config; nothing to plot. Tag a run `base`.")
             return
         d = defs.get(metric, {})
+        ctl = chart_controls(project, style, key=f"exp_abl:{experiment}", series_key=VARIANT_KEY, colors=False,
+                             series=[r.label for r in rows if not r.is_base], x_name=f"Δ {metric}", y_name=None)
         fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
-                              xlabel=xlabel, width=width, caption=cap or None)
+                              xlabel=xlabel, width=width, caption=cap or None, style=ctl.style, xlim=ctl.xlim)
         _figure_block(fig, f"{stem}-ablation-{metric}", width)
-        pin({"metric": metric, "xlabel": xlabel, "width": width, "panel_label": cap or None})
+        pin({"metric": metric, "xlabel": xlabel, "width": width, "panel_label": cap or None,
+             "xlim": list(ctl.xlim) if ctl.xlim else None})
 
     elif kind == "comparison-figure":
         c1, c2, c3 = st.columns(3)
@@ -341,11 +415,21 @@ def render() -> None:
             hatch = keyed(st.checkbox, "Hatch bars", "exp_hatch", False, help="Grayscale print safety.")
         with k3:
             cap = keyed(st.text_input, "Panel caption", "exp_panel", "", placeholder="a. PSNR")
+        ctl = chart_controls(project, style, key=f"exp_cmp:{experiment}", series=list(pt.rows), series_key=row_key,
+                             series_labels=agg.method_labels(recs) if row_key == "method" else None,
+                             orders=() if col_key == "none" else [(col_key, list(pt.cols))],
+                             x_name=None, y_name=metric)
         fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, emphasize=emph, zero_based=zero, hatch=hatch,
-                                caption=cap or None, row_labels=agg.method_labels(recs) if row_key == "method" else None)
+                                caption=cap or None, row_labels=agg.method_labels(recs) if row_key == "method" else None,
+                                style=ctl.style, rows_key=row_key, cols_key=None if col_key == "none" else col_key,
+                                ylim=ctl.ylim)
         _figure_block(fig, f"{stem}-{metric}", width)
         pin({"metric": metric, "rows": row_key, "cols": None if col_key == "none" else col_key, "ylabel": ylabel, "width": width,
-             "emphasize": emph, "zero_based": zero, "hatch": hatch, "panel_label": cap or None})
+             "emphasize": emph, "zero_based": zero, "hatch": hatch, "panel_label": cap or None,
+             "ylim": list(ctl.ylim) if ctl.ylim else None})
+
+    elif kind == "panel-figure":
+        _panel_figure(project, defs, style, pin)
 
     elif kind == "visual-figure":
         with_art = [r for r in recs if r.get("artifacts_dir")]
@@ -387,7 +471,7 @@ def render() -> None:
             vr = make_visual(recs, defs, experiment=experiment, dataset=dataset, seed=seed, image=image,
                              reference=None if reference == NONE else reference, measurement=None if measurement == NONE else measurement,
                              mode="error" if vmode == "Error maps" else "image", zoom=zoom, zoom_fraction=zf, zoom_center=(zc, zc),
-                             rows=rows_by, width="double", auto_roles=False)
+                             rows=rows_by, width="double", auto_roles=False, style=style)
         except ValueError as e:
             st.error(str(e))
             return
@@ -427,7 +511,8 @@ def render() -> None:
         if st.button("Build bundle", type="primary"):
             experiments = {e["experiment"]: (e["type"], load_records(project, e["experiment"])) for e in exps}
             with st.spinner("Rendering tables and figures…"):
-                data, manifest = build_bundle(experiments, defs, project=project, source=db_path(), width=width, visual=with_visual)
+                data, manifest = build_bundle(experiments, defs, project=project, source=db_path(), width=width,
+                                              visual=with_visual, style=style)
             st.session_state["bundle"] = (data, manifest)
         if "bundle" in st.session_state:
             data, manifest = st.session_state["bundle"]

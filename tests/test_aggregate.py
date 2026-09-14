@@ -334,3 +334,80 @@ def test_summarize_skips_non_finite_values():
     assert [x for x, _ in series] == [0.5, 1.0]
     by_x = dict(series)
     assert by_x[1.0].n == 2 and by_x[1.0].mean == 28.5 and by_x[0.5].n == 2
+
+
+def test_natural_key_sorts_numbered_families_like_a_human():
+    names = ["compare-K10", "compare-K2", "compare-K5", "ablation", "Sweep-beta", "compare-K2b"]
+    assert sorted(names, key=agg.natural_key) == [
+        "ablation", "compare-K2", "compare-K2b", "compare-K5", "compare-K10", "Sweep-beta",
+    ]
+    assert sorted(["b", "a10", "a9"], key=agg.natural_key) == ["a9", "a10", "b"]
+
+
+# --------------------------------------------------------------------------- paired comparison
+
+def test_sign_test_matches_the_binomial_by_hand():
+    assert agg.sign_test_p(9, 1) == pytest.approx(2 * (10 + 1) / 2 ** 10)  # C(10,9)+C(10,10)
+    assert agg.sign_test_p(5, 0) == pytest.approx(2 / 2 ** 5)  # every instance a win, n=5
+    assert agg.sign_test_p(5, 5) == 1.0
+    assert agg.sign_test_p(0, 0) is None
+
+
+def test_wilcoxon_exact_matches_the_textbook_and_a_brute_force_enumeration():
+    """No scipy here, so the exact test is checked against values that can be derived by hand and against
+    enumerating every sign assignment — the definition of the null distribution."""
+    import itertools
+
+    # all differences in one direction: the smallest p the test can give at that n (tables: .0625, .0312)
+    assert agg.wilcoxon_p([1.0, 2.0, 3.0, 4.0, 5.0]) == (pytest.approx(2 / 2 ** 5), True)
+    assert agg.wilcoxon_p([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) == (pytest.approx(2 / 2 ** 6), True)
+
+    def brute(diffs):
+        ranks = sorted(range(1, len(diffs) + 1))
+        observed = min(sum(r for r, d in zip(ranks, sorted(diffs, key=abs)) if d > 0),
+                       sum(r for r, d in zip(ranks, sorted(diffs, key=abs)) if d < 0))
+        hits = 0
+        for signs in itertools.product((1, -1), repeat=len(diffs)):
+            w_plus = sum(r for r, s in zip(ranks, signs) if s > 0)
+            if min(w_plus, sum(ranks) - w_plus) <= observed:
+                hits += 1
+        return hits / 2 ** len(diffs)
+
+    for diffs in ([0.5, -0.2, 0.7, 0.1, -0.05, 0.9, 0.3], [1.0, -2.0, 3.0, -4.0, 5.0], [-0.1, 0.2, 0.3]):
+        p, exact = agg.wilcoxon_p(diffs)
+        assert exact and p == pytest.approx(brute(diffs)), diffs
+
+
+def test_wilcoxon_handles_zeros_ties_and_large_samples():
+    assert agg.wilcoxon_p([]) == (None, False)
+    assert agg.wilcoxon_p([0.0, 0.0]) == (None, False)
+    # zeros are dropped, so these two agree
+    assert agg.wilcoxon_p([1.0, 2.0, 3.0, 4.0, 5.0, 0.0])[0] == pytest.approx(agg.wilcoxon_p([1.0, 2.0, 3.0, 4.0, 5.0])[0])
+    tied, exact = agg.wilcoxon_p([0.5, 0.5, 0.5, -0.5, 0.5, 0.5, 0.5])  # tied |differences| -> approximation
+    assert not exact and 0 < tied < 1
+    big_exact = agg.wilcoxon_p([float(i) for i in range(1, 21)], exact_limit=20)
+    big_approx = agg.wilcoxon_p([float(i) for i in range(1, 21)], exact_limit=0)
+    assert big_exact[1] and not big_approx[1]
+    assert big_approx[0] == pytest.approx(big_exact[0], abs=0.002)  # the approximation is usable where it takes over
+
+
+def test_paired_comparison_counts_wins_in_the_metric_direction():
+    recs = []
+    for i, (ours, base) in enumerate([(30.0, 29.0), (31.0, 30.5), (28.0, 29.0), (32.0, 31.0), (30.5, 30.0)]):
+        recs.append(rec("ours", 0, psnr=ours) | {"instance": f"img{i}"})
+        recs.append(rec("base", 0, psnr=base) | {"instance": f"img{i}"})
+    table = agg.instance_table(recs, "psnr")
+    pc = agg.paired_comparison(table, "ours", "base")
+    assert (pc.n, pc.wins, pc.losses, pc.ties) == (5, 4, 1, 0)
+    assert pc.median == pytest.approx(0.5)  # gains: +1.0, +0.5, -1.0, +1.0, +0.5
+    assert pc.mean == pytest.approx(0.4)
+    assert pc.sign_p == pytest.approx(agg.sign_test_p(4, 1))
+    assert "improves psnr on 4 of 5 instances over base" in pc.sentence()
+    assert "median +0.50" in pc.sentence()
+
+    # a metric that is minimised: a lower value is a win, and the sentence still reads "improves"
+    low = [r | {"metrics": {"rmse": r["metrics"]["psnr"]}} for r in recs]
+    table_low = agg.instance_table(low, "rmse", higher_is_better=False)
+    pc_low = agg.paired_comparison(table_low, "ours", "base")
+    assert (pc_low.wins, pc_low.losses) == (1, 4)  # the same numbers, now the other way round
+    assert agg.paired_comparison(table, "ours", "nobody") is None

@@ -26,7 +26,9 @@ from ..export.visual import (
     make_visual,
     panel_metrics_rows,
 )
-from .common import active_where, load_metric_defs, load_records, pin_to_paper, select_project_experiment, sidebar_db, sidebar_filter
+from .common import (active_where, completed_or_explain, load_metric_defs, load_records, pin_to_paper, select_project_experiment,
+                     sidebar_db, sidebar_filter)
+from .styling import plot_style, sidebar_plot_style
 from .tables import figure_caption_html, generic_html
 
 NONE = "— none —"
@@ -48,7 +50,7 @@ def render() -> None:
     if not recs:
         st.info("No runs in this experiment.")
         return
-    recs = agg.completed(sidebar_filter(recs))
+    recs = completed_or_explain(sidebar_filter(recs), of=recs)
     if not recs:
         return
     with_art = [r for r in recs if r.get("artifacts_dir")]
@@ -87,7 +89,8 @@ def render() -> None:
                                             help="Each comparison picks its own methods, instance, seed, mode and zoom; "
                                                  "they share the dataset, image files and metrics above."))
 
-    shared = dict(recs=recs, defs=defs, experiment=experiment, dataset=dataset, pool=pool, image=image,
+    sidebar_plot_style(project)  # the panel titles and metric stamps of the figure below follow the same style
+    shared = dict(recs=recs, defs=defs, project=project, experiment=experiment, dataset=dataset, pool=pool, image=image,
                   reference=None if reference == NONE else reference, measurement=None if measurement == NONE else measurement,
                   kernel=None if kernel == NONE else kernel, metrics=metrics, data_range=data_range)
     for i in range(1, n_comparisons + 1):
@@ -98,7 +101,8 @@ def render() -> None:
             st.divider()
 
 
-def _comparison(i: int, *, recs, defs, experiment, dataset, pool, image, reference, measurement, kernel, metrics, data_range) -> None:
+def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image, reference, measurement, kernel, metrics,
+                data_range) -> None:
     """One figure with its own methods / instance / seed / mode / zoom; widget keys are suffixed with `i`."""
     key = f"vis{i}_"
     s1, s2, s3 = st.columns(3)
@@ -145,6 +149,7 @@ def _comparison(i: int, *, recs, defs, experiment, dataset, pool, image, referen
             reference=reference, measurement=measurement, kernel=kernel, methods=methods or None, metrics=metrics,
             mode="error" if mode == "Error maps" else "image", zoom=zoom, zoom_fraction=zoom_fraction,
             zoom_center=zoom_center, crop_box=crop_box, rows=row_key, width=width, auto_roles=False, data_range=data_range,
+            style=plot_style(project),
         )
     except ValueError as e:
         st.error(str(e))
