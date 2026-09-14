@@ -518,6 +518,35 @@ def demo(
     console.print("try:  results-tracker ui --db " + str(db or path))
 
 
+@app.command("merge")
+def merge_cmd(
+    source: Path = typer.Argument(..., help="The database to take runs from (e.g. one just fetched from a cluster)."),
+    project: list[str] = typer.Option([], "--project", "-p", help="Only these projects (repeatable). Default: all."),
+    experiment: list[str] = typer.Option([], "--experiment", "-e", help="Only these experiments (repeatable)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would change, write nothing."),
+    db: Optional[Path] = DbOpt,
+):
+    """Merge another database's runs into this one, keeping local pins, notes and tags.
+
+    Copying a database file over the top replaces the runs *and* everything curated around them --
+    pinned paper assets, notes, value maps, plot style, metric formats, method labels, experiment
+    stages, and the local artifacts_dir each run was repointed to. This copies runs instead. Runs are
+    matched by setting (project, experiment, method, dataset, instance, seed, config), never by id, so
+    merging the same source twice is a no-op and a study can be merged while it is still running.
+    """
+    from .merge import merge_database
+
+    try:
+        report = merge_database(source, db=db, projects=project or None, experiments=experiment or None,
+                                dry_run=dry_run)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+    console.print(report.summary())
+    if dry_run:
+        console.print("[yellow]dry run: nothing written[/]")
+
+
 @app.command("import")
 def import_cmd(
     path: Path = typer.Argument(..., help="CSV file, JSON file, or directory of JSON run files."),
