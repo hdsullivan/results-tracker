@@ -17,17 +17,8 @@ from .. import aggregate as agg
 from ..export.latex import display_metric_name
 from typing import Optional
 
-from .common import db_path, engine_for, hib_map, load_catalog, load_metric_defs, load_records, sidebar_db
+from .common import db_path, engine_for, fmt_timestamp as _fmt_ts, hib_map, load_catalog, load_metric_defs, load_records, sidebar_db
 from .tables import fmt_stat, generic_html
-
-
-def _fmt_ts(ts: Any, with_time: bool = True) -> str:
-    """Local wall-clock time (records carry UTC)."""
-    try:
-        local = ts.astimezone() if ts.tzinfo is not None else ts
-        return local.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
-    except Exception:  # noqa: BLE001
-        return "—"
 
 
 def _val(name: str, st_html: str, unit: str = "", suffix: str = "") -> str:
@@ -173,12 +164,20 @@ def render() -> None:
     c1.metric("Projects", len(cat["projects"]))
     c2.metric("Experiments", len(cat["experiments"]))
     c3.metric("Runs", n_runs)
-    c4.metric("Failed / running", f"{sum(e['failed'] for e in summaries)} / {sum(e['running'] for e in summaries)}")
+    n_failed = sum(e["failed"] for e in summaries)
+    n_running = sum(e["running"] for e in summaries)
+    c4.metric("Failed / running", f"{n_failed} / {n_running}",
+              help="Failed runs are excluded from every table; the Runs page shows what each one recorded.")
 
     if not n_runs:
         st.info("Empty database. Seed a demo with `results-tracker demo`, or log runs with `results_tracker.log_run`.")
         return
     recent = run_records(recent_runs(15, engine=engine), engine=engine)
+    if n_failed or n_running:
+        bits = " and ".join(b for b in (f"{n_failed} failed" if n_failed else "", f"{n_running} running" if n_running else "") if b)
+        st.caption(f"**{bits}** — no table counts them. "
+                   f'<a href="{page_url("runs")}" target="_self">Open the Runs page</a> for the message each one recorded '
+                   "and to clear rows a killed job left behind.", unsafe_allow_html=True)
     _paper_line(records_for=load_records)
 
     st.subheader("Experiments")

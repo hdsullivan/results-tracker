@@ -44,7 +44,7 @@ def test_overview_page(demo_db):
 
 def test_comparison_page_table_and_chart(demo_db):
     at = _run("comparison")
-    # default experiment is alphabetical ("ablation"); switch to the comparison experiment
+    # make the comparison experiment explicit (the selector's own default is checked separately)
     exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
     exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
     assert not at.exception
@@ -66,11 +66,34 @@ def test_comparison_page_table_and_chart(demo_db):
 
 
 def test_comparison_page_empty_db(tmp_path, monkeypatch):
-    monkeypatch.setenv("RESULTS_TRACKER_DB", str(tmp_path / "empty.db"))
+    """An existing but empty database: the sidebar says there is nothing to select yet."""
+    from results_tracker.db import get_engine
+
+    db = tmp_path / "empty.db"
+    get_engine(db)  # deliberately created, the way the button below does it
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(db))
     st.cache_data.clear()
     st.cache_resource.clear()
     at = _run("comparison")
     assert any("No projects yet" in i.value for i in at.sidebar.info)
+
+
+def test_a_database_that_is_not_there_is_never_created_behind_your_back(tmp_path, monkeypatch):
+    """A typo in the Database box used to make an empty database (file and tables), which on screen is
+    indistinguishable from a database whose runs have gone missing."""
+    missing = tmp_path / "not-mounted" / "resluts.db"
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(missing))
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    at = _run("overview")
+    assert any("does not exist" in w.value for w in at.warning)
+    assert not missing.exists() and not missing.parent.exists()
+    assert not at.dataframe and not at.metric  # the page stops rather than reporting an empty database
+
+    create = [b for b in at.button if "Create an empty database" in b.label][0]
+    create.click().run()
+    assert not at.exception and missing.is_file()
+    assert any("Empty database" in i.value for i in at.info)  # now it really is one
 
 
 def test_run_detail_page(demo_db, tmp_path):
@@ -663,6 +686,9 @@ def test_sweep_page_defaults_to_the_declared_knob_and_splits_by_condition(condit
     assert not at.exception
     caption = "\n".join(c.value for c in at.caption)
     assert "best per line: 0.01 → 0.5, 0.05 → 0.5" in caption and "pooled over config.denoiser" in caption
+    # re-read the widget from the current tree: the chart's colour pickers are keyed by line, so the previous
+    # tree's nodes refer to widgets this run no longer has
+    lines = [ms for ms in at.sidebar.multiselect if ms.label == "One line per"][0]
     lines.set_value(["config.denoiser", "config.noise"]).run()
     assert not at.exception
     md = "\n".join(m.value for m in at.markdown)
@@ -894,3 +920,479 @@ def test_settings_experiments_tab_and_studies_dir(toy_studies_db, tmp_path):
     # the Studies page now reads the project's directory instead of $RESULTS_TRACKER_STUDIES
     at2 = _run("studies")
     assert set(at2.dataframe[0].value["experiment"]) == {"ablation"}
+
+
+def _chart(at, index: int = 0) -> dict:
+    """The figure a `st.plotly_chart` sent to the browser, as its JSON spec (AppTest has no plotly element)."""
+    return json.loads(at.get("plotly_chart")[index].proto.spec)
+
+
+def test_plot_style_controls_write_to_the_project_and_reach_the_chart(demo_db):
+    """The sidebar sizes and a chart's colour picker are the only writers of `Project.plot_style`; a change must
+    land on the project (so every page and every export sees it) and redraw the chart in the same run."""
+    from results_tracker.api import get_plot_style
+    from results_tracker.db import get_engine
+    from results_tracker.plotstyle import SCREEN_FONT_SCALE
+
+    engine = get_engine(demo_db)
+    at = _run("comparison")
+    project = [sb for sb in at.sidebar.selectbox if sb.label == "Project"][0].value
+    assert get_plot_style(project, engine=engine).is_default
+
+    at.sidebar.number_input(key="stylew_legend").set_value(22.0).run()
+    assert not at.exception
+    assert get_plot_style(project, engine=engine).legend == 22.0  # saved on the project, not just in the session
+    assert _chart(at)["layout"]["legend"]["font"]["size"] == pytest.approx(22.0 * SCREEN_FONT_SCALE)  # drawn at once
+
+    keys = [str(k) for k in at.session_state.filtered_state]
+    colour_keys = [k for k in keys if k.startswith("cmp_bars:") and "_color_" in k]
+    assert colour_keys, "the chart offers a colour per series"
+    at.color_picker(key=colour_keys[0]).set_value("#00aa00").run()
+    assert not at.exception
+    style = get_plot_style(project, engine=engine)
+    assert "#00aa00" in style.colors.values() and style.legend == 22.0
+    assert "#00aa00" in [t["marker"]["color"] for t in _chart(at)["data"]]
+
+    # a fixed y range travels with the view, not with the project
+    ylim_key = [k for k in keys if k.startswith("cmp_bars:") and k.endswith("_ylim")][0]
+    at.text_input(key=ylim_key).set_value("28,34").run()
+    assert not at.exception
+    assert _chart(at)["layout"]["yaxis"]["range"] == [28.0, 34.0]
+    assert set(get_plot_style(project, engine=engine).to_dict()) == {"legend", "colors"}
+
+
+def test_a_project_level_label_order_reaches_the_charts(demo_db):
+    """Order is stored per grouping key on the project, so a page picks it up with no interaction -- and the
+    palette follows it (first drawn is blue), which is why a colour can be pinned separately."""
+    from results_tracker.api import set_project
+    from results_tracker.db import get_engine
+    from results_tracker.plotstyle import PALETTE, PlotStyle
+
+    engine = get_engine(demo_db)
+    at = _run("comparison")
+    default = [t["name"] for t in _chart(at)["data"]]
+    assert len(default) > 2
+    backwards = list(reversed(default))
+    set_project("demo-paper", plot_style=PlotStyle().with_order("method", backwards).to_dict(), engine=engine)
+    st.cache_data.clear()
+    at = _run("comparison")
+    assert not at.exception
+    bars = _chart(at)["data"]
+    assert [t["name"] for t in bars] == backwards
+    assert [t["marker"]["color"] for t in bars] == PALETTE[:len(bars)]
+
+
+def test_a_page_says_why_it_has_nothing_to_show(demo_db):
+    """A filter that keeps only failed runs used to leave the page blank: the sidebar said "1 of 15 runs
+    match" and the body rendered nothing at all."""
+    at = _run("sweep")
+    box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    box.select([o for o in box.options if o.startswith("lambda-sweep")][0]).run()
+    [ms for ms in at.sidebar.multiselect if ms.label == "Filter on"][0].set_value(["status"]).run()
+    [ms for ms in at.sidebar.multiselect if ms.label == "status"][0].set_value(["failed"]).run()
+    assert not at.exception
+    said = "\n".join(i.value for i in at.info)
+    assert "none of them completed" in said and "1 failed" in said
+    assert "Run detail" in said  # where the failure message is
+
+    # a filter that matches no run at all names the filter and says how many runs are hidden
+    [ms for ms in at.sidebar.multiselect if ms.label == "Filter on"][0].set_value(["status", "seed"]).run()
+    [ms for ms in at.sidebar.multiselect if ms.label == "seed"][0].set_value(["0"]).run()  # the failed run has seed 2
+    assert not at.exception
+    said = "\n".join(i.value for i in at.info)
+    assert "No run matches the filter" in said and "15 runs" in said
+
+
+def test_an_experiment_whose_runs_all_failed_says_so(demo_db):
+    """It used to blame the reader: with no completed runs there are no metric names, so the Metrics
+    multiselect came up empty and the page asked for a grouping key instead of reporting the failures."""
+    from results_tracker import log_run
+
+    for seed in (0, 1):
+        log_run("all-failed", project="demo-paper", method="Ours", dataset="Set12", seed=seed, config={"K": 5},
+                metrics={}, status="failed", notes="RuntimeError: CUDA out of memory", db=demo_db, git_commit=None)
+    st.cache_data.clear()
+    at = _run("comparison")
+    box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    box.select([o for o in box.options if o.startswith("all-failed")][0]).run()
+    assert not at.exception
+    said = "\n".join(i.value for i in at.info)
+    assert "2 run(s) in this experiment, none of them completed: 2 failed" in said
+    assert not [w for w in at.warning if "grouping key" in w.value]
+
+
+def test_failed_runs_are_named_in_every_page_caption(demo_db):
+    """Pages aggregate completed runs only; the ones they drop have to be named where the reader looks."""
+    for page, experiment in (("sweep", "lambda-sweep"), ("comparison", "lambda-sweep")):
+        at = _run(page)
+        box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+        box.select([o for o in box.options if o.startswith(experiment)][0]).run()
+        assert not at.exception
+        caption = "\n".join(c.value for c in at.caption)
+        assert "1 failed excluded" in caption, f"{page} does not say the failed run was dropped"
+
+
+def test_a_settings_save_keeps_the_record_cache_but_still_shows_the_change(demo_db):
+    """Saving used to clear every cache. Method labels ride on each record, so those must reload; a metric's
+    unit does not, and the catalog/metric caches come back on their own (they are keyed on the file mtime)."""
+    from results_tracker.api import define_metric, list_methods
+    from results_tracker.db import get_engine
+    from results_tracker.ui import common
+
+    engine = get_engine(demo_db)
+    at = _run("comparison")
+    assert "TV [1]" in "\n".join(m.value for m in at.markdown)
+
+    name = next(m.name for m in list_methods(engine=engine) if m.name == "TV")
+    from results_tracker.api import define_method
+
+    define_method(name, label="Total Variation", is_baseline=True, position=0, engine=engine)
+    common.invalidate_records()
+    at = _run("comparison")
+    assert "Total Variation" in "\n".join(m.value for m in at.markdown)
+
+    define_metric("psnr", unit="decibel", higher_is_better=True, fmt=".2f", engine=engine)
+    at = _run("comparison")  # no explicit invalidation: the metric cache is keyed on the database's mtime
+    assert "decibel" in "\n".join(m.value for m in at.markdown)
+
+
+def test_the_experiment_selector_prefers_one_with_results(tmp_path, monkeypatch):
+    """The first click should not land on an experiment that has nothing to show just because its name sorts
+    first, and a numbered family should read K2, K5, K10 rather than K10, K2, K5."""
+    from results_tracker import log_run
+
+    db = tmp_path / "rank.db"
+    for seed in (0, 1):
+        log_run("aaa-all-failed", project="p", method="m", dataset="D", seed=seed, config={}, metrics={},
+                status="failed", db=db, git_commit=None)
+    for k in (10, 2, 5):
+        log_run(f"compare-K{k}", project="p", method="m", dataset="D", seed=0, config={"K": k},
+                metrics={"psnr": 30.0}, db=db, git_commit=None)
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(db))
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    at = _run("comparison")
+    box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    assert [o.split(" ")[0] for o in box.options] == ["compare-K2", "compare-K5", "compare-K10", "aaa-all-failed"]
+    assert box.value.startswith("compare-K2")
+
+
+def test_a_missing_database_is_never_swapped_for_a_recent_one(tmp_path, monkeypatch):
+    """With other databases in the recent list, the picker used to fall back to index 0 and silently open the
+    most recent one instead of the database that was asked for — hiding the missing-file warning entirely."""
+    from results_tracker.demo import seed_demo
+
+    other = tmp_path / "other.db"
+    seed_demo(db=other, artifacts_dir=str(tmp_path / "art"))
+    home = Path(os.environ["RESULTS_TRACKER_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "recent.json").write_text(json.dumps([str(other), str(tmp_path / "older.db")]))
+    missing = tmp_path / "not-mounted" / "results.db"
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(missing))
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    at = _run("overview")
+    assert any("does not exist" in w.value for w in at.warning)
+    assert at.session_state["db"] == str(missing)  # still the database that was asked for
+    picker = [sb for sb in at.sidebar.selectbox if sb.label == "Recent databases"][0]
+    assert picker.value == str(missing)  # the picker shows it rather than pointing somewhere else
+    assert picker.options[0].endswith("(missing)")
+
+
+def test_a_missing_database_is_marked_in_the_recent_list(demo_db, tmp_path):
+    """Picking a database that has been moved or unmounted used to recreate it empty; it is named as missing
+    and, if picked, lands on the create offer instead."""
+    home = Path(os.environ["RESULTS_TRACKER_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    gone = tmp_path / "unplugged" / "results.db"
+    (home / "recent.json").write_text(json.dumps([str(demo_db), str(gone)]))
+    at = _run("comparison")
+    picker = [sb for sb in at.sidebar.selectbox if sb.label == "Recent databases"][0]
+    assert any("(missing)" in o for o in picker.options)
+    assert not gone.exists()
+
+
+@pytest.fixture
+def messy_db(tmp_path, monkeypatch):
+    """A demo database plus what a real week leaves behind: a crashed run with its message and running rows
+    from jobs that were killed."""
+    from datetime import datetime, timedelta, timezone
+
+    from results_tracker import log_run
+
+    db = tmp_path / "messy.db"
+    seed_demo(db=db, artifacts_dir=str(tmp_path / "art"))
+    now = datetime.now(timezone.utc)
+    log_run("main-comparison", project="demo-paper", method="Ours", dataset="Set12", seed=41, config={"iters": 50},
+            metrics={}, status="failed", notes="RuntimeError: CUDA out of memory; node gpu-07", db=db, git_commit=None)
+    for hours, seed in ((30.0, 51), (26.0, 52), (0.2, 53)):
+        log_run("main-comparison", project="demo-paper", method="Ours", dataset="Set12", seed=seed, config={"iters": 50},
+                metrics={}, status="running", timestamp=now - timedelta(hours=hours), db=db, git_commit=None)
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(db))
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    return db
+
+
+def test_runs_page_surfaces_what_failed_and_why(messy_db):
+    """The failure message the runner recorded used to be reachable only by guessing which run to open."""
+    at = _run("runs")
+    values = {m.label: m.value for m in at.metric}
+    assert values["Failed"] == "2" and values["Running"] == "3"  # the demo's diverged run plus the crash above
+    frame = at.dataframe[0].value
+    assert "RuntimeError: CUDA out of memory" in " ".join(frame["message"].astype(str))
+    assert frame["run"].iloc[0].startswith("run?") and "&run=" in frame["run"].iloc[0]  # links to Run detail
+
+    [ms for ms in at.sidebar.multiselect if ms.label == "Status"][0].set_value(["failed"]).run()
+    assert not at.exception
+    frame = at.dataframe[0].value
+    assert len(frame) == 2 and set(frame["status"]) == {"failed"}
+
+    # and the message is searchable across experiments
+    [ms for ms in at.sidebar.multiselect if ms.label == "Status"][0].set_value([]).run()
+    at.text_input(key="runs_search").set_value("gpu-07").run()
+    assert not at.exception
+    assert len(at.dataframe[0].value) == 1
+
+
+def test_runs_page_clears_running_rows_a_killed_job_left_behind(messy_db):
+    """A row logged at job start that nothing will ever complete: the Overview counts it forever and the CLI
+    was the only way to remove it."""
+    from results_tracker.api import query_runs
+    from results_tracker.db import get_engine
+
+    engine = get_engine(messy_db)
+    at = _run("runs")
+    assert any("running for more than 12 h" in w.value for w in at.warning)
+    listed = "\n".join(m.value for m in at.markdown)
+    assert listed.count("← stale") == 2 and "min ago" in listed  # the one that started minutes ago is not marked
+
+    at.checkbox(key="runs_stale_confirm").check().run()
+    at.button(key="runs_stale_delete").click().run()
+    assert not at.exception
+    rows, counts = query_runs(project="demo-paper", statuses=["running"], engine=engine)
+    assert counts["total"] == 1  # only the one that started minutes ago survives
+    assert not any("running for more than" in w.value for w in at.warning)
+
+
+def test_overview_points_at_the_runs_page_when_something_failed(messy_db):
+    at = _run("overview")
+    said = "\n".join(c.value for c in at.caption)
+    assert "2 failed and 3 running" in said  # the demo's own diverged run plus the one above
+    assert 'href="runs"' in said  # a link, not just a count
+
+
+def test_a_crowded_chart_says_its_colours_repeat(demo_db, tmp_path):
+    """Past the palette two series share a hue. That is fine (the marker differs), but the reader has to be
+    told -- silently repeating blue is how two methods get confused in a paper figure."""
+    from results_tracker import log_run
+    from results_tracker.plotstyle import PALETTE
+
+    for i in range(len(PALETTE) + 3):
+        for seed in (0, 1):
+            log_run("crowded", project="demo-paper", experiment_type="sweep", method=f"arm-{i:02d}", dataset="Set12",
+                    seed=seed, config={"lambda": 0.1}, metrics={"psnr": 30.0 + i}, db=demo_db, git_commit=None)
+    st.cache_data.clear()
+    at = _run("sweep")
+    box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    box.select([o for o in box.options if o.startswith("crowded")][0]).run()
+    lines = [ms for ms in at.sidebar.multiselect if ms.label == "One line per"][0]
+    lines.set_value(["method"]).run()
+    assert not at.exception
+    said = "\n".join(c.value for c in at.caption)
+    assert f"11 series share {len(PALETTE)} colours" in said
+
+
+def test_a_plot_style_can_be_copied_from_another_project(demo_db):
+    """Paper number two should not start from the lab default again."""
+    from results_tracker.api import get_plot_style, log_run, set_project
+    from results_tracker.db import get_engine
+    from results_tracker.plotstyle import PlotStyle
+
+    engine = get_engine(demo_db)
+    log_run("first", project="paper-two", method="Ours", dataset="Set12", seed=0, config={}, metrics={"psnr": 30.0},
+            db=demo_db, git_commit=None)
+    styled = PlotStyle(tick=21.0).with_colors({"Ours": "#00aa00"}).with_order("method", ["Ours", "TV"])
+    set_project("demo-paper", plot_style=styled.to_dict(), engine=engine)
+    st.cache_data.clear()
+
+    at = _run("settings")
+    [sb for sb in at.sidebar.selectbox if sb.label == "Project"][0].select("paper-two").run()
+    assert get_plot_style("paper-two", engine=engine).is_default
+    at.selectbox(key="set_style_source").select("demo-paper").run()
+    at.button(key="set_style_copy").click().run()
+    assert not at.exception
+    assert get_plot_style("paper-two", engine=engine).to_dict() == styled.to_dict()
+
+
+@pytest.fixture
+def instance_db(tmp_path, monkeypatch):
+    """Per-instance runs for two methods: ours wins on most images but not all, which is the case the
+    paired statistics exist for."""
+    from results_tracker import log_run
+
+    db = tmp_path / "instances.db"
+    gains = [0.8, 0.5, 0.9, -0.3, 0.4, 0.7, 0.2, 1.1, -0.1, 0.6]  # 8 wins, 2 losses
+    for i, gain in enumerate(gains):
+        for seed in (0, 1):
+            base = 29.0 + 0.05 * i
+            log_run("per-image", project="p", method="baseline", dataset="Set12", instance=f"img{i:02d}", seed=seed,
+                    config={"K": 5}, metrics={"psnr": base + 0.01 * seed}, db=db, git_commit=None)
+            log_run("per-image", project="p", method="ours", dataset="Set12", instance=f"img{i:02d}", seed=seed,
+                    config={"K": 5}, metrics={"psnr": base + gain + 0.01 * seed}, db=db, git_commit=None)
+    monkeypatch.setenv("RESULTS_TRACKER_DB", str(db))
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    return db
+
+
+def test_comparison_answers_how_often_ours_wins(instance_db):
+    """A mean ± std does not say on how many images the method improved, which is the first thing a reviewer
+    asks; the page now states it with a paired test and a sentence to paste."""
+    at = _run("comparison")
+    assert not at.exception
+    values = {m.label: m.value for m in at.metric}
+    assert values["Instances won"] == "8 / 10"
+    assert values["Median gain (psnr)"].startswith("+0.5")
+    assert values["Wilcoxon signed-rank"].startswith("p = 0.0") or values["Wilcoxon signed-rank"] == "p < 0.001"
+    sentence = "\n".join(c.value for c in at.code)
+    assert "improves psnr on 8 of 10 instances over baseline" in sentence
+    assert "Wilcoxon signed-rank" in sentence
+    caveat = "\n".join(c.value for c in at.caption)
+    assert "multiple-comparison correction" in caveat  # the page says what it does not do
+
+
+def test_a_table_cell_can_be_opened_to_the_runs_behind_it(instance_db):
+    """`30.69 ± 0.06` is a mean over runs the reader cannot otherwise see."""
+    at = _run("comparison")
+    rows = [ms for ms in at.sidebar.multiselect if ms.label == "Rows grouped by"][0]
+    rows.set_value(["method"]).run()
+    assert not at.exception
+    picker = at.selectbox(key="cmp_cell_row")
+    assert picker is not None
+    picker.select("ours").run()
+    assert not at.exception
+    frame = [d.value for d in at.dataframe if "run" in getattr(d.value, "columns", [])][0]
+    assert len(frame) == 20 and set(frame["instance"]) == {f"img{i:02d}" for i in range(10)}
+    assert frame["run"].iloc[0].startswith("run?")
+    said = "\n".join(c.value for c in at.caption)
+    assert "over these 20 run(s)" in said and "min" in said and "max" in said
+
+
+def test_an_experiment_can_be_renamed_and_deleted_from_settings(demo_db):
+    """A name typed into a script used to be permanent: `experiment set` only edits the stage."""
+    from results_tracker.api import get_asset, list_experiments, save_asset
+    from results_tracker.db import get_engine
+
+    engine = get_engine(demo_db)
+    save_asset("demo-paper", "fig:beta", kind="sweep-figure", experiment="lambda-sweep",
+               options={"param": "lambda", "metric": "psnr"}, engine=engine)
+    st.cache_data.clear()
+
+    at = _run("settings")
+    at.tabs[2].run()  # Experiments
+    at.selectbox(key="set_exp_admin").select("lambda-sweep").run()
+    at.text_input(key="set_exp_newname").set_value("lambda-sweep-v2").run()
+    at.button(key="set_exp_rename").click().run()
+    assert not at.exception
+    assert {e.name for e in list_experiments("demo-paper", engine=engine)} >= {"lambda-sweep-v2"}
+    assert get_asset("demo-paper", "fig:beta", engine=engine).experiment == "lambda-sweep-v2"  # the pin followed
+
+    at.selectbox(key="set_exp_admin").select("lambda-sweep-v2").run()
+    at.checkbox(key="set_exp_delete_confirm").check().run()
+    at.button(key="set_exp_delete").click().run()
+    assert not at.exception
+    assert "lambda-sweep-v2" not in {e.name for e in list_experiments("demo-paper", engine=engine)}
+
+
+def test_selected_runs_can_be_moved_and_deleted_from_the_runs_page(messy_db):
+    """The ticked rows' actions. AppTest cannot tick a dataframe row (the selection is the frontend's), so the
+    page's action block is driven with a known selection — the part that moves and deletes."""
+    from results_tracker.api import query_runs
+    from results_tracker.db import get_engine
+
+    script = (
+        "import os\n"
+        "from results_tracker.api import query_runs, run_records\n"
+        "from results_tracker.db import get_engine\n"
+        "from results_tracker.ui import runs\n"
+        "e = get_engine(os.environ['RESULTS_TRACKER_DB'])\n"
+        "rows, _ = query_runs(project='demo-paper', statuses=['running'], limit=2, engine=e)\n"
+        "runs._selected_actions(run_records(rows, engine=e), 'demo-paper', ['main-comparison'], e)\n"
+    )
+    engine = get_engine(messy_db)
+    before = query_runs(project="demo-paper", statuses=["running"], engine=engine)[1]["total"]
+    assert before == 3
+
+    at = AppTest.from_string(script, default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert any("2 run(s) selected" in m.value for m in at.markdown)
+
+    at.text_input(key="runs_move_to").set_value("quarantine").run()
+    at.button(key="runs_move").click().run()
+    assert not at.exception
+    assert query_runs(project="demo-paper", experiment="quarantine", engine=engine)[1]["total"] == 2
+
+    at = AppTest.from_string(script, default_timeout=30)
+    at.run()
+    at.checkbox(key="runs_delete_confirm").check().run()
+    at.button(key="runs_delete").click().run()
+    assert not at.exception
+    assert query_runs(project="demo-paper", statuses=["running"], engine=engine)[1]["total"] == before - 2
+
+
+def test_the_import_page_reads_a_file_the_way_the_cli_does(tmp_path, monkeypatch):
+    """The page's own path: upload -> records -> spec -> rows in the database, without a second CSV reader."""
+    from results_tracker.api import get_runs, run_records
+    from results_tracker.db import get_engine
+    from results_tracker.importer import ImportSpec, import_records
+    from results_tracker.ui import import_runs
+
+    csv = ("method,dataset,instance,seed,K,psnr,ssim\n"
+           "ours,Set12,img01,0,5,31.2,0.88\n"
+           "ours,Set12,img02,0,5,30.8,0.87\n"
+           "baseline,Set12,img01,0,5,29.9,0.85\n")
+
+    class Upload:  # what st.file_uploader hands the page
+        name = "results.csv"
+
+        def getvalue(self):
+            return csv.encode()
+
+    raws = import_runs._read_upload(Upload())
+    assert len(raws) == 3 and import_runs._columns(raws) == ["method", "dataset", "instance", "seed", "K", "psnr", "ssim"]
+
+    db = tmp_path / "imported.db"
+    engine = get_engine(db)
+    spec = ImportSpec(experiment="from-csv", project="p", metric_cols=["psnr", "ssim"], config_cols=["K"])
+    dry = import_records(raws, spec, engine=engine, dry_run=True)
+    assert dry.imported == 3 and not get_runs(experiment="from-csv", engine=engine)  # a dry run writes nothing
+    result = import_records(raws, spec, engine=engine)
+    assert result.imported == 3
+    recs = run_records(get_runs(experiment="from-csv", engine=engine), engine=engine)
+    assert {r["method"] for r in recs} == {"ours", "baseline"}
+    assert recs[0]["metrics"]["psnr"] and recs[0]["config"]["K"] == 5  # K stayed a setting, not a result
+    assert import_records(raws, spec, engine=engine).skipped == 3  # re-importing the same file adds nothing
+
+
+def test_the_export_page_composes_pinned_figures_into_one(demo_db):
+    """Panels of one IEEE figure, drawn by the same code at the same size rather than pasted together in LaTeX."""
+    from results_tracker.api import save_asset
+    from results_tracker.db import get_engine
+
+    engine = get_engine(demo_db)
+    save_asset("demo-paper", "fig:beta", kind="sweep-figure", experiment="lambda-sweep",
+               options={"param": "lambda", "metric": "psnr"}, engine=engine)
+    save_asset("demo-paper", "fig:bars", kind="comparison-figure", experiment="main-comparison",
+               options={"metric": "psnr", "rows": "method", "cols": "dataset"}, engine=engine)
+    st.cache_data.clear()
+
+    at = _run("export")
+    at.sidebar.radio[0].set_value("Multi-panel figure").run()
+    assert not at.exception
+    at.multiselect(key="exp_panels").set_value(["fig:beta", "fig:bars"]).run()
+    assert not at.exception and not at.error
+    assert at.image  # the composed preview
+    assert any("Download PDF" in b.label for b in at.download_button)
+    assert any("each panel is the pinned asset" in c.value.lower() for c in at.caption)

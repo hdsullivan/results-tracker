@@ -1,29 +1,34 @@
 """Settings page: what the tables and figures take as given — metric direction, unit and format; method labels,
-baseline flags and display order; the project's primary metric; and value maps that derive labelled groupings
-from raw config values (kernel index -> kernel type). Everything here was CLI-only before (`metric define`,
-`method define`, `valuemap set`); the page writes through the same API.
+baseline flags and display order; how the project's plots look (sizes, colours, label order); the project's
+primary metric; and value maps that derive labelled groupings from raw config values (kernel index -> kernel
+type). Everything here was CLI-only before (`metric define`, `method define`, `valuemap set`); the page writes
+through the same API.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, Optional
 
 import streamlit as st
 
 from .. import aggregate as agg
 from ..api import (
-    define_metric, define_method, define_value_map, delete_value_map, get_metric_defs, list_methods, list_value_maps, set_project,
+    define_metric, define_method, define_value_map, delete_value_map, get_metric_defs, list_assets, list_methods, list_value_maps,
+    set_project,
 )
 from ..valuemaps import derive, format_rules, parse_rules
-from .common import db_path, engine_for, keyed, keyed_selectbox, load_catalog, load_records, select_project, sidebar_db
+from .common import db_path, engine_for, invalidate_records, keyed, keyed_selectbox, load_catalog, load_records, select_project, sidebar_db
 from .tables import generic_html
 
 NEW = "— new value map —"
 
 
-def _saved(msg: str) -> None:
-    st.cache_data.clear()
+def _saved(msg: str, *, records: bool = False) -> None:
+    """Flash `msg` and rerun. `records=True` for an edit that changes what a record carries (a method's label
+    or position, a value map's rules); everything else is cached on the database's mtime and reloads itself."""
+    if records:
+        invalidate_records()
     st.session_state["settings_flash"] = msg
     st.rerun()
 
@@ -37,7 +42,8 @@ def render() -> None:
     engine = engine_for(db_path())
     if "settings_flash" in st.session_state:
         st.success(st.session_state.pop("settings_flash"))
-    tab_metrics, tab_methods, tab_exps, tab_maps, tab_project = st.tabs(["Metrics", "Methods", "Experiments", "Value maps", "Project"])
+    tab_metrics, tab_methods, tab_exps, tab_maps, tab_plots, tab_project = st.tabs(
+        ["Metrics", "Methods", "Experiments", "Value maps", "Plots", "Project"])
     with tab_metrics:
         _metrics(engine)
     with tab_methods:
@@ -46,6 +52,8 @@ def render() -> None:
         _experiments(project, engine)
     with tab_maps:
         _value_maps(project, engine)
+    with tab_plots:
+        _plots(project)
     with tab_project:
         _project(project, engine)
 
@@ -81,6 +89,78 @@ def _experiments(project: str, engine) -> None:
                 set_experiment(e["experiment"], project=project, experiment_type=e["type"], stage=stage, description=desc, engine=engine)
                 changed += 1
         _saved(f"{changed} experiment(s) updated.")
+    _rename_or_delete(project, exps, engine)
+
+
+def _rename_or_delete(project: str, exps: list[dict], engine) -> None:
+    """Fix a mistyped experiment name, merge two that should be one, or drop a botched grid.
+
+    A name typed into a script was permanent until now: `experiment set` only edits the stage and the
+    description, so the only cure was SQL. The name is stored by the assets that render the experiment and by
+    the notes that mention it, which `rename_experiment` follows; study specs on disk are named here because
+    nothing can rewrite them for you.
+    """
+    from ..api import delete_experiment, rename_experiment
+
+    st.divider()
+    st.markdown("**Rename, merge or delete**")
+    names = [e["experiment"] for e in exps]
+    chosen = keyed_selectbox("Experiment", names, "set_exp_admin", names[0])
+    entry = next(e for e in exps if e["experiment"] == chosen)
+    runs, completed = entry.get("runs", 0), entry.get("completed", 0)
+    assets = [a for a in list_assets(project, engine=engine) if a.experiment == chosen or chosen in (a.extra_experiments or [])]
+    specs = _specs_naming(project, chosen)
+    st.caption(f"`{chosen}` · {runs} run(s), {completed} completed · {len(assets)} pinned asset(s) name it"
+               + (f" ({', '.join(f'`{a.label}`' for a in assets[:4])}{'…' if len(assets) > 4 else ''})" if assets else ""))
+
+    c1, c2 = st.columns([3, 1])
+    new_name = c1.text_input("New name", value=chosen, key="set_exp_newname",
+                             help="An existing name merges the two: the runs move into it and this one goes.").strip()
+    merging = new_name in names and new_name != chosen
+    if c2.button("Rename" if not merging else "Merge", key="set_exp_rename", type="primary",
+                 disabled=not new_name or new_name == chosen):
+        touched = rename_experiment(project, chosen, new_name, engine=engine)
+        st.session_state.setdefault("_prefill", {})["set_exp_admin"] = new_name
+        _saved(f"{'Merged' if touched['merged'] else 'Renamed'} `{chosen}` into `{new_name}`: {touched['runs']} run(s) moved, "
+               f"{touched['assets']} asset(s) and {touched['notes']} note(s) followed.", records=True)
+    if merging:
+        st.warning(f"`{new_name}` exists: its runs and `{chosen}`'s will become one experiment, keeping `{new_name}`'s type and stage.")
+    if specs:
+        st.caption(f"Study spec(s) naming `{chosen}`: {', '.join(f'`{s}`' for s in specs)} — rename the experiment there too, or the "
+                   "Studies page will plan it as a new one.")
+
+    with st.expander(f"Delete `{chosen}`"):
+        st.warning(f"Deletes the experiment and its {runs} run(s) from the database. Artifact folders on disk are kept, and so are "
+                   "pinned assets naming it — they will report no data rather than rendering something else. This cannot be undone.")
+        armed = st.checkbox(f"Yes, delete `{chosen}` and its {runs} run(s)", key="set_exp_delete_confirm")
+        if st.button("Delete experiment", key="set_exp_delete", type="primary", disabled=not armed):
+            out = delete_experiment(project, chosen, delete_runs=True, engine=engine)
+            for k in ("set_exp_admin", "set_exp_newname", "set_exp_delete_confirm"):
+                st.session_state.pop(k, None)
+            _saved(f"Deleted `{chosen}` with {out['runs']} run(s)."
+                   + (f" {out['assets_left_dangling']} pinned asset(s) now have no data." if out["assets_left_dangling"] else ""),
+                   records=True)
+
+
+def _specs_naming(project: str, experiment: str) -> list[str]:
+    """Study specs in the project's studies directory whose `name` is this experiment (they are files on disk;
+    a rename in the database cannot reach them)."""
+    import json as _json
+
+    from .studies import default_studies_dir
+
+    folder = default_studies_dir(db_path(), project)
+    if not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.rglob("*.json")):
+        try:
+            d = _json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and d.get("name") == experiment:
+            out.append(path.name)
+    return out
 
 
 def _metrics(engine) -> None:
@@ -143,7 +223,7 @@ def _methods(engine) -> None:
             if (label, base, pos) != (m.label, bool(m.is_baseline), int(m.position or 0)):
                 define_method(m.name, label=label, is_baseline=base, position=pos, engine=engine)
                 changed += 1
-        _saved(f"{changed} method(s) updated.")
+        _saved(f"{changed} method(s) updated.", records=changed > 0)
 
 
 def _value_maps(project: str, engine) -> None:
@@ -185,12 +265,89 @@ def _value_maps(project: str, engine) -> None:
         if current and current.name != str(name).strip():
             delete_value_map(project, current.name, engine=engine)
         st.session_state.setdefault("_prefill", {})["set_vm_pick"] = str(name).strip()  # a drawn widget's state is set on the next run
-        _saved(f"Saved derived.{str(name).strip()} ({len(rules)} rules); it is now offered as a grouping and filter key.")
+        _saved(f"Saved derived.{str(name).strip()} ({len(rules)} rules); it is now offered as a grouping and filter key.", records=True)
     if current and b2.button("Delete", key="set_vm_delete"):
         delete_value_map(project, current.name, engine=engine)
         for k in ("set_vm_pick", "set_vm_name", "set_vm_field", "set_vm_rules", "set_vm_desc"):
             st.session_state.pop(k, None)
-        _saved(f"Deleted derived.{current.name}.")
+        _saved(f"Deleted derived.{current.name}.", records=True)
+
+
+def _plots(project: str) -> None:
+    """Everything about this project's plots in one place: the sizes (also in every page's sidebar), the colour of
+    each method, and the order its values are drawn in. The same style renders the on-screen charts and every
+    exported figure, so nothing here is screen-only."""
+    from .. import plotstyle
+    from .styling import SIZE_CONTROLS, WEIGHT_CONTROLS, plot_style, save_plot_style
+
+    style = plot_style(project)
+    st.caption("Sizes are the points the paper figures use; the GUI draws them ~1.35× larger so they read on screen. "
+               "They apply to every chart of this project and to every figure `results-tracker export paper` writes.")
+    edits: dict[str, float] = {}
+    for controls, step in ((SIZE_CONTROLS, 0.5), (WEIGHT_CONTROLS, 0.1)):
+        cols = st.columns(len(controls))
+        for col, (field, label, help_) in zip(cols, controls):
+            lo, hi = plotstyle.limits(field)
+            edits[field] = col.number_input(label, value=float(getattr(style, field)), min_value=lo, max_value=hi,
+                                            step=step, format="%.1f", help=help_, key=f"set_style_{field}")
+    new = style.merge(**edits)
+
+    records = load_records(project)
+    known = [m.name for m in list_methods(engine=engine_for(db_path()))]
+    ordered = agg.method_order(records)  # the project's display order (Method.position, then first seen)
+    names = ordered + [m for m in known if m not in ordered]
+    labels = agg.method_labels(records)
+    if names:
+        st.markdown("**Method colours**")
+        st.caption("The hue each method gets wherever it appears, shown in this project's display order (Settings → Methods "
+                   "sets it). A method left at its palette colour is not pinned: it takes the slot its position in the chart "
+                   "gives it (first drawn blue, then red, green, purple, orange, brown, gray, pink), which changes when a "
+                   "chart draws a different subset or a different order. Pin a colour to fix it everywhere.")
+        palette = style.palette_colors(names)
+        current = style.colors_for(names)
+        picked: dict[str, Optional[str]] = {}
+        per_row = 6
+        for start in range(0, len(names), per_row):
+            chunk = names[start:start + per_row]
+            cols = st.columns(per_row)
+            for col, name in zip(cols, chunk):
+                got = col.color_picker(str(labels.get(name, name))[:22], value=current[name], key=f"set_style_color_{name}")
+                picked[name] = None if str(got).lower() == palette[name].lower() else got
+        new = new.with_colors(picked)
+
+    if style.order:
+        st.markdown("**Label order**")
+        st.caption("Set on a chart's *Axes, label order and colours* expander; this is what is stored.")
+        rows = [[key, ", ".join(values)] for key, values in sorted(style.order.items())]
+        st.markdown(generic_html(["grouping key", "order its values are drawn in"], rows, left_cols=2,
+                                 caption="Values not listed follow at the end, in their natural order."),
+                    unsafe_allow_html=True)
+        drop = st.multiselect("Forget the order of", sorted(style.order), key="set_style_drop")
+        for key in drop:
+            new = new.with_order(key, None)
+
+    b1, b2, _ = st.columns([1, 1, 3])
+    if b1.button("Save plot style", key="set_style_save", type="primary", disabled=new.to_dict() == style.to_dict()):
+        save_plot_style(project, new)
+        _saved("Plot style saved; every chart and exported figure of this project uses it.")
+    if b2.button("Reset to the lab style", key="set_style_reset", disabled=style.is_default):
+        save_plot_style(project, plotstyle.PlotStyle())
+        for k in [k for k in st.session_state if str(k).startswith("set_style_")]:
+            del st.session_state[k]
+        _saved("Plot style reset to the lab's IEEE style.")
+
+    sources = [p["name"] for p in load_catalog()["projects"] if p["name"] != project and p.get("plot_style")]
+    if sources:
+        st.markdown("**Start from another paper**")
+        st.caption("Copies its sizes, colours and label order over this project's. Method names that this project does "
+                   "not use are carried along harmlessly; nothing else about the project changes.")
+        c1, c2 = st.columns([2, 1])
+        source = c1.selectbox("Copy the plot style of", sources, key="set_style_source")
+        if c2.button("Copy style", key="set_style_copy"):
+            save_plot_style(project, plot_style(source))
+            for k in [k for k in st.session_state if str(k).startswith("set_style_")]:
+                del st.session_state[k]
+            _saved(f"Copied the plot style of {source}.")
 
 
 def _project(project: str, engine) -> None:

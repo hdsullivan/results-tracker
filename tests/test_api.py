@@ -208,3 +208,103 @@ def test_summaries_version_recent_and_notes(engine):
     assert [n.id for n in list_notes("p", asset_label="tab:main", engine=engine)] == [n2.id]
     assert [n.id for n in list_notes("p", experiment="e", engine=engine)] == [n1.id]
     assert delete_note(n1.id, engine=engine) and not delete_note(n1.id, engine=engine) and len(list_notes(engine=engine)) == 1
+
+
+def test_query_runs_pages_filters_and_counts(engine):
+    """The run browser's query: several statuses at once, a text search over what a run carries, newest
+    first, one page at a time, and counts over everything that matches (not just the page)."""
+    from datetime import timedelta, timezone
+
+    from results_tracker.api import log_run, query_runs
+
+    now = datetime.now(timezone.utc)
+    for i in range(7):
+        log_run("sweep-a", project="p", method="ours", dataset="D", seed=i, config={"K": i},
+                metrics={"psnr": 30.0 + i}, timestamp=now - timedelta(minutes=i), engine=engine, git_commit=None)
+    log_run("sweep-a", project="p", method="ours", dataset="D", seed=99, config={"K": 99}, metrics={},
+            status="failed", notes="RuntimeError: CUDA out of memory", timestamp=now, engine=engine, git_commit=None)
+    log_run("other", project="p", method="tv", dataset="D", seed=0, config={}, metrics={}, status="running",
+            timestamp=now, engine=engine, git_commit=None)
+
+    rows, counts = query_runs(project="p", limit=3, engine=engine)
+    assert counts == {"completed": 7, "failed": 1, "running": 1, "total": 9}
+    assert len(rows) == 3 and rows[0].timestamp >= rows[-1].timestamp  # newest first
+    page2, _ = query_runs(project="p", limit=3, offset=3, engine=engine)
+    assert not ({r.id for r in rows} & {r.id for r in page2})
+
+    failed, counts = query_runs(project="p", statuses=["failed", "running"], engine=engine)
+    assert {r.status.value for r in failed} == {"failed", "running"} and counts["total"] == 2
+
+    hits, counts = query_runs(project="p", search="CUDA", engine=engine)
+    assert counts["total"] == 1 and hits[0].notes.startswith("RuntimeError")
+    assert query_runs(project="p", search="out of memory", engine=engine)[1]["total"] == 1
+    assert query_runs(project="p", experiment="other", engine=engine)[1]["total"] == 1
+    assert query_runs(project="p", method="tv", engine=engine)[1]["total"] == 1
+    assert query_runs(project="nope", engine=engine)[1]["total"] == 0
+
+
+def test_rename_experiment_follows_the_name_into_assets_and_notes(engine):
+    """An experiment's name is stored by every asset that renders it and every note that mentions it; a rename
+    that only touched the experiment row would silently unpin half the paper."""
+    from results_tracker.api import add_note, get_asset, list_notes, log_run, rename_experiment, save_asset
+
+    for seed in (0, 1):
+        log_run("compare-k2", project="p", method="ours", dataset="D", seed=seed, config={"K": 2},
+                metrics={"psnr": 30.0}, engine=engine, git_commit=None)
+    log_run("main", project="p", method="ours", dataset="D", seed=0, config={}, metrics={"psnr": 31.0},
+            engine=engine, git_commit=None)
+    save_asset("p", "tab:main", kind="comparison-table", experiment="main", extra_experiments=["compare-k2"],
+               options={}, engine=engine)
+    save_asset("p", "fig:k2", kind="sweep-figure", experiment="compare-k2", options={"param": "K", "metric": "psnr"}, engine=engine)
+    add_note("p", "K=2 is the paper's setting", experiment="compare-k2", engine=engine)
+
+    touched = rename_experiment("p", "compare-k2", "compare-K2", engine=engine)
+    assert touched == {"runs": 2, "assets": 2, "notes": 1, "merged": 0}
+    assert get_asset("p", "fig:k2", engine=engine).experiment == "compare-K2"
+    assert get_asset("p", "tab:main", engine=engine).extra_experiments == ["compare-K2"]
+    assert list_notes("p", engine=engine)[0].experiment == "compare-K2"
+    assert {e.name for e in list_experiments("p", engine=engine)} == {"compare-K2", "main"}
+
+
+def test_renaming_onto_an_existing_experiment_merges_them(engine):
+    from results_tracker.api import log_run, rename_experiment
+
+    for name, seed in (("typo-run", 0), ("typo-run", 1), ("real", 2)):
+        log_run(name, project="p", method="ours", dataset="D", seed=seed, config={}, metrics={"psnr": 30.0},
+                engine=engine, git_commit=None)
+    touched = rename_experiment("p", "typo-run", "real", engine=engine)
+    assert touched["runs"] == 2 and touched["merged"] == 1
+    assert {e.name for e in list_experiments("p", engine=engine)} == {"real"}
+    assert len(get_runs(experiment="real", engine=engine)) == 3
+    assert rename_experiment("p", "real", "real", engine=engine)["runs"] == 0  # a no-op rename changes nothing
+    with pytest.raises(ValueError):
+        rename_experiment("p", "gone", "whatever", engine=engine)
+
+
+def test_delete_experiment_refuses_to_take_runs_by_accident(engine):
+    from results_tracker.api import delete_experiment, log_run, save_asset
+
+    log_run("scratch", project="p", method="ours", dataset="D", seed=0, config={}, metrics={"psnr": 30.0},
+            engine=engine, git_commit=None)
+    save_asset("p", "fig:scratch", kind="sweep-figure", experiment="scratch", options={}, engine=engine)
+    with pytest.raises(ValueError, match="still has 1 run"):
+        delete_experiment("p", "scratch", engine=engine)
+    out = delete_experiment("p", "scratch", delete_runs=True, engine=engine)
+    assert out == {"runs": 1, "assets_left_dangling": 1}
+    assert not list_experiments("p", engine=engine)
+
+
+def test_move_runs_into_another_experiment(engine):
+    from results_tracker.api import log_run, move_runs
+
+    ids = [log_run("wrong-name", project="p", method="ours", dataset="D", seed=s, config={}, metrics={"psnr": 30.0 + s},
+                   engine=engine, git_commit=None).id for s in (0, 1, 2)]
+    log_run("right-name", project="p", method="ours", dataset="D", seed=9, config={}, metrics={"psnr": 31.0},
+            engine=engine, git_commit=None)
+    assert move_runs(ids[:2], "right-name", project="p", engine=engine) == 2
+    assert len(get_runs(experiment="right-name", engine=engine)) == 3
+    assert len(get_runs(experiment="wrong-name", engine=engine)) == 1
+    # a target that does not exist yet is created, keeping the source's type
+    assert move_runs(ids[2:], "brand-new", project="p", engine=engine) == 1
+    assert len(get_runs(experiment="brand-new", engine=engine)) == 1
+    assert move_runs([], "right-name", project="p", engine=engine) == 0

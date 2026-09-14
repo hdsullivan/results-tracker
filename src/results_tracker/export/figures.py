@@ -4,16 +4,23 @@ r"""Paper figures in the lab's IEEE style (ported from adaptivePnP `ablation_uti
 - Full boxed axes frame (0.8 pt) with inward major + minor ticks on all four sides, no grid.
 - Bordered legend (black edge, square corners) placed across the top of the figure.
 - Solid tab10-style colours with filled circle markers; the proposed method gets a heavier line and
-  larger markers; uncertainty as a shaded band (alpha 0.15), error bars on request.
+  larger markers; uncertainty as a shaded band (alpha 0.15), error bars on request. More than eight series
+  wrap the palette, and the marker shape and dash change with the wrap so a shared hue is never the only
+  difference between two lines.
 - Bold "(a) ..." captions below each panel via `panel_label`.
 - Figure widths 5.0 in (column) / 10.5 in (page): sized for comfortable review and scaled by LaTeX to
   \columnwidth / \textwidth; pass a number of inches for exact IEEE widths (3.5 / 7.16).
 - Deterministic: Figure objects only, no pyplot global state; TrueType fonts embedded.
+
+Every size, weight, colour and category order above is a *default*: pass a `plotstyle.PlotStyle` (a
+project's, from the GUI) as `style=` to override it, and `xlim=` / `ylim=` to fix an axis range. The
+on-screen charts (`ui/charts.py`) read the same style, so the GUI is a preview of these figures.
 """
 
 from __future__ import annotations
 
 import io
+import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 
@@ -22,6 +29,8 @@ import matplotlib.ticker
 from matplotlib.figure import Figure
 
 from .. import aggregate as agg
+from .. import plotstyle
+from ..plotstyle import VARIANT_KEY, PlotStyle
 
 # Lab convention (ablation_utils.IEEE_COLUMN_WIDTH / IEEE_PAGE_WIDTH): wider than the literal IEEE
 # column so point sizes read as body text once LaTeX scales the figure down.
@@ -31,21 +40,22 @@ IEEE_SINGLE_COL_IN = 3.5   # literal IEEEtran \columnwidth
 IEEE_DOUBLE_COL_IN = 7.16  # literal IEEEtran \textwidth
 WIDTHS = {"single": SINGLE_COL_IN, "double": DOUBLE_COL_IN, "ieee-single": IEEE_SINGLE_COL_IN, "ieee-double": IEEE_DOUBLE_COL_IN}
 
-LINE_WIDTH = 1.3
-MARKER_SIZE = 3.5
-AXIS_LABEL_SIZE = 11
-TICK_LABEL_SIZE = 9
-LEGEND_SIZE = 11
-PANEL_LABEL_SIZE = 10.5
+# The defaults of plotstyle.PlotStyle, spelled out (a project's style overrides any of them).
+LINE_WIDTH = plotstyle.DEFAULT.line_width
+MARKER_SIZE = plotstyle.DEFAULT.marker_size
+AXIS_LABEL_SIZE = plotstyle.DEFAULT.axis_label
+TICK_LABEL_SIZE = plotstyle.DEFAULT.tick
+LEGEND_SIZE = plotstyle.DEFAULT.legend
+PANEL_LABEL_SIZE = plotstyle.DEFAULT.panel_label
 # STIX mathtext renders visibly smaller than serif body text, so a label that is *entirely* math
 # (e.g. r"$\lambda$") gets this size instead of AXIS_LABEL_SIZE (lab rule: AXIS_LABEL_SIZE_MATH).
-AXIS_LABEL_SIZE_MATH = 14
+AXIS_LABEL_SIZE_MATH = plotstyle.DEFAULT.axis_label + plotstyle.DEFAULT.math_bump
 
 # Fixed hue order used across the lab's ablation figures (tab10 subset): blue, red, green, purple, orange,
 # brown, gray, pink. Assigned in first-seen order, never re-ranked.
-PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "#7f7f7f", "#e377c2"]
-LINESTYLES = ["-"] * 8          # the lab keeps solid lines; identity is colour + emphasis + marker
-MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
+PALETTE = plotstyle.PALETTE
+LINESTYLES = list(plotstyle.MPL_LINESTYLES)   # solid for the first eight series; a wrapped hue gets a dash
+MARKERS = list(plotstyle.MPL_MARKERS)
 HATCHES = ["", "////", "\\\\\\\\", "xxxx", "....", "++++"]
 BAR_HATCHES = HATCHES
 BAR_FILLS = PALETTE
@@ -93,26 +103,65 @@ def width_in(width: Union[str, float]) -> float:
     return WIDTHS[width]
 
 
-def style_map(names: Sequence[Any], emphasize: Iterable[Any] = ()) -> dict[Any, dict[str, Any]]:
-    """Fixed colour/linestyle/marker per entity in first-seen order; emphasised ones are a bit thicker."""
+def ieee_rc(style: Optional[PlotStyle] = None) -> dict[str, Any]:
+    """IEEE_RC with the style's sizes and weights substituted (the rest of the look is fixed)."""
+    s = plotstyle.resolve(style)
+    return {**IEEE_RC, "font.size": s.base, "axes.labelsize": s.axis_label, "axes.titlesize": s.axis_label,
+            "legend.fontsize": s.legend, "xtick.labelsize": s.tick, "ytick.labelsize": s.tick,
+            "lines.linewidth": s.line_width, "lines.markersize": s.marker_size}
+
+
+def style_map(names: Sequence[Any], emphasize: Iterable[Any] = (), style: Optional[PlotStyle] = None) -> dict[Any, dict[str, Any]]:
+    """Fixed colour/linestyle/marker per entity in first-seen order; emphasised ones are a bit thicker.
+
+    A style's `colors` override the palette hue of a named series (the bar fill follows it). Up to eight
+    series this is the lab's look exactly: a hue each, solid, filled circles. Beyond that the palette wraps,
+    so the shape and the dash change with it -- two lines must never differ only in a hue they share.
+    """
+    s = plotstyle.resolve(style)
     emph = set(emphasize)
+    hues = s.colors_for(names)
+    wraps = s.wrap_of(names)
     out: dict[Any, dict[str, Any]] = {}
     for n in names:
         if n in out:
             continue
         i = len(out)
         primary = n in emph
+        lw, ms = s.weights(primary)
+        wrap = wraps[n]
         out[n] = dict(
-            color=PALETTE[i % len(PALETTE)],
-            linestyle=LINESTYLES[i % len(LINESTYLES)],
-            marker="o",  # the lab uses filled circles everywhere; identity is carried by colour + emphasis
-            fill=BAR_FILLS[i % len(BAR_FILLS)],
+            color=hues[n],
+            linestyle=LINESTYLES[wrap % len(LINESTYLES)],
+            marker=MARKERS[wrap % len(MARKERS)],
+            fill=hues[n],
             hatch=BAR_HATCHES[i % len(BAR_HATCHES)],
-            linewidth=LINE_WIDTH + 0.2 if primary else LINE_WIDTH - 0.1,
-            markersize=4.5 if primary else MARKER_SIZE,
+            linewidth=lw,
+            markersize=ms,
             zorder=3 if primary else 2,
         )
     return out
+
+
+def _apply_limits(ax, xlim: Optional[Sequence[float]] = None, ylim: Optional[Sequence[float]] = None) -> None:
+    """Fix an axis range chosen in the GUI (`plotstyle.parse_limits`); None leaves it automatic."""
+    if xlim:
+        ax.set_xlim(float(xlim[0]), float(xlim[1]))
+    if ylim:
+        ax.set_ylim(float(ylim[0]), float(ylim[1]))
+
+
+def _seed_categories(ax, axis: str, categories: Sequence[str]) -> None:
+    """Fix the order of a categorical axis. Matplotlib numbers string categories in the order it first sees
+    them, so plotting them all (as NaN, invisible) up front pins the order the style asks for."""
+    cats = [str(c) for c in categories]
+    if len(cats) < 2:
+        return
+    nan = [float("nan")] * len(cats)
+    if axis == "x":
+        ax.plot(cats, nan, linestyle="none", marker="")
+    else:
+        ax.plot(nan, cats, linestyle="none", marker="")
 
 
 def _label(g: tuple, fallback: str) -> str:
@@ -125,12 +174,23 @@ def _new_figure(width: Union[str, float], height: Optional[float]) -> Figure:
     return Figure(figsize=(w, h))
 
 
+def _target(into, width: Union[str, float], height: Optional[float]):
+    """(figure, axes) to draw into: the axes a panel layout provides, or a new single-panel figure.
+
+    Every figure below takes `into=` so `panel_figure` can lay several of them out side by side without a
+    second implementation of each plot."""
+    if into is not None:
+        return into.figure, into
+    fig = _new_figure(width, height)
+    return fig, fig.add_subplot(111)
+
+
 def _thin_legend(leg) -> None:
     if leg is not None:
         leg.get_frame().set_linewidth(0.8)
 
 
-def panel_label(ax, text: str) -> None:
+def panel_label(ax, text: str, style: Optional[PlotStyle] = None) -> None:
     """Bold IEEE-style subfigure caption below the panel, e.g. "a. PSNR" or "(a) PSNR" -> "(a) PSNR".
 
     Offset in points so it clears the x-axis label regardless of the panel height (lab convention)."""
@@ -141,20 +201,16 @@ def panel_label(ax, text: str) -> None:
         letter, rest = m.group(1).lower(), m.group(2)
         text = f"({letter}) {rest}".strip()
     ax.annotate(text, xy=(0.5, 0), xycoords="axes fraction", xytext=(0, -32), textcoords="offset points",
-                ha="center", va="top", fontsize=PANEL_LABEL_SIZE, fontweight="bold", annotation_clip=False)
+                ha="center", va="top", fontsize=plotstyle.resolve(style).panel_label, fontweight="bold", annotation_clip=False)
 
 
-def set_axis_labels(ax, xlabel: Optional[str] = None, ylabel: Optional[str] = None) -> None:
+def set_axis_labels(ax, xlabel: Optional[str] = None, ylabel: Optional[str] = None, style: Optional[PlotStyle] = None) -> None:
     """Axis labels with the lab's math-only bump: '$\\lambda$' -> 14 pt, 'PSNR (dB)' -> 11 pt."""
-
-    def size(t: str) -> float:
-        t = t.strip()
-        return AXIS_LABEL_SIZE_MATH if (t.startswith("$") and t.endswith("$") and t.count("$") == 2) else AXIS_LABEL_SIZE
-
+    s = plotstyle.resolve(style)
     if xlabel:
-        ax.set_xlabel(xlabel, fontsize=size(xlabel))
+        ax.set_xlabel(xlabel, fontsize=s.label_size(xlabel))
     if ylabel:
-        ax.set_ylabel(ylabel, fontsize=size(ylabel))
+        ax.set_ylabel(ylabel, fontsize=s.label_size(ylabel))
 
 
 def top_legend(ax, ncol: Optional[int] = None):
@@ -199,20 +255,29 @@ def sweep_figure(
     labels: Optional[Mapping[tuple, str]] = None,
     legend_loc: str = "top",
     caption: Optional[str] = None,
+    style: Optional[PlotStyle] = None,
+    by: Sequence[str] = (),
+    xlim: Optional[Sequence[float]] = None,
+    ylim: Optional[Sequence[float]] = None,
+    into: Optional[Any] = None,
 ) -> Figure:
     """Metric vs swept parameter: mean line with a shaded ± std band (or error bars), best value ringed.
 
     `legend_loc="top"` puts the bordered legend above the axes (lab convention); any matplotlib loc works too.
-    `caption` adds a bold "(a) ..." label under the panel."""
-    with matplotlib.rc_context(IEEE_RC):
-        fig = _new_figure(width, height)
-        ax = fig.add_subplot(111)
-        groups = [g for g, s in series_by_group.items() if s]
-        styles = style_map([_label(g, metric) for g in groups], emphasize)
+    `caption` adds a bold "(a) ..." label under the panel. `by` names the keys the lines are split by, so the
+    style can order the legend; a categorical x axis follows the style's order for `param`."""
+    st_ = plotstyle.resolve(style)
+    with matplotlib.rc_context(ieee_rc(style)):
+        fig, ax = _target(into, width, height)
+        groups = st_.ordered(" / ".join(by), [g for g, s in series_by_group.items() if s])
+        styles = style_map([_label(g, metric) for g in groups], emphasize, style=style)
         xs_all = sorted({x for g in groups for x, _ in series_by_group[g]}, key=lambda x: (isinstance(x, str), x))
         numeric = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in xs_all)
         if log_x is None:
             log_x = numeric and len(xs_all) >= 3 and min(xs_all) > 0 and max(xs_all) / min(xs_all) >= 10
+        if not numeric:
+            xs_all = st_.ordered(param, xs_all)
+            _seed_categories(ax, "x", [str(x) for x in xs_all])
         for g in groups:
             name = (labels or {}).get(g) or _label(g, metric)
             st = styles[_label(g, metric)]
@@ -242,14 +307,15 @@ def sweep_figure(
             ax.set_xticks(xs_all)
             ax.set_xticklabels([f"{x:g}" for x in xs_all])
             ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
-        set_axis_labels(ax, xlabel or param, ylabel or metric)
+        set_axis_labels(ax, xlabel or param, ylabel or metric, style=style)
+        _apply_limits(ax, xlim, ylim)
         if len(groups) > 1:
             if legend_loc == "top":
                 top_legend(ax)
             else:
                 _thin_legend(ax.legend(loc=legend_loc))
         if caption:
-            panel_label(ax, caption)
+            panel_label(ax, caption, style=style)
         return fig
 
 
@@ -269,14 +335,19 @@ def curves_figure(
     labels: Optional[Mapping[tuple, str]] = None,
     caption: Optional[str] = None,
     guide: Optional[float] = None,
+    style: Optional[PlotStyle] = None,
+    by: Sequence[str] = (),
+    xlim: Optional[Sequence[float]] = None,
+    ylim: Optional[Sequence[float]] = None,
+    into: Optional[Any] = None,
 ) -> Figure:
     """A per-iteration curve (`curves.CurveStat`) per group: mean line, shaded ± std band, lab style.
     `guide` draws a dotted horizontal reference (1.0 for a ratio such as sigma_hat / sigma)."""
-    with matplotlib.rc_context(IEEE_RC):
-        fig = _new_figure(width, height)
-        ax = fig.add_subplot(111)
-        groups = [g for g, cs in series_by_group.items() if cs.mean]
-        styles = style_map([_label(g, curve) for g in groups], emphasize)
+    st_ = plotstyle.resolve(style)
+    with matplotlib.rc_context(ieee_rc(style)):
+        fig, ax = _target(into, width, height)
+        groups = st_.ordered(" / ".join(by), [g for g, cs in series_by_group.items() if cs.mean])
+        styles = style_map([_label(g, curve) for g in groups], emphasize, style=style)
         for g in groups:
             cs = series_by_group[g]
             st = styles[_label(g, curve)]
@@ -292,11 +363,12 @@ def curves_figure(
         if log_y:
             ax.set_yscale("log")
         ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
-        set_axis_labels(ax, xlabel, ylabel or curve)
+        set_axis_labels(ax, xlabel, ylabel or curve, style=style)
+        _apply_limits(ax, xlim, ylim)
         if len(groups) > 1:
             top_legend(ax, ncol=min(len(groups), 4))
         if caption:
-            panel_label(ax, caption)
+            panel_label(ax, caption, style=style)
         return fig
 
 
@@ -317,16 +389,21 @@ def tradeoff_figure(
     emphasize: Iterable[Any] = (),
     labels: Optional[Mapping[Any, str]] = None,
     caption: Optional[str] = None,
+    style: Optional[PlotStyle] = None,
+    series_key: str = "method",
+    xlim: Optional[Sequence[float]] = None,
+    ylim: Optional[Sequence[float]] = None,
+    into: Optional[Any] = None,
 ) -> Figure:
     """Two metrics against each other (`aggregate.tradeoff_points`): one series per method, its points joined
     along the path key (iteration budget), error bars = std. Series in `hollow` (baselines, reported numbers)
     get open markers and no line: the paper's filled-vs-hollow convention for parameter-free vs tuned."""
     hollow_set = set(hollow)
-    with matplotlib.rc_context(IEEE_RC):
-        fig = _new_figure(width, height)
-        ax = fig.add_subplot(111)
-        names = list(points_by_series)
-        styles = style_map([str(n) for n in names], [str(e) for e in emphasize])
+    st_ = plotstyle.resolve(style)
+    with matplotlib.rc_context(ieee_rc(style)):
+        fig, ax = _target(into, width, height)
+        names = st_.ordered(series_key, list(points_by_series))
+        styles = style_map([str(n) for n in names], [str(e) for e in emphasize], style=style)
         for name in names:
             pts = list(points_by_series[name])
             if not pts:
@@ -344,14 +421,15 @@ def tradeoff_figure(
             if annotate and len(pts) > 1:
                 for p in pts:
                     ax.annotate(agg.fmt_value(p.label), (p.x.mean, p.y.mean), xytext=(3, 3), textcoords="offset points",
-                                fontsize=TICK_LABEL_SIZE - 2, color=st["color"])
+                                fontsize=max(st_.annotation - 2, 1.0), color=st["color"])
         if log_x:
             ax.set_xscale("log")
-        set_axis_labels(ax, xlabel or x_metric, ylabel or y_metric)
+        set_axis_labels(ax, xlabel or x_metric, ylabel or y_metric, style=style)
+        _apply_limits(ax, xlim, ylim)
         if len(names) > 1:
             top_legend(ax, ncol=min(len(names), 4))
         if caption:
-            panel_label(ax, caption)
+            panel_label(ax, caption, style=style)
         return fig
 
 
@@ -368,16 +446,20 @@ def distribution_figure(
     labels: Optional[Mapping[Any, str]] = None,
     show_points: bool = True,
     caption: Optional[str] = None,
+    style: Optional[PlotStyle] = None,
+    series_key: str = "method",
+    ylim: Optional[Sequence[float]] = None,
+    into: Optional[Any] = None,
 ) -> Figure:
     """Box-and-whisker of per-instance values per method (genuine quartiles, not mean ± std), with the points
     jittered alongside so n and outliers are visible."""
     import random
 
-    with matplotlib.rc_context(IEEE_RC):
-        fig = _new_figure(width, height)
-        ax = fig.add_subplot(111)
-        names = [m for m, v in values_by_method.items() if len(v)]
-        styles = style_map([str(n) for n in names], [str(e) for e in emphasize])
+    st_ = plotstyle.resolve(style)
+    with matplotlib.rc_context(ieee_rc(style)):
+        fig, ax = _target(into, width, height)
+        names = st_.ordered(series_key, [m for m, v in values_by_method.items() if len(v)])
+        styles = style_map([str(n) for n in names], [str(e) for e in emphasize], style=style)
         data = [list(values_by_method[m]) for m in names]
         bp = ax.boxplot(data, positions=range(1, len(names) + 1), widths=0.55, patch_artist=True, showfliers=not show_points,
                         medianprops=dict(color="black", linewidth=1.0), whiskerprops=dict(linewidth=0.8), capprops=dict(linewidth=0.8))
@@ -391,9 +473,10 @@ def distribution_figure(
         ax.set_xticks(range(1, len(names) + 1))
         ax.set_xticklabels([(labels or {}).get(m, str(m)) for m in names])
         ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
-        set_axis_labels(ax, None, ylabel or metric)
+        set_axis_labels(ax, None, ylabel or metric, style=style)
+        _apply_limits(ax, None, ylim)
         if caption:
-            panel_label(ax, caption)
+            panel_label(ax, caption, style=style)
         return fig
 
 
@@ -412,15 +495,22 @@ def ablation_figure(
     labels: Optional[Mapping[str, str]] = None,
     annotate: bool = True,
     caption: Optional[str] = None,
+    style: Optional[PlotStyle] = None,
+    xlim: Optional[Sequence[float]] = None,
+    into: Optional[Any] = None,
 ) -> Figure:
-    """Horizontal bars of (variant − full model). Blue = improves the metric, red = hurts; thin black edges."""
+    """Horizontal bars of (variant − full model). Blue = improves the metric, red = hurts; thin black edges.
+    Bars are ranked by effect size unless the style declares an order for `variant`."""
+    st_ = plotstyle.resolve(style)
     variants = [r for r in rows if not r.is_base and r.delta.get(metric) is not None]
     if sort:
         variants.sort(key=lambda r: r.delta[metric] * (1 if higher_is_better else -1))
-    with matplotlib.rc_context(IEEE_RC):
+    if st_.order.get(VARIANT_KEY):
+        ranked = st_.ordered(VARIANT_KEY, [r.label for r in variants])
+        variants.sort(key=lambda r: ranked.index(r.label))
+    with matplotlib.rc_context(ieee_rc(style)):
         h = height if height is not None else max(1.2, 0.28 * len(variants) + 0.6)
-        fig = _new_figure(width, h)
-        ax = fig.add_subplot(111)
+        fig, ax = _target(into, width, h)
         names = [(labels or {}).get(r.label, r.label) for r in variants]
         deltas = [r.delta[metric] for r in variants]
         errs = [(r.stats[metric].std if r.stats.get(metric) else 0.0) for r in variants]
@@ -435,17 +525,18 @@ def ablation_figure(
         ax.set_yticks(y)
         ax.set_yticklabels(names)
         ax.invert_yaxis()
-        set_axis_labels(ax, xlabel or f"$\\Delta$ {metric} vs. full model")
+        set_axis_labels(ax, xlabel or f"$\\Delta$ {metric} vs. full model", style=style)
         if annotate:
             span = max((abs(d) + e for d, e in zip(deltas, errs)), default=1.0) or 1.0
             for yi, d, e in zip(y, deltas, errs):
                 off = (e + 0.03 * span) * (1 if d >= 0 else -1)
                 ax.annotate(format(d, f"+{fmt}"), (d + off, yi), va="center", ha="left" if d >= 0 else "right",
-                            fontsize=TICK_LABEL_SIZE)
+                            fontsize=st_.annotation)
             lo, hi = ax.get_xlim()
             ax.set_xlim(lo - 0.15 * span, hi + 0.15 * span)
+        _apply_limits(ax, xlim, None)
         if caption:
-            panel_label(ax, caption)
+            panel_label(ax, caption, style=style)
         return fig
 
 
@@ -464,8 +555,12 @@ def comparison_figure(
     hatch: bool = False,
     legend_loc: str = "above",
     zero_based: bool = False,
-    ylim: Optional[tuple[float, float]] = None,
+    ylim: Optional[Sequence[float]] = None,
     caption: Optional[str] = None,
+    style: Optional[PlotStyle] = None,
+    rows_key: str = "method",
+    cols_key: Optional[str] = "dataset",
+    into: Optional[Any] = None,
 ) -> Figure:
     """Grouped bars: x = column key (datasets), one bar per row entity (method), error bar = std.
 
@@ -474,11 +569,12 @@ def comparison_figure(
     `legend_loc="above"` puts a framed one-row legend over the axes so it never covers a bar.
     y limits are data-tight by default (PSNR differences of a few dB are invisible from 0); pass
     `zero_based=True` or `ylim` to override. Say which in the caption."""
-    with matplotlib.rc_context(IEEE_RC):
-        fig = _new_figure(width, height)
-        ax = fig.add_subplot(111)
-        rows, cols = pt.rows, pt.cols
-        styles = style_map(rows, emphasize)
+    st_ = plotstyle.resolve(style)
+    with matplotlib.rc_context(ieee_rc(style)):
+        fig, ax = _target(into, width, height)
+        rows = st_.ordered(rows_key, pt.rows)
+        cols = st_.ordered(cols_key, pt.cols)
+        styles = style_map(rows, emphasize, style=style)
         n = len(rows)
         group_w = 0.8
         bw = group_w / n
@@ -505,9 +601,9 @@ def comparison_figure(
         ax.tick_params(axis="x", which="both", length=0)
         ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
         ax.set_xlim(-0.5, len(cols) - 0.5)
-        set_axis_labels(ax, None, ylabel or metric)
+        set_axis_labels(ax, None, ylabel or metric, style=style)
         if ylim is not None:
-            ax.set_ylim(*ylim)
+            ax.set_ylim(float(ylim[0]), float(ylim[1]))
         else:
             _tight_ylim(ax, los, his, zero_based)
         if legend_loc in ("above", "top"):
@@ -515,7 +611,47 @@ def comparison_figure(
         else:
             _thin_legend(ax.legend(loc=legend_loc, ncol=min(n, 3)))
         if caption:
-            panel_label(ax, caption)
+            panel_label(ax, caption, style=style)
+        return fig
+
+
+# --------------------------------------------------------------------------- panels
+
+def panel_figure(
+    panels: Sequence[tuple[Any, Optional[str]]],
+    *,
+    width: Union[str, float] = "double",
+    height: Optional[float] = None,
+    ncols: Optional[int] = None,
+    style: Optional[PlotStyle] = None,
+    letters: bool = True,
+) -> Figure:
+    """Several plots as one figure, each with its bold `(a)` caption underneath.
+
+    `panels` pairs a drawing callable with an optional caption: `(lambda ax: sweep_figure(..., into=ax), "PSNR vs lambda")`.
+    An IEEE figure is usually several panels under one number and one caption, and pasting separately exported
+    PDFs together in LaTeX is where panel sizes and font sizes stop matching. Composed here, every panel is drawn
+    by the same code, at the same size, in the project's style.
+    """
+    if not panels:
+        raise ValueError("a panel figure needs at least one panel")
+    n = len(panels)
+    cols = ncols or (n if n <= 3 else (n + 1) // 2)
+    rows = math.ceil(n / cols)
+    with matplotlib.rc_context(ieee_rc(style)):
+        w = width_in(width)
+        h = height if height is not None else rows * (w / cols) * 0.62 + 0.35 * rows  # room for the (a) captions
+        fig = Figure(figsize=(w, h))
+        axes = fig.subplots(rows, cols, squeeze=False)
+        for i, (draw, caption) in enumerate(panels):
+            ax = axes[i // cols][i % cols]
+            draw(ax)
+            if letters or caption:
+                text = f"{chr(ord('a') + i)}. {caption}" if caption else f"{chr(ord('a') + i)}."
+                panel_label(ax, text, style=style)
+        for j in range(n, rows * cols):  # an incomplete last row leaves empty axes: drop them
+            fig.delaxes(axes[j // cols][j % cols])
+        fig.tight_layout(w_pad=2.0, h_pad=3.0)
         return fig
 
 

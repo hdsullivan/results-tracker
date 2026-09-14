@@ -21,8 +21,9 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+from .. import plotstyle
 from ..aggregate import plain_label
-from .figures import IEEE_RC, SAVE_KW
+from .figures import IEEE_RC, SAVE_KW, ieee_rc
 
 BOX_COLOR = "#eda100"  # yellow from the categorical palette: visible on gray and on the magma error map
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
@@ -371,10 +372,10 @@ def _add_kernel_inset(ax, kernel: np.ndarray) -> None:
         sp.set_linewidth(0.9)
 
 
-def _stamp(ax, text: str, corner: str) -> None:
+def _stamp(ax, text: str, corner: str, size: float = IEEE_FONT_SIZE) -> None:
     """`31.27 dB / 0.873` in a corner with a legibility backing box (upper-left when a zoom inset is present)."""
     y, va = (0.035, "bottom") if corner == "lower left" else (0.965, "top")
-    ax.text(0.035, y, text, transform=ax.transAxes, fontsize=IEEE_FONT_SIZE - 1.5, va=va, ha="left", color="black",
+    ax.text(0.035, y, text, transform=ax.transAxes, fontsize=max(size - 1.5, 1.0), va=va, ha="left", color="black",
             bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none", "boxstyle": "round,pad=0.15"})
 
 
@@ -396,6 +397,7 @@ def reconstruction_figure(
     annotate: bool = True,
     show_titles: bool = True,
     error_maps: Optional[bool] = None,
+    style: Optional["plotstyle.PlotStyle"] = None,
 ) -> tuple[Figure, VisualSpec]:
     """Lab-style qualitative grid.
 
@@ -464,8 +466,8 @@ def reconstruction_figure(
             pooled = np.concatenate([e.ravel() for e in errs.values()]) if errs else np.zeros(1)
             error_vmax = max(float(np.percentile(pooled, ERROR_VMAX_PERCENTILE)), 1e-6)
 
-    with matplotlib.rc_context({**IEEE_RC, "font.size": IEEE_FONT_SIZE, "axes.titlesize": IEEE_FONT_SIZE,
-                                "axes.labelsize": IEEE_FONT_SIZE}):
+    size = plotstyle.resolve(style).base  # panel titles, row labels, metric stamps and the colour bar
+    with matplotlib.rc_context({**ieee_rc(style), "font.size": size, "axes.titlesize": size, "axes.labelsize": size}):
         fig = Figure(figsize=(fw, fh), dpi=300)
         gs = fig.add_gridspec(n_rows, n_cols, width_ratios=ratios)
 
@@ -477,9 +479,9 @@ def reconstruction_figure(
             if kernel is not None and p.kind == "measurement":
                 _add_kernel_inset(ax, kernel.image)
             if show_titles:
-                ax.set_title(p.title, fontsize=IEEE_FONT_SIZE)
+                ax.set_title(p.title, fontsize=size)
             if annotate and p.subtitle:
-                _stamp(ax, p.subtitle, "upper left" if use_zoom else "lower left")
+                _stamp(ax, p.subtitle, "upper left" if use_zoom else "lower left", size)
 
         if left:
             if n_rows == 1:
@@ -505,17 +507,17 @@ def reconstruction_figure(
                     if use_zoom:
                         _add_zoom_inset(ax, p.image, box, vmin, vmax, cmap)
                 if annotate and p.subtitle:
-                    _stamp(ax, p.subtitle, "upper left" if use_zoom else "lower left")
+                    _stamp(ax, p.subtitle, "upper left" if use_zoom else "lower left", size)
                 if ri == 0 and show_titles:
-                    ax.set_title(p.title, fontsize=IEEE_FONT_SIZE)
+                    ax.set_title(p.title, fontsize=size)
                 if ci == 0 and row.label:
-                    ax.set_ylabel(row.label, fontsize=IEEE_FONT_SIZE)
+                    ax.set_ylabel(row.label, fontsize=size)
 
         fig.tight_layout(pad=0.4, h_pad=0.6, w_pad=0.3)
         if mode == "error" and mappable is not None:
             cbar = fig.colorbar(mappable, ax=method_axes, location="bottom", shrink=0.6, aspect=40, pad=0.03)
-            cbar.set_label("| luminance error |", fontsize=IEEE_FONT_SIZE)
-            cbar.ax.tick_params(labelsize=IEEE_FONT_SIZE - 1.5)
+            cbar.set_label("| luminance error |", fontsize=size)
+            cbar.ax.tick_params(labelsize=max(size - 1.5, 1.0))
 
     spec = VisualSpec(
         crop_box=box if use_zoom else None, display_range=display_range,
@@ -580,6 +582,7 @@ def make_visual(
     width: Union[str, float] = "double",
     auto_roles: bool = True,
     data_range: Optional[float] = None,
+    style: Optional["plotstyle.PlotStyle"] = None,
 ) -> VisualResult:
     """Everything from records to a finished lab-style figure. File roles are guessed from the artifact
     folders when not given (`auto_roles`). Raises ValueError when nothing can be drawn."""
@@ -638,7 +641,7 @@ def make_visual(
         raise ValueError("no method panels could be built: " + "; ".join(problems))
     fig, spec = reconstruction_figure(panel_arg, reference=ref_panel, measurement=meas_panel, kernel=ker_panel, mode=mode,
                                       zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=zoom_center, crop_box=crop_box,
-                                      width=width)
+                                      width=width, style=style)
     spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image = experiment, dataset, instance, seed, image
     return VisualResult(fig, spec, problems, omitted)
 

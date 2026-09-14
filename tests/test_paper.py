@@ -155,3 +155,56 @@ def test_cli_paper_and_assets(demo, tmp_path, monkeypatch):
     assert r.exit_code == 0 and set(zipfile.ZipFile(tmp_path / "p.zip").namelist()) == {"figures/fig-abl.pdf", "figures/fig-abl.tex", "preamble.tex", "README.txt", "MANIFEST.json"}
     r = runner.invoke(app, ["asset", "rm", "tab:main", "-p", PROJECT, "--db", dbs])
     assert r.exit_code == 0 and runner.invoke(app, ["asset", "rm", "tab:main", "-p", PROJECT, "--db", dbs]).exit_code == 1
+
+
+def test_a_panel_figure_composes_other_pinned_assets(engine):
+    """An IEEE figure is usually several panels under one number; `export paper` regenerates the composition
+    from the assets it names, so it follows them when their data changes."""
+    from results_tracker.api import log_run, save_asset
+    from results_tracker.export.paper import render_paper
+
+    for k in (2, 5, 10):
+        for seed in (0, 1):
+            log_run("sweep-k", project="p", experiment_type="sweep", method="ours", dataset="D", instance=f"img{seed}",
+                    seed=seed, config={"K": k}, metrics={"psnr": 28.0 + k * 0.1 + seed * 0.05}, engine=engine, git_commit=None)
+    save_asset("p", "fig:k", kind="sweep-figure", experiment="sweep-k",
+               options={"param": "K", "metric": "psnr", "by": ["method"]}, engine=engine)
+    save_asset("p", "fig:spread", kind="distribution-figure", experiment="sweep-k", options={"metric": "psnr"}, engine=engine)
+    save_asset("p", "fig:both", kind="panel-figure", experiment="sweep-k",
+               options={"panels": ["fig:k", "fig:spread"], "captions": ["PSNR vs K", None], "width": "double"}, engine=engine)
+
+    rendered = {r.label: r for r in render_paper(engine, "p", source="test")}
+    assert not [r.label for r in rendered.values() if r.error]
+    panels = rendered["fig:both"]
+    assert panels.main_file == "figures/fig-both.pdf" and panels.files[0][1][:4] == b"%PDF"
+    assert "2 panels: fig:k, fig:spread" in panels.note
+    assert len(panels.files[0][1]) > len(rendered["fig:k"].files[0][1])  # it really carries both plots
+
+    # a panel that names something that is not there fails loudly, and only that asset
+    save_asset("p", "fig:broken", kind="panel-figure", experiment="sweep-k", options={"panels": ["fig:k", "fig:gone"]}, engine=engine)
+    rendered = {r.label: r for r in render_paper(engine, "p", source="test")}
+    assert "no asset `fig:gone`" in rendered["fig:broken"].error
+    assert not rendered["fig:both"].error
+
+
+def test_a_figure_asset_and_its_panel_are_drawn_by_the_same_code(engine):
+    """`figure_drawer` is what both paths use: a panel must not be a second, subtly different implementation."""
+    from results_tracker.api import log_run
+    from results_tracker.export.figures import figure_bytes
+    from results_tracker.export.paper import PANEL_KINDS, figure_drawer, render_asset
+    from results_tracker.api import get_runs, run_records
+
+    for k in (2, 5):
+        log_run("sweep-k", project="p", experiment_type="sweep", method="ours", dataset="D", seed=0, config={"K": k},
+                metrics={"psnr": 28.0 + k * 0.1}, engine=engine, git_commit=None)
+    recs = run_records(get_runs(experiment="sweep-k", engine=engine), engine=engine)
+    spec = {"label": "fig:k", "kind": "sweep-figure", "experiment": "sweep-k",
+            "options": {"param": "K", "metric": "psnr"}}
+    defs = {"psnr": {"unit": "dB", "higher_is_better": True, "fmt": ".2f"}}
+
+    assert "sweep-figure" in PANEL_KINDS
+    drawn = figure_drawer(spec, recs, defs)()          # the drawer's own figure
+    exported = render_asset(spec, recs, defs)          # what the paper export writes
+    assert not exported.error
+    assert len(figure_bytes(drawn, "pdf")) > 1000 and exported.files[0][1][:4] == b"%PDF"
+    assert [ln.get_label() for ln in drawn.axes[0].lines]  # it actually drew something

@@ -106,6 +106,16 @@ def value_order(records: Iterable[Record], key: str) -> Optional[list[Any]]:
     return None
 
 
+def natural_key(text: Any) -> tuple:
+    """Sort key that reads numbers as numbers: `compare-K2` before `compare-K10`, not after it.
+
+    A paper's experiments are named in families (`compare-K2`, `compare-K5`, `compare-K10`); plain string
+    order puts K10 second and makes every list look shuffled.
+    """
+    parts = re.split(r"(\d+)", str(text))
+    return tuple(int(p) if p.isdigit() else p.lower() for p in parts)
+
+
 def method_order(records: Iterable[Record]) -> list[Any]:
     """Methods in display order: by `Method.position`, ties in first-seen order (the paper's fixed row order)."""
     seen: dict[Any, tuple[int, int]] = {}
@@ -722,6 +732,149 @@ def instance_gains(table: InstanceTable, ours: Any, baseline: Any) -> list[Insta
     out = [InstanceGain(i, sign * table.cells[(i, ours)].mean, sign * table.cells[(i, baseline)].mean)
            for i in table.instances if (i, ours) in table.cells and (i, baseline) in table.cells]
     return sorted(out, key=lambda g: g.gain, reverse=True)
+
+
+# --------------------------------------------------------------------------- paired comparison
+
+def sign_test_p(wins: int, losses: int) -> Optional[float]:
+    """Two-sided exact sign test: the chance of a split this lopsided if each instance were a coin flip.
+
+    Ties are dropped, as the test requires. Exact (a binomial sum), not an approximation, so it is right for
+    the handful of images a qualitative comparison usually has.
+    """
+    n = wins + losses
+    if n == 0:
+        return None
+    extreme = max(wins, losses)
+    tail = sum(math.comb(n, k) for k in range(extreme, n + 1))
+    return min(1.0, 2 * tail / 2 ** n)
+
+
+def _rank_with_ties(values: Sequence[float]) -> tuple[list[float], list[int]]:
+    """Average ranks (1-based) of `values`, plus the sizes of the tied groups (for the variance correction)."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    groups: list[int] = []
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        average = (i + j) / 2 + 1  # ranks i+1 .. j+1
+        for k in range(i, j + 1):
+            ranks[order[k]] = average
+        groups.append(j - i + 1)
+        i = j + 1
+    return ranks, groups
+
+
+def _wilcoxon_exact_p(ranks: Sequence[float], w: float) -> float:
+    """P(W <= w) * 2 under the null, by counting sign assignments (exact; `ranks` must be 1..n untied)."""
+    counts = {0.0: 1}
+    for r in ranks:
+        nxt: dict[float, int] = {}
+        for s, c in counts.items():
+            nxt[s] = nxt.get(s, 0) + c          # this difference is negative
+            nxt[s + r] = nxt.get(s + r, 0) + c  # ... or positive
+        counts = nxt
+    at_or_below = sum(c for s, c in counts.items() if s <= w)
+    return min(1.0, 2 * at_or_below / 2 ** len(ranks))
+
+
+def wilcoxon_p(differences: Sequence[float], exact_limit: int = 20) -> tuple[Optional[float], bool]:
+    """(two-sided p, exact?) of the Wilcoxon signed-rank test over paired differences.
+
+    Zero differences are dropped (the standard treatment). Exact by enumeration while the sample is small and
+    no |difference| is tied; otherwise the normal approximation with a continuity correction and the usual
+    tie correction to the variance. Returns (None, False) when there is nothing to test.
+    """
+    diffs = [d for d in differences if d != 0]
+    n = len(diffs)
+    if n == 0:
+        return None, False
+    ranks, groups = _rank_with_ties([abs(d) for d in diffs])
+    w_plus = sum(r for r, d in zip(ranks, diffs) if d > 0)
+    w_minus = sum(r for r, d in zip(ranks, diffs) if d < 0)
+    w = min(w_plus, w_minus)
+    untied = all(g == 1 for g in groups)
+    if n <= exact_limit and untied:
+        return _wilcoxon_exact_p(ranks, w), True
+    mu = n * (n + 1) / 4
+    var = n * (n + 1) * (2 * n + 1) / 24 - sum(g ** 3 - g for g in groups) / 48
+    if var <= 0:
+        return None, False
+    z = (w - mu + 0.5) / math.sqrt(var)  # continuity correction towards the mean
+    return min(1.0, 2 * 0.5 * (1 + math.erf(z / math.sqrt(2)))), False
+
+
+@dataclass
+class PairedComparison:
+    """How one method compares with another over the instances both were run on.
+
+    The per-instance means are paired (each instance contributes one difference), which is the comparison a
+    reviewer asks for: not "is the average higher" but "on how many images, and by how much".
+    """
+
+    metric: str
+    ours: Any
+    baseline: Any
+    gains: list[InstanceGain]
+    wins: int
+    losses: int
+    ties: int
+    median: float
+    mean: float
+    sign_p: Optional[float]
+    wilcoxon_p: Optional[float]
+    wilcoxon_exact: bool
+
+    @property
+    def n(self) -> int:
+        return len(self.gains)
+
+    def sentence(self, fmt: str = ".2f", unit: str = "", labels: Optional[Mapping[Any, str]] = None) -> str:
+        """The line this belongs in a manuscript as, ready to paste."""
+        name = (labels or {}).get(self.ours, str(self.ours))
+        other = (labels or {}).get(self.baseline, str(self.baseline))
+        metric = f"{self.metric} ({unit})" if unit else self.metric
+        parts = [f"{name} improves {metric} on {self.wins} of {self.n} instances over {other}"
+                 + (f" ({self.ties} tied)" if self.ties else ""),
+                 f"median {format(self.median, '+' + fmt)}"]
+        if self.wilcoxon_p is not None:
+            parts.append(f"Wilcoxon signed-rank {fmt_p(self.wilcoxon_p)}" + ("" if self.wilcoxon_exact else ", normal approximation"))
+        elif self.sign_p is not None:
+            parts.append(f"sign test {fmt_p(self.sign_p)}")
+        return "; ".join(parts) + "."
+
+
+def fmt_p(p: Optional[float]) -> str:
+    """`p = 0.003` / `p < 0.001`: a p-value as a paper prints it."""
+    if p is None:
+        return "p = —"
+    if p < 0.001:
+        return "p < 0.001"
+    return f"p = {p:.3f}" if p < 0.1 else f"p = {p:.2f}"
+
+
+def paired_comparison(table: InstanceTable, ours: Any, baseline: Any) -> Optional[PairedComparison]:
+    """`ours` against `baseline` instance by instance (None when they share no instance).
+
+    Differences already carry the metric's direction (`instance_gains`), so a positive gain always means
+    `ours` is better, whether the metric is maximised or minimised.
+    """
+    gains = instance_gains(table, ours, baseline)
+    if not gains:
+        return None
+    diffs = [g.gain for g in gains]
+    wins = sum(d > 0 for d in diffs)
+    losses = sum(d < 0 for d in diffs)
+    w_p, exact = wilcoxon_p(diffs)
+    return PairedComparison(
+        metric=table.metric, ours=ours, baseline=baseline, gains=gains,
+        wins=wins, losses=losses, ties=sum(d == 0 for d in diffs),
+        median=statistics.median(diffs), mean=statistics.fmean(diffs),
+        sign_p=sign_test_p(wins, losses), wilcoxon_p=w_p, wilcoxon_exact=exact,
+    )
 
 
 @dataclass

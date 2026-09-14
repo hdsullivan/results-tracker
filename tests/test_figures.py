@@ -128,3 +128,42 @@ def test_math_only_axis_label_is_bumped():
     fig = sweep_figure(series, "lambda", "psnr", xlabel=r"$\lambda$", ylabel="PSNR (dB)")
     ax = fig.axes[0]
     assert ax.xaxis.label.get_fontsize() == 14 and ax.yaxis.label.get_fontsize() == 11
+
+
+def test_panel_figure_lays_panels_out_and_labels_them():
+    """Panels of one IEEE figure: each drawn by its own figure function into a shared grid, captioned (a), (b)."""
+    from results_tracker.export.figures import distribution_figure, panel_figure
+
+    def stat(m):
+        return agg.Stat(mean=m, std=0.1, n=3, min=m - 0.1, max=m + 0.1, values=[m] * 3)
+
+    series = {("ours",): [(1, stat(29.0)), (2, stat(30.0))], ("tv",): [(1, stat(28.0)), (2, stat(28.5))]}
+    fig = panel_figure([
+        (lambda ax: sweep_figure(series, "K", "psnr", into=ax, by=["method"]), "PSNR vs K"),
+        (lambda ax: distribution_figure({"ours": [30.1, 29.8], "tv": [28.2, 28.1]}, "psnr", into=ax), None),
+    ], width="double")
+    assert len(fig.axes) == 2
+    assert fig.get_size_inches()[0] == DOUBLE_COL_IN
+    captions = [t.get_text() for ax in fig.axes for t in ax.texts]
+    assert "(a) PSNR vs K" in captions and "(b)" in captions  # a panel without a caption still gets its letter
+    assert fig.axes[0].get_xlabel() == "K"  # the panel is the real plot, not a placeholder
+
+    # an odd number of panels leaves no empty axes behind
+    three = panel_figure([(lambda ax: sweep_figure(series, "K", "psnr", into=ax), None)] * 3, ncols=2)
+    assert len(three.axes) == 3
+
+
+def test_a_figure_drawn_into_an_axes_matches_the_standalone_one():
+    from matplotlib.figure import Figure
+
+    def stat(m):
+        return agg.Stat(mean=m, std=0.1, n=3, min=m - 0.1, max=m + 0.1, values=[m] * 3)
+
+    series = {("ours",): [(1, stat(29.0)), (2, stat(30.0))]}
+    alone = sweep_figure(series, "K", "psnr")
+    host = Figure(figsize=(4, 3))
+    ax = host.add_subplot(111)
+    returned = sweep_figure(series, "K", "psnr", into=ax)
+    assert returned is host  # it draws into the caller's figure instead of making one
+    assert [ln.get_ydata().tolist() for ln in ax.lines] == [ln.get_ydata().tolist() for ln in alone.axes[0].lines]
+    assert ax.get_xlabel() == alone.axes[0].get_xlabel()

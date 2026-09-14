@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Mapping, Optional, Sequence
 
 from .. import aggregate as agg
+from ..plotstyle import PlotStyle
 from .csv import runs_csv
 from .figures import ablation_figure, comparison_figure, figure_bytes, figure_tex, ieee_preamble, sweep_figure
 from .latex import ablation_latex, comparison_latex, provenance_note, sweep_latex, width_hint
@@ -39,8 +40,11 @@ def build_bundle(
     source: str,
     width: str = "single",
     visual: bool = True,
+    style: Optional[PlotStyle] = None,
 ) -> tuple[bytes, list[dict[str, Any]]]:
-    """`experiments` maps name -> (type, records). Returns (zip bytes, manifest rows)."""
+    """`experiments` maps name -> (type, records). Returns (zip bytes, manifest rows).
+
+    `style` is the project's plot style, so a bundle's default figures look like the GUI's charts."""
     hib = {k: v["higher_is_better"] for k, v in defs.items()}
     buf = io.BytesIO()
     manifest: list[dict[str, Any]] = []
@@ -75,7 +79,8 @@ def build_bundle(
                                      env="table*" if hint else "table"),
                     "comparison-table", name, len(done), audit.summary() + (" · table* (wide)" if hint else ""))
                 if metric:
-                    fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, row_labels=labels)
+                    fig = comparison_figure(pt, metric, ylabel=ylabel, width=width, row_labels=labels, style=style,
+                                            rows_key="method", cols_key="dataset" if has_ds else None)
                     add(zf, f"figures/{slug}_{metric}.pdf", figure_bytes(fig, "pdf"), "comparison-figure", name, len(done))
                     add(zf, f"figures/{slug}_{metric}.tex", figure_tex(f"figures/{slug}_{metric}.pdf", label=f"fig:{slug}", width=width),
                         "figure-tex", name, len(done))
@@ -83,7 +88,7 @@ def build_bundle(
                     datasets = list(dict.fromkeys(r["dataset"] for r in done if r.get("dataset") is not None and r.get("artifacts_dir")))
                     for ds in (datasets or [None]):
                         try:
-                            vr = make_visual(done, defs, experiment=name, dataset=ds, zoom=True, width="double")
+                            vr = make_visual(done, defs, experiment=name, dataset=ds, zoom=True, width="double", style=style)
                         except ValueError as e:
                             manifest.append({"file": "", "kind": "visual-figure", "experiment": name, "runs": 0, "note": f"skipped: {e}"})
                             continue
@@ -95,7 +100,7 @@ def build_bundle(
                                                                         label=f"fig:{vs}_visual", width="double"), "figure-tex", name, 0)
                         if vr.spec.reference:
                             try:
-                                er = make_visual(done, defs, experiment=name, dataset=ds, mode="error", width="double")
+                                er = make_visual(done, defs, experiment=name, dataset=ds, mode="error", width="double", style=style)
                                 add(zf, f"figures/{vs}_error.pdf", figure_bytes(er.fig, "pdf"), "visual-error-figure", name, len(er.spec.panels))
                             except ValueError:
                                 pass
@@ -108,7 +113,7 @@ def build_bundle(
                     add(zf, f"tables/{slug}_{_slug(param)}.tex",
                         sweep_latex(series, param, metric, defs, label=f"tab:{slug}", provenance=prov), "sweep-table", name, len(done))
                     best = {g: agg.best_sweep_value(s_, hib.get(metric, True)) for g, s_ in series.items()}
-                    fig = sweep_figure(series, param, metric, ylabel=ylabel, best_by_group=best, width=width)
+                    fig = sweep_figure(series, param, metric, ylabel=ylabel, best_by_group=best, width=width, style=style)
                     add(zf, f"figures/{slug}_{_slug(param)}.pdf", figure_bytes(fig, "pdf"), "sweep-figure", name, len(done))
                     add(zf, f"figures/{slug}_{_slug(param)}.tex", figure_tex(f"figures/{slug}_{_slug(param)}.pdf", label=f"fig:{slug}", width=width),
                         "figure-tex", name, len(done))
@@ -126,7 +131,7 @@ def build_bundle(
                     if metric:
                         d = defs.get(metric, {})
                         fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True),
-                                              fmt=d.get("fmt", ".2f"), width=width)
+                                              fmt=d.get("fmt", ".2f"), width=width, style=style)
                         add(zf, f"figures/{slug}_{metric}.pdf", figure_bytes(fig, "pdf"), "ablation-figure", name, len(done))
                         add(zf, f"figures/{slug}_{metric}.tex", figure_tex(f"figures/{slug}_{metric}.pdf", label=f"fig:{slug}", width=width),
                             "figure-tex", name, len(done))

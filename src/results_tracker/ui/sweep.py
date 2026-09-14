@@ -13,8 +13,9 @@ from ..export.latex import selection_latex, sweep_latex
 from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
 from .tables import figure_caption_html, generic_html, sweep_html
-from .common import (active_where, fmt_for, load_metric_defs, load_records, pin_to_paper, select_project_experiment, sidebar_db,
-                     sidebar_filter, swept_params, where_text)
+from .common import (active_where, completed_or_explain, excluded_note, fmt_for, load_metric_defs, load_records, pin_to_paper,
+                     select_project_experiment, sidebar_db, sidebar_filter, swept_params, where_text)
+from .styling import chart_controls, sidebar_plot_style
 
 GROUP_KEYS = ["method", "dataset", "instance"]  # base fields; config.* and derived.* keys are added when they vary
 
@@ -22,7 +23,11 @@ GROUP_KEYS = ["method", "dataset", "instance"]  # base fields; config.* and deri
 def prefill_from_asset(a) -> dict:
     """Widget states for a `selection-table` asset."""
     o = dict(a.options or {})
-    return {k: o[opt] for k, opt in (("sel_by", "by"), ("sel_param_label", "param_label")) if o.get(opt) is not None}
+    pre = {k: o[opt] for k, opt in (("sel_by", "by"), ("sel_param_label", "param_label")) if o.get(opt) is not None}
+    for opt, axis in (("xlim", "xlim"), ("ylim", "ylim")):
+        if o.get(opt):
+            pre[f"sweep_lines:{a.experiment}_{axis}"] = ",".join(str(v) for v in o[opt])
+    return pre
 
 
 def line_keys(records: list[dict], param_x: str) -> list[str]:
@@ -47,12 +52,11 @@ def render() -> None:
 
     reset_on_experiment_change("sel_", experiment)
     all_recs = sidebar_filter(recs)
-    recs = agg.completed(all_recs)
-    if not recs:
-        if not active_where():
-            st.info("No completed runs in this experiment.")
+    completed = completed_or_explain(all_recs, of=recs)
+    if not completed:
         return
-    filt = f" · filter: {where_text()}" if active_where() else ""
+    recs = completed
+    filt = excluded_note(all_recs) + (f" · filter: {where_text()}" if active_where() else "")
 
     all_keys = sorted({k for r in recs for k in agg.flatten(r["config"])})
     varying = agg.varying_config_keys(recs)
@@ -79,6 +83,7 @@ def render() -> None:
                                   help="Split the pooled mean into lines: per method arm, per condition (config.noise, "
                                        "derived.kernel_type, ...). Without a split every value pools all conditions and seeds.")
         show_band = st.checkbox("Shaded ± std band", value=True, help="Off: error bars instead.")
+    style = sidebar_plot_style(project)
 
     hib = defs.get(metric, {}).get("higher_is_better", True)
     fmt = fmt_for(defs, metric)
@@ -93,7 +98,10 @@ def render() -> None:
         best = grid.best(hib)
         st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} over {param_x} × {param_y} · "
                    f"best at {param_x}={best[0]}, {param_y}={best[1]}: {grid.cells[best].format(fmt)}")
-        st.plotly_chart(sweep_heatmap(grid.xs, grid.ys, grid.matrix(), param_x, param_y, metric, fmt, hib, best),
+        heat = chart_controls(project, style, key=f"sweep_heat:{experiment}", x_name=None, y_name=None,
+                              orders=[(param_x, grid.xs), (param_y, grid.ys)])
+        st.plotly_chart(sweep_heatmap(grid.xs, grid.ys, grid.matrix(), param_x, param_y, metric, fmt, hib, best,
+                                      style=heat.style),
                         theme=None, width="stretch")
         ns = sorted({c.n for c in grid.cells.values()})
         n_txt = f"n = {ns[0]}" if len(ns) == 1 else f"n = {ns[0]}–{ns[-1]}"
@@ -139,7 +147,12 @@ def render() -> None:
         st.caption(f"{experiment} · {len(recs)} runs{filt} · {metric} {arrow} vs {param_x}{pool_note} · best per line: " +
                    ", ".join(f"{' / '.join(map(str, g))} → {b}" for g, b in best.items()))
 
-    st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best),
+    numeric_x = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in xs_all)
+    ctl = chart_controls(project, style, key=f"sweep_lines:{experiment}", series=list(series), series_key=" / ".join(group_by),
+                         orders=() if numeric_x else [(param_x, xs_all)],
+                         x_name=param_x if numeric_x else None, y_name=metric, log_x=log_x)
+    st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best,
+                                style=ctl.style, by=group_by, xlim=ctl.xlim, ylim=ctl.ylim),
                     theme=None, width="stretch")
 
     # sensitivity: how flat is the optimum?
@@ -176,7 +189,8 @@ def render() -> None:
                                      f"std of the best (or 1% of the range when std is 0). A wide plateau means the choice is forgiving."),
                 unsafe_allow_html=True)
 
-    pin_to_paper({"sweep-figure": {"param": param_x, "metric": metric, "by": group_by, "band": show_band, "log_x": log_x, "width": "single"},
+    pin_to_paper({"sweep-figure": {"param": param_x, "metric": metric, "by": group_by, "band": show_band, "log_x": log_x, "width": "single",
+                                   **ctl.limit_options},
                   "sweep-table": {"param": param_x, "metric": metric, "by": group_by}},
                  records=all_recs, key="sweep_pin")
     with st.expander("LaTeX (booktabs table + figure snippet)"):
@@ -186,7 +200,8 @@ def render() -> None:
         st.caption("More options (captions, labels, widths) on the Export page.")
     with st.expander("Paper figure (matplotlib, IEEE style)"):
         pf = sweep_figure(series, param_x, metric, ylabel=f"{metric} ({unit})" if unit else metric, best_by_group=best,
-                          band=show_band, log_x=log_x, width="single")
+                          band=show_band, log_x=log_x, width="single", style=ctl.style, by=group_by,
+                          xlim=ctl.xlim, ylim=ctl.ylim)
         g1, g2 = st.columns([3, 1])
         gray = g2.checkbox("Grayscale", value=False, key="sweep_gray")
         png = figure_bytes(pf, "png", dpi=200)

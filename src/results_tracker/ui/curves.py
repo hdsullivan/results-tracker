@@ -16,9 +16,11 @@ from ..curves import curve_names, curve_series, normalise, record_curves
 from ..export.figures import curves_figure, figure_bytes, figure_tex, to_grayscale_png
 from .charts import curves_lines
 from .common import (
-    active_where, keyed, keyed_multiselect, keyed_selectbox, load_metric_defs, load_records_union, pin_to_paper,
-    reset_on_experiment_change, select_extra_experiments, select_project_experiment, sidebar_db, sidebar_filter, where_text,
+    active_where, completed_or_explain, excluded_note, keyed, keyed_multiselect, keyed_selectbox, load_metric_defs,
+    load_records_union, pin_to_paper, reset_on_experiment_change, select_extra_experiments, select_project_experiment,
+    sidebar_db, sidebar_filter, where_text,
 )
+from .styling import chart_controls, sidebar_plot_style
 from .tables import figure_caption_html, generic_html
 
 NORMS = {"value": "as recorded", "delta": "minus the first iteration", "ratio": "divided by the first iteration"}
@@ -32,6 +34,9 @@ def prefill_from_asset(a) -> dict[str, Any]:
                      ("cur_width", "width"), ("cur_panel", "panel_label"), ("cur_ylabel", "ylabel")):
         if opt in o and o[opt] is not None:
             pre[key] = o[opt]
+    for axis in ("xlim", "ylim"):
+        if o.get(axis):
+            pre[f"cur_lines:{a.experiment}_{axis}"] = ",".join(str(v) for v in o[axis])
     if o.get("guide") is not None:
         pre["cur_guide"] = float(o["guide"])
     return pre
@@ -54,7 +59,8 @@ def render() -> None:
     if not recs:
         st.info("No runs in this experiment.")
         return
-    recs = agg.completed(sidebar_filter(recs))
+    matched = sidebar_filter(recs)
+    recs = completed_or_explain(matched, of=recs)
     if not recs:
         return
     names = curve_names(recs)
@@ -78,16 +84,20 @@ def render() -> None:
         log_y = keyed(st.checkbox, "Log y axis", "cur_logy", False)
         guide = keyed(st.number_input, "Reference line (0 = none)", "cur_guide", 0.0, step=0.5,
                       help="e.g. 1.0 for a ratio such as sigma_hat / sigma")
+    style = sidebar_plot_style(project)
     series = {g: normalise(cs, norm) for g, cs in curve_series(recs, curve, by).items()}
     if not series:
         st.warning(f"No run has a `{curve}` curve.")
         return
     n_runs = sum(cs.runs for cs in series.values())
     pooled = [k for k in by_opts if k not in by and k not in ("instance", "seed")]
-    st.caption(f"{title} · {n_runs} runs with curves" + (f" · filter: {where_text()}" if active_where() else "")
+    st.caption(f"{title} · {n_runs} runs with curves" + excluded_note(matched) + (f" · filter: {where_text()}" if active_where() else "")
                + f" · {curve} vs iteration ({NORMS[norm]})" + (f" · pooled over {', '.join(pooled)}" if pooled else ""))
     ylabel = curve if norm == "value" else f"{curve} ({NORMS[norm]})"
-    st.plotly_chart(curves_lines(series, curve, ylabel=ylabel, band=band, log_y=log_y, guide=guide or None, members=members),
+    ctl = chart_controls(project, style, key=f"cur_lines:{experiment}", series=list(series), series_key=" / ".join(by),
+                         x_name="iteration", y_name=ylabel, log_y=log_y)
+    st.plotly_chart(curves_lines(series, curve, ylabel=ylabel, band=band, log_y=log_y, guide=guide or None, members=members,
+                                 style=ctl.style, by=by, xlim=ctl.xlim, ylim=ctl.ylim),
                     theme=None, width="stretch")
     rows = []
     for g, cs in series.items():
@@ -110,7 +120,8 @@ def render() -> None:
             ylab = keyed(st.text_input, "y label", "cur_ylabel", ylabel)
         with c3:
             cap = keyed(st.text_input, "Panel caption", "cur_panel", "", placeholder="a. PSNR per iteration")
-        pf = curves_figure(series, curve, ylabel=ylab, band=band, log_y=log_y, width=width, caption=cap or None, guide=guide or None)
+        pf = curves_figure(series, curve, ylabel=ylab, band=band, log_y=log_y, width=width, caption=cap or None, guide=guide or None,
+                           style=ctl.style, by=by, xlim=ctl.xlim, ylim=ctl.ylim)
         g1, g2 = st.columns([3, 1])
         gray = g2.checkbox("Grayscale", value=False, key="cur_gray")
         png = figure_bytes(pf, "png", dpi=200)
@@ -119,5 +130,5 @@ def render() -> None:
         g2.download_button("Download PDF", figure_bytes(pf, "pdf"), file_name=f"{stem}.pdf", mime="application/pdf")
         st.code(figure_tex(f"figures/{stem}.pdf", label=f"fig:{stem}", width=width), language="latex")
     pin_to_paper({"curves-figure": {"curve": curve, "by": by, "normalise": norm, "band": band, "log_y": log_y, "guide": guide or None,
-                                    "width": width, "ylabel": ylab, "panel_label": cap or None}},
+                                    "width": width, "ylabel": ylab, "panel_label": cap or None, **ctl.limit_options}},
                  records=recs, key="cur_pin", suggested_label=f"fig:{experiment}-{curve}", extra_experiments=extra)

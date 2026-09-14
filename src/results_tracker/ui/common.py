@@ -8,13 +8,14 @@ writes the same `st.session_state` entries, and they are mirrored into the URL q
 from __future__ import annotations
 
 import os
-from typing import Any, Iterable, Optional, Sequence
+from collections import Counter
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import streamlit as st
 
 from .. import aggregate as agg
-from ..api import experiment_version, get_metric_defs, get_runs, list_experiments, list_projects, run_records
-from ..db import DEFAULT_DB, ENV_VAR, get_engine, resolve_db_path
+from ..api import experiment_activity, experiment_version, get_metric_defs, get_runs, list_experiments, list_projects, run_records
+from ..db import DEFAULT_DB, ENV_VAR, MEMORY, get_engine, resolve_db_path
 
 HOME_ENV = "RESULTS_TRACKER_HOME"  # where the GUI keeps its own small state (recent databases)
 
@@ -73,12 +74,15 @@ def _load_catalog(path: str, mtime: float) -> dict[str, list[dict[str, Any]]]:
     engine = engine_for(path)
     projects = list_projects(engine=engine)
     projs = {p.id: p.name for p in projects}
+    activity = experiment_activity(engine=engine)  # one grouped query: run counts per experiment for the selectors
     exps = [
         {"project": projs[e.project_id], "experiment": e.name, "type": e.type.value, "description": e.description,
-         "swept_params": list(e.swept_params or []), "stage": e.stage or ""}
+         "swept_params": list(e.swept_params or []), "stage": e.stage or "",
+         **{k: v for k, v in activity.get((projs[e.project_id], e.name), {}).items() if k in ("completed", "runs", "last")}}
         for e in list_experiments(engine=engine)
     ]
-    return {"projects": [{"name": p.name, "primary_metric": p.primary_metric or "", "studies_dir": p.studies_dir or ""} for p in projects],
+    return {"projects": [{"name": p.name, "primary_metric": p.primary_metric or "", "studies_dir": p.studies_dir or "",
+                          "plot_style": dict(p.plot_style or {})} for p in projects],
             "experiments": exps}
 
 
@@ -117,6 +121,26 @@ def load_metric_defs() -> dict[str, dict[str, Any]]:
 def load_catalog() -> dict[str, list[dict[str, Any]]]:
     p = db_path()
     return _load_catalog(p, _mtime(p))
+
+
+def fmt_timestamp(ts: Any, with_time: bool = True) -> str:
+    """A stored timestamp as local wall-clock time (runs carry UTC), or "—" when there is none."""
+    try:
+        local = ts.astimezone() if ts.tzinfo is not None else ts
+        return local.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
+    except Exception:  # noqa: BLE001 - a missing or unparsable timestamp must not break a table
+        return "—"
+
+
+def invalidate_records() -> None:
+    """Drop the cached records of every experiment.
+
+    Only needed after an edit that changes what `run_records` attaches to a run -- a method's label,
+    baseline flag or position, or a value map's rules. The catalog and the metric definitions are cached on
+    the database's mtime and come back by themselves, so a settings save must not clear the whole cache:
+    reloading every experiment's runs to change one metric's unit is a long stall on a real database.
+    """
+    _load_records.clear()
 
 
 # --------------------------------------------------------------------------- URL <-> session state
@@ -273,17 +297,56 @@ def remember_db(path: str) -> None:
         pass
 
 
+def db_exists(path: str) -> bool:
+    """Whether opening `path` would read a database rather than make one."""
+    return path == MEMORY or os.path.isfile(path)
+
+
+def _missing_db(path: str) -> None:
+    """Offer to create a database that is not there, instead of creating it silently.
+
+    `get_engine` makes the file and all its tables on first open, so a typo in the box (or a drive that is
+    not mounted, or a file someone moved) produces an empty database that looks exactly like one whose runs
+    have gone missing. Nothing is created until the button below is pressed.
+    """
+    st.warning(f"`{path}` does not exist — nothing has been created.")
+    st.caption("Check the path in the sidebar: a typo, a database on another machine, an unmounted drive, or a file "
+               "that has moved. You can also pick one under **Recent databases**, seed a demo with "
+               "`results-tracker demo`, or create an empty database here and start logging into it.")
+    c1, c2, _ = st.columns([2, 2, 3])
+    if c1.button("Create an empty database here", type="primary", key="db_create"):
+        engine_for(path)  # get_engine writes the file and its tables
+        remember_db(path)
+        st.rerun()
+    previous = st.session_state.get("_last_db")
+    if previous and previous != path and c2.button(f"Back to {os.path.basename(previous)}", key="db_back"):
+        st.session_state[KEY_DB] = previous
+        st.rerun()
+
+
 def sidebar_db() -> str:
-    """Database picker in the sidebar (recent databases as a dropdown, any path as text). Returns the active path."""
+    """Database picker in the sidebar (recent databases as a dropdown, any path as text). Returns the active path.
+
+    Stops the page when the chosen file does not exist: every page opens the database right after this, and
+    an accidental empty one is indistinguishable from lost data.
+    """
     current = db_path()
-    remember_db(current)
+    exists = db_exists(current)
+    if exists:
+        remember_db(current)
+        st.session_state["_last_db"] = current
     with st.sidebar:
-        recent = recent_dbs()
         canonical = _canonical_db(current)
-        if len(recent) > 1:
-            labels = db_labels(recent)
-            pick = st.selectbox("Recent databases", recent, index=recent.index(canonical) if canonical in recent else 0,
-                                format_func=lambda p: labels.get(p, p), help="Databases opened before; the full path is in the box below.")
+        # The open database is always an option, even when it was never remembered (a path that does not
+        # exist is not): a selector whose index fell back to 0 would switch the database on its own.
+        recent = recent_dbs()
+        options = recent if canonical in recent else [canonical, *recent]
+        if len(options) > 1:
+            labels = db_labels(options)
+            pick = st.selectbox("Recent databases", options, index=options.index(canonical),
+                                format_func=lambda p: labels.get(p, p) + ("" if db_exists(p) else "  (missing)"),
+                                help="Databases opened before; the full path is in the box below. A file that is no longer "
+                                     "there is marked (missing) and is not reopened behind your back.")
             if _canonical_db(pick) != canonical:
                 st.session_state[KEY_DB] = resolve_db_path(pick)
                 st.rerun()
@@ -294,6 +357,9 @@ def sidebar_db() -> str:
         if st.button("Refresh", help="Re-read the database"):
             st.cache_data.clear()
             st.rerun()
+    if not exists:
+        _missing_db(current)
+        st.stop()
     return db_path()
 
 
@@ -334,8 +400,7 @@ def select_project_experiment(
                              help="Stage is set on the Settings page (or `results-tracker experiment set`).")
             if not show_all:
                 exps = [e for e in exps if e.get("stage") != "superseded" or e["experiment"] == current]
-        if prefer:
-            exps.sort(key=lambda e: e["type"] != prefer)
+        exps.sort(key=lambda e: experiment_rank(e, prefer))
         if not exps:
             st.info("No experiments of this type in the project.")
             return project, None
@@ -346,6 +411,23 @@ def select_project_experiment(
         st.session_state[KEY_EXPERIMENT] = experiment
         _sync_query_params()
         return project, experiment
+
+
+#: how a stage sorts in a selector: the manuscript's experiments first, scratch work last
+STAGE_RANK = {"paper": 0, "": 1, "exploratory": 2, "superseded": 3}
+
+
+def experiment_rank(entry: Mapping[str, Any], prefer: Optional[str] = None) -> tuple:
+    """Sort key for the experiment selector: the page's own type first, then experiments that have results,
+    then the manuscript's before scratch work, then natural name order.
+
+    Landing on an empty or all-failed experiment because its name sorts first wastes the reader's first
+    click; `completed` comes from the catalog's one grouped query.
+    """
+    return (entry.get("type") != prefer if prefer else False,
+            not entry.get("completed", 0),
+            STAGE_RANK.get(entry.get("stage") or "", 1),
+            agg.natural_key(entry.get("experiment", "")))
 
 
 def select_extra_experiments(project: Optional[str], experiment: Optional[str]) -> list[str]:
@@ -487,6 +569,46 @@ def where_items(where: Optional[Where] = None) -> list[str]:
 def where_cli() -> str:
     """`--where 'a=1' --where 'b=[2,3]'` for the active filter, or an empty string."""
     return agg.where_cli(active_where())
+
+
+# --------------------------------------------------------------------------- what is not in the numbers
+
+def _not_completed(records: Iterable[Record]) -> list[str]:
+    """`["2 failed", "1 running"]` for the runs a page will not aggregate."""
+    counts = Counter(r.get("status") for r in records)
+    return [f"{n} {status}" for status, n in counts.most_common() if status != "completed"]
+
+
+def excluded_note(matched: Sequence[Record]) -> str:
+    """` · 2 failed excluded` for a page caption, empty when every matching run completed.
+
+    Every page aggregates completed runs only, so the ones it drops have to be named where the reader is
+    looking; a count that silently ignores a crashed run is how a wrong n reaches a paper.
+    """
+    bits = _not_completed(matched)
+    return (" · " + ", ".join(bits) + " excluded") if bits else ""
+
+
+def completed_or_explain(matched: Sequence[Record], *, of: Sequence[Record] = ()) -> list[Record]:
+    """The completed runs of `matched`, or `[]` after saying in the page body why it stays empty.
+
+    `matched` are the runs the filter kept and `of` the experiment's runs before it. A filter that matches
+    nothing, or matches only failed and running runs, leaves a page with a title and nothing else; the
+    sidebar's own line ("0 of 15 runs match") does not explain what to do about it, so the body must.
+    """
+    done = agg.completed(matched)
+    if done:
+        return done
+    where = where_text()
+    if not matched:
+        st.info(f"No run matches the filter ({where}). This experiment has {len(of)} runs — widen or clear the "
+                "filter in the sidebar." if where else "No runs in this experiment.")
+        return []
+    bits = ", ".join(_not_completed(matched))
+    st.info(f"{len(matched)} run(s)" + (f" match the filter ({where})" if where else " in this experiment")
+            + f", none of them completed: {bits}."
+            + (" Open one on the **Run detail** page to see why it failed." if any(r.get("status") == "failed" for r in matched) else ""))
+    return []
 
 
 def reset_on_experiment_change(prefix: str, experiment: Optional[str]) -> None:

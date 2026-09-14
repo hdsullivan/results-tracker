@@ -90,21 +90,35 @@ def experiments(project: Optional[str] = typer.Option(None, "--project", "-p"), 
 def runs(
     experiment: Optional[str] = typer.Option(None, "--experiment", "-e"),
     project: Optional[str] = typer.Option(None, "--project", "-p"),
+    method: Optional[str] = typer.Option(None, "--method", "-m"),
+    status: list[str] = typer.Option([], "--status", help="completed | failed | running (repeatable)."),
+    search: Optional[str] = typer.Option(None, "--search", help="Substring of a run's notes (a crash message), instance, config, tags, host or commit."),
     limit: int = typer.Option(50, "--limit", "-n"),
     db: Optional[Path] = DbOpt,
 ):
-    """List runs, newest last."""
+    """List runs, newest last. `--status failed` with the message column is the triage view (GUI: the Runs page)."""
+    from .api import query_runs
+
     engine = get_engine(db)
-    rs = get_runs(experiment=experiment, project=project, engine=engine)
-    recs = run_records(rs, engine=engine)[-limit:]
-    t = Table("id", "experiment", "method", "dataset", "seed", "status", "metrics", "config")
+    rs, counts = query_runs(project=project, experiment=experiment, method=method, statuses=status,
+                            search=search or "", limit=limit, engine=engine)
+    recs = list(reversed(run_records(rs, engine=engine)))  # query is newest first; print newest last
+    show_message = any(r.get("notes") for r in recs)
+    cols = ["id", "experiment", "method", "dataset", "seed", "status", "metrics", "config"] + (["message"] if show_message else [])
+    t = Table(*cols)
     for r in recs:
-        t.add_row(
+        row = [
             str(r["run_id"]), r["experiment"], str(r["method"]), str(r["dataset"]), str(r["seed"]),
             r["status"], json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in r["metrics"].items()}),
             json.dumps(r["config"]),
-        )
+        ]
+        if show_message:
+            row.append((r.get("notes") or "").split(";")[0][:80])
+        t.add_row(*row)
     console.print(t)
+    shown = f"{len(recs)} of {counts['total']} matching runs"
+    extra = ", ".join(f"{n} {s}" for s, n in counts.items() if s != "total" and n)
+    console.print(f"[dim]{shown}{f' ({extra})' if extra else ''}[/]")
 
 
 @app.command()
@@ -293,6 +307,49 @@ def experiment_set(name: str, project: str = typer.Option(..., "--project", "-p"
     except ValueError as e:
         raise typer.BadParameter(str(e))
     console.print(f"[green]{name}[/] updated")
+
+
+@experiment_app.command("rename")
+def experiment_rename(name: str, new_name: str = typer.Argument(..., help="The new name; an existing one merges the two."),
+                      project: str = typer.Option(..., "--project", "-p"),
+                      yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask when this merges two experiments."),
+                      db: Optional[Path] = DbOpt):
+    """Rename an experiment (or merge it into another), taking its runs, pinned assets and notes with it."""
+    from .api import list_experiments, rename_experiment
+
+    names = {e.name for e in list_experiments(project, db=db)}
+    if name not in names:
+        console.print(f"[red]no experiment {name!r} in project {project!r}[/]")
+        raise typer.Exit(code=1)
+    if new_name in names and not yes and not typer.confirm(
+            f"{new_name!r} exists: merge {name!r} into it? Its runs move and {name!r} is removed.", default=False):
+        console.print("aborted")
+        raise typer.Exit(code=1)
+    touched = rename_experiment(project, name, new_name, db=db)
+    verb = "merged into" if touched["merged"] else "renamed to"
+    console.print(f"[green]{name}[/] {verb} [green]{new_name}[/]: {touched['runs']} run(s), "
+                  f"{touched['assets']} asset(s), {touched['notes']} note(s)")
+    console.print("[dim]study specs on disk still name the old experiment; update them by hand[/]")
+
+
+@experiment_app.command("rm")
+def experiment_rm(name: str, project: str = typer.Option(..., "--project", "-p"),
+                  yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
+                  db: Optional[Path] = DbOpt):
+    """Delete an experiment and its runs. Artifact folders and pinned assets are left alone."""
+    from .api import delete_experiment, get_runs, list_experiments
+
+    if name not in {e.name for e in list_experiments(project, db=db)}:
+        console.print(f"[red]no experiment {name!r} in project {project!r}[/]")
+        raise typer.Exit(code=1)
+    n = len(get_runs(experiment=name, project=project, db=db))
+    if not yes and not typer.confirm(f"Delete {name!r} and its {n} run(s)? This cannot be undone.", default=False):
+        console.print("aborted")
+        raise typer.Exit(code=1)
+    out = delete_experiment(project, name, delete_runs=True, db=db)
+    console.print(f"[green]deleted[/] {name} with {out['runs']} run(s)")
+    if out["assets_left_dangling"]:
+        console.print(f"[yellow]{out['assets_left_dangling']} pinned asset(s) named it and now have no data[/]")
 
 
 valuemap_app = typer.Typer(help="Value maps: derived, labelled groupings of a field's values (kernel index -> kernel type).", no_args_is_help=True)
@@ -643,6 +700,26 @@ def _load_experiment(experiment: str, project: Optional[str], db: Optional[Path]
     return recs, defs
 
 
+def _plot_style(project: Optional[str], db: Optional[Path], records=()):
+    """The plot style of the project a figure belongs to (sizes, colours, label order set in the GUI), so a
+    figure exported from the command line looks like the one on screen. Falls back to the runs' own project."""
+    from .api import get_plot_style
+
+    if not project:
+        project = next((r.get("project") for r in records if r.get("project")), None)
+    return get_plot_style(project, engine=get_engine(db))
+
+
+def _limits(text: Optional[str]):
+    """`--ylim 28,34` -> (28.0, 34.0); anything unusable leaves the axis automatic."""
+    from .plotstyle import parse_limits
+
+    lim = parse_limits(text)
+    if text and lim is None:
+        err_console.print(f"[yellow]ignoring unusable limits {text!r}; expected `lo,hi`[/]")
+    return lim
+
+
 def _emit(text: str, out: Optional[Path]) -> None:
     if out is None:
         typer.echo(text, nl=False)
@@ -800,6 +877,8 @@ def export_sweep_fig(
     width: str = WidthOpt,
     height: Optional[float] = typer.Option(None, "--height", help="inches"),
     error_bars: bool = typer.Option(False, "--error-bars", help="Capped error bars instead of the shaded ± std band."),
+    xlim: Optional[str] = typer.Option(None, "--xlim", help="lo,hi x-axis limits (default: fit the data)"),
+    ylim: Optional[str] = typer.Option(None, "--ylim", help="lo,hi y-axis limits (default: fit the data)"),
     emphasize: list[str] = typer.Option([], "--emphasize", help="Group label(s) drawn heavier (the proposed method), e.g. Ours"),
     panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
@@ -818,7 +897,8 @@ def export_sweep_fig(
     unit = defs.get(metric, {}).get("unit", "")
     fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
                        band=not error_bars, best_by_group=best, width=_width(width), height=height,
-                       emphasize=emphasize, caption=panel_label)
+                       emphasize=emphasize, caption=panel_label, style=_plot_style(project, db, recs), by=by,
+                       xlim=_limits(xlim), ylim=_limits(ylim))
     _save_fig(fig, out, png, tex, width)
 
 
@@ -831,6 +911,7 @@ def export_ablation_fig(
     xlabel: Optional[str] = typer.Option(None, "--xlabel"),
     width: str = WidthOpt,
     height: Optional[float] = typer.Option(None, "--height"),
+    xlim: Optional[str] = typer.Option(None, "--xlim", help="lo,hi x-axis limits (default: fit the data)"),
     panel_label: Optional[str] = CaptionOpt,
     png: bool = PngOpt,
     tex: bool = TexOpt,
@@ -849,7 +930,8 @@ def export_ablation_fig(
         raise typer.Exit(code=1)
     d = defs.get(metric, {})
     fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
-                          xlabel=xlabel, width=_width(width), height=height, caption=panel_label)
+                          xlabel=xlabel, width=_width(width), height=height, caption=panel_label,
+                          style=_plot_style(project, db, recs), xlim=_limits(xlim))
     _save_fig(fig, out, png, tex, width)
 
 
@@ -882,11 +964,11 @@ def export_comparison_fig(
     pt = agg.pivot_table(recs, rows, None if cols == "none" else cols, metrics=[metric],
                          higher_is_better={k: v["higher_is_better"] for k, v in defs.items()})
     unit = defs.get(metric, {}).get("unit", "")
-    lim = tuple(float(v) for v in ylim.split(",")) if ylim else None
     fig = comparison_figure(pt, metric, ylabel=ylabel or (f"{metric} ({unit})" if unit else metric),
-                            width=_width(width), height=height, emphasize=emphasize, zero_based=zero_based, ylim=lim,
-                            hatch=hatch, caption=panel_label,
-                            row_labels=agg.method_labels(recs) if rows == "method" else None)
+                            width=_width(width), height=height, emphasize=emphasize, zero_based=zero_based,
+                            ylim=_limits(ylim), hatch=hatch, caption=panel_label,
+                            row_labels=agg.method_labels(recs) if rows == "method" else None,
+                            style=_plot_style(project, db, recs), rows_key=rows, cols_key=None if cols == "none" else cols)
     _save_fig(fig, out, png, tex, width)
 
 
@@ -930,7 +1012,7 @@ def export_visual(
         vr = make_visual(recs, defs, experiment=experiment, dataset=dataset, seed=seed, instance=instance, image=image,
                          reference=reference, measurement=measurement, kernel=kernel, methods=method or None, metrics=metric,
                          mode=mode, zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=(cx, cy), crop_box=box, rows=rows,
-                         width=_width(width), data_range=data_range)
+                         width=_width(width), data_range=data_range, style=_plot_style(project, db, recs))
     except ValueError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(code=1)
@@ -969,7 +1051,8 @@ def export_bundle(
     for e in exps:
         recs = run_records(get_runs(experiment=e.name, project=project, engine=engine), engine=engine)
         experiments[e.name] = (e.type.value, recs)
-    data, manifest = build_bundle(experiments, defs, project=project, source=resolve_db_path(db), width=width, visual=not no_visual)
+    data, manifest = build_bundle(experiments, defs, project=project, source=resolve_db_path(db), width=width,
+                                  visual=not no_visual, style=_plot_style(project, db))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(data)
     t = Table("file", "kind", "experiment", "runs", "note")

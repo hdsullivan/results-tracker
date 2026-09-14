@@ -50,6 +50,9 @@ class Project(SQLModel, table=True):
     description: str = ""
     primary_metric: str = ""  # the metric headlines and default figures use ("" = guess psnr/ssim/first)
     studies_dir: str = ""  # where this project's study specs live ("" = $RESULTS_TRACKER_STUDIES / studies/ beside the database)
+    # How this paper's plots look: font sizes, line and marker weights, per-series colours, category order.
+    # Only what differs from the lab default is stored (plotstyle.PlotStyle.to_dict); {} = the lab style.
+    plot_style: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow)
 
 
