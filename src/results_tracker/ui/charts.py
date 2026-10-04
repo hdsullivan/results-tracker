@@ -44,11 +44,21 @@ def color_for(entities: Sequence[Any], style: Optional[PlotStyle] = None) -> dic
     return plotstyle.resolve(style).colors_for(entities)
 
 
-def marker_for(entities: Sequence[Any], style: Optional[PlotStyle] = None) -> dict[Any, str]:
-    """Marker shape per entity: circles until the palette wraps, then squares, diamonds, triangles -- the
-    same rule as `export/figures.style_map`, so the ninth series is told apart the same way on both."""
-    wraps = plotstyle.resolve(style).wrap_of(entities)
-    return {n: plotstyle.MARKERS[w % len(plotstyle.MARKERS)] for n, w in wraps.items()}
+def marker_for(entities: Sequence[Any], style: Optional[PlotStyle] = None) -> dict[Any, Optional[str]]:
+    """Marker symbol per entity (None = no marker): circles until the palette wraps, then squares, diamonds,
+    triangles -- the same rule as `export/figures.style_map` -- unless the style names one."""
+    return {n: plotstyle.MARKER_CHOICES[m][0] for n, m in plotstyle.resolve(style).marker_names(entities).items()}
+
+
+def dash_for(entities: Sequence[Any], style: Optional[PlotStyle] = None) -> dict[Any, Optional[str]]:
+    """Plotly line dash per entity (None = no line): solid unless the style names another."""
+    return {n: plotstyle.LINE_CHOICES[m][0] for n, m in plotstyle.resolve(style).line_names(entities).items()}
+
+
+def _look(symbol: Optional[str], dash: Optional[str], text: bool = False) -> tuple[str, dict[str, Any]]:
+    """(scatter mode, extra line options) for a series' marker and dash; neither drawn leaves a plain line."""
+    parts = (["lines"] if dash else []) + (["markers"] if symbol else []) + (["text"] if text else [])
+    return "+".join(parts) or "lines", ({"dash": dash} if dash else {})
 
 
 def _rgba(hex_color: str, alpha: float) -> str:
@@ -244,7 +254,7 @@ def sweep_lines(
     fig = go.Figure()
     groups = s.ordered(" / ".join(by), list(series_by_group))
     colors = color_for(groups, style)
-    symbols = marker_for(groups, style)
+    symbols, dashes = marker_for(groups, style), dash_for(groups, style)
     single = len(groups) == 1
     xs_all = sorted({x for s_ in series_by_group.values() for x, _ in s_}, key=lambda x: (isinstance(x, str), x))
     numeric = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in xs_all)  # else a categorical axis
@@ -266,10 +276,11 @@ def sweep_lines(
                             hoverinfo="skip", showlegend=False, legendgroup=name)
             fig.add_scatter(x=xs, y=[m - d for m, d in zip(ys, sd)], mode="lines", line=dict(width=0),
                             fill="tonexty", fillcolor=_rgba(c, 0.15), hoverinfo="skip", showlegend=False, legendgroup=name)
+        mode, dash = _look(symbols[g], dashes[g])
         fig.add_scatter(
-            x=xs, y=ys, mode="lines+markers", name=name, legendgroup=name, showlegend=not single,
-            line=dict(color=c, width=lw),
-            marker=dict(size=ms, color=c, symbol=symbols[g], line=dict(color=c, width=0)),
+            x=xs, y=ys, mode=mode, name=name, legendgroup=name, showlegend=not single,
+            line=dict(color=c, width=lw, **dash),
+            marker=dict(size=ms, color=c, symbol=symbols[g] or "circle", line=dict(color=c, width=0)),
             error_y=None if band else dict(type="data", array=sd, visible=True, color=c, thickness=1.2, width=4),
             customdata=[[d, n] for d, n in zip(sd, ns)],
             hovertemplate=f"{name}<br>{param}=%{{x}}<br>{metric}: %{{y:{fmt}}} ± %{{customdata[0]:{fmt}}}<br>n=%{{customdata[1]}}<extra></extra>",
@@ -387,7 +398,7 @@ def curves_lines(series_by_group: dict[tuple, Any], curve: str, ylabel: Optional
     fig = go.Figure()
     groups = s.ordered(" / ".join(by), [g for g, cs in series_by_group.items() if cs.mean])
     colors = color_for(groups, style)
-    symbols = marker_for(groups, style)
+    symbols, dashes = marker_for(groups, style), dash_for(groups, style)
     single = len(groups) == 1
     lw, ms = s.weights(False)
     for g in groups:
@@ -404,9 +415,10 @@ def curves_lines(series_by_group: dict[tuple, Any], curve: str, ylabel: Optional
                             hoverinfo="skip", showlegend=False, legendgroup=name)
             fig.add_scatter(x=xs, y=[m - d for m, d in zip(cs.mean, cs.std)], mode="lines", line=dict(width=0),
                             fill="tonexty", fillcolor=_rgba(c, 0.15), hoverinfo="skip", showlegend=False, legendgroup=name)
-        fig.add_scatter(x=xs, y=cs.mean, mode="lines+markers" if len(xs) <= 25 else "lines", name=name, legendgroup=name,
-                        showlegend=not single, line=dict(color=c, width=lw),
-                        marker=dict(size=ms * 0.86, color=c, symbol=symbols[g]),
+        mode, dash = _look(symbols[g] if len(xs) <= 25 else None, dashes[g])
+        fig.add_scatter(x=xs, y=cs.mean, mode=mode, name=name, legendgroup=name,
+                        showlegend=not single, line=dict(color=c, width=lw, **dash),
+                        marker=dict(size=ms * 0.86, color=c, symbol=symbols[g] or "circle"),
                         customdata=[[d, n] for d, n in zip(cs.std, cs.n)],
                         hovertemplate=f"{name}<br>iteration %{{x}}<br>{curve}: %{{y:.4g}} ± %{{customdata[0]:.3g}}<br>n=%{{customdata[1]}}<extra></extra>")
     if guide is not None:
@@ -431,7 +443,7 @@ def tradeoff_scatter(points_by_series: dict[Any, list], x_metric: str, y_metric:
     fig = go.Figure()
     names = s.ordered(series_key, list(points_by_series))
     colors = color_for(names, style)
-    symbols = marker_for(names, style)
+    symbols, dashes = marker_for(names, style), dash_for(names, style)
     hollow_set = set(hollow)
     lw, ms = s.weights(False)
     for name in names:
@@ -440,13 +452,16 @@ def tradeoff_scatter(points_by_series: dict[Any, list], x_metric: str, y_metric:
             continue
         c = colors[name]
         is_open = name in hollow_set
+        joined = not (is_open or len(pts) == 1) and dashes[name] is not None
+        mode, dash = _look(symbols[name] or "circle", dashes[name] if joined else None, text=not is_open and len(pts) > 1)
         fig.add_scatter(
             x=[p.x.mean for p in pts], y=[p.y.mean for p in pts], name=(labels or {}).get(name, str(name)),
-            mode="markers" if (is_open or len(pts) == 1) else "lines+markers+text",
+            mode=mode,
             text=[str(agg_fmt(p.label)) for p in pts] if len(pts) > 1 else None, textposition="top right",
             textfont=dict(size=max(s.annotation - 1, 1.0), color=c),
-            line=dict(color=c, width=lw),
-            marker=dict(size=ms * 1.29, color="white" if is_open else c, line=dict(color=c, width=2.0), symbol=symbols[name]),
+            line=dict(color=c, width=lw, **dash),
+            marker=dict(size=ms * 1.29 if symbols[name] or is_open else 0, color="white" if is_open else c,
+                        line=dict(color=c, width=2.0), symbol=symbols[name] or "circle"),
             error_x=dict(type="data", array=[p.x.std for p in pts], visible=any(p.x.std > 0 for p in pts), color=c, thickness=1.0, width=3),
             error_y=dict(type="data", array=[p.y.std for p in pts], visible=any(p.y.std > 0 for p in pts), color=c, thickness=1.0, width=3),
             customdata=[[str(p.label), p.x.n] for p in pts],

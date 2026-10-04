@@ -95,7 +95,7 @@ def render() -> None:
                + f" · {curve} vs iteration ({NORMS[norm]})" + (f" · pooled over {', '.join(pooled)}" if pooled else ""))
     ylabel = curve if norm == "value" else f"{curve} ({NORMS[norm]})"
     ctl = chart_controls(project, style, key=f"cur_lines:{experiment}", series=list(series), series_key=" / ".join(by),
-                         x_name="iteration", y_name=ylabel, log_y=log_y)
+                         lines=True, x_name="iteration", y_name=ylabel, log_y=log_y)
     st.plotly_chart(curves_lines(series, curve, ylabel=ylabel, band=band, log_y=log_y, guide=guide or None, members=members,
                                  style=ctl.style, by=by, xlim=ctl.xlim, ylim=ctl.ylim),
                     theme=None, width="stretch")

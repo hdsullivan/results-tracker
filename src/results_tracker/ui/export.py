@@ -354,7 +354,7 @@ def render() -> None:
             numeric_x = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in xs_all)
             ctl = chart_controls(project, style, key=f"exp_sweep:{experiment}", series=list(series),
                                  series_key=" / ".join(by), orders=() if numeric_x else [(param, xs_all)],
-                                 x_name=param if numeric_x else None, y_name=metric)
+                                 lines=True, x_name=param if numeric_x else None, y_name=metric)
             fig = sweep_figure(series, param, metric, xlabel=xlabel, ylabel=ylabel, band=band, best_by_group=best,
                                width=width, height=height, emphasize=emph, caption=cap or None,
                                style=ctl.style, by=by, xlim=ctl.xlim, ylim=ctl.ylim)

@@ -1425,3 +1425,24 @@ def test_legend_controls_rename_move_and_resize_one_chart(demo_db):
     assert chart["layout"]["legend"]["font"]["size"] == pytest.approx(15.0 * SCREEN_FONT_SCALE)
     project = [sb for sb in at.sidebar.selectbox if sb.label == "Project"][0].value
     assert get_plot_style(project, engine=get_engine(demo_db)).is_default  # the view's, not the project's
+
+
+def test_marker_and_line_controls_save_per_series_on_the_project(demo_db):
+    from results_tracker.api import get_plot_style
+    from results_tracker.db import get_engine
+
+    at = _run("tradeoff")
+    keys = [str(k) for k in at.session_state.filtered_state]
+    marker = [k for k in keys if k.startswith("to_scatter:") and "_marker_" in k]
+    assert marker, "a chart of lines offers a marker per series"
+    line = marker[0].replace("_marker_", "_line_")
+    series = marker[0].split("_marker_", 1)[1]
+    at.selectbox(key=marker[0]).set_value("star").run()
+    at.selectbox(key=line).set_value("dotted").run()
+    assert not at.exception
+    project = [sb for sb in at.sidebar.selectbox if sb.label == "Project"][0].value
+    style = get_plot_style(project, engine=get_engine(demo_db))
+    assert style.markers == {series: "star"} and style.lines == {series: "dotted"}
+    assert "star" in [t["marker"]["symbol"] for t in _chart(at)["data"]]
+    at.selectbox(key=marker[0]).set_value("circle").run()  # back to the default: no override kept
+    assert get_plot_style(project, engine=get_engine(demo_db)).markers == {}

@@ -304,3 +304,32 @@ def test_a_pinned_figure_keeps_its_legend(engine):
     leg = fig.axes[0].get_legend()
     assert sorted(t.get_text() for t in leg.get_texts()) == ["Proposed", "base"]
     assert leg.get_texts()[0].get_fontsize() == 13
+
+
+# --------------------------------------------------------------------------- marker and line per series
+
+def test_each_series_can_have_its_own_marker_and_line():
+    pytest.importorskip("plotly")
+    from results_tracker.export.figures import sweep_figure
+    from results_tracker.ui import charts
+
+    style = PlotStyle().with_look("markers", "B", "star").with_look("lines", "B", "dotted").with_look("lines", "A", "none")
+    assert style.to_dict() == {"markers": {"B": "star"}, "lines": {"B": "dotted", "A": "none"}}
+    assert ps.from_dict(style.to_dict()) == style
+    assert ps.from_dict({"markers": {"B": "heart"}, "lines": "x"}).markers == {}  # unknown names are dropped
+    assert style.with_look("markers", "B", None).markers == {}
+    # neither marker nor line would draw nothing: the line stays
+    assert PlotStyle().with_look("markers", "A", "none").with_look("lines", "A", "none").line_names(["A"])["A"] == "solid"
+    # the ninth series still wraps to a new shape unless it is overridden
+    many = [f"m{i}" for i in range(9)]
+    assert PlotStyle().marker_names(many)["m8"] != PlotStyle().marker_names(many)["m0"]
+
+    series = {("A",): [(1, stat(1.0)), (2, stat(2.0))], ("B",): [(1, stat(3.0)), (2, stat(2.5))]}
+    ax = sweep_figure(series, "k", "psnr", style=style, by=["method"]).axes[0]
+    by_label = {ln.get_label(): ln for ln in ax.lines}
+    a, b = by_label["A"], by_label["B"]
+    assert (a.get_linestyle(), a.get_marker()) == ("None", "o")
+    assert (b.get_linestyle(), b.get_marker()) == (":", "*")
+    web = {t.name: t for t in charts.sweep_lines(series, "k", "psnr", style=style, by=["method"]).data if t.name}
+    assert web["A"].mode == "markers" and web["A"].marker.symbol == "circle"
+    assert web["B"].mode == "lines+markers" and web["B"].line.dash == "dot" and web["B"].marker.symbol == "star"

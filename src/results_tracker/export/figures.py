@@ -122,7 +122,7 @@ def style_map(names: Sequence[Any], emphasize: Iterable[Any] = (), style: Option
     s = plotstyle.resolve(style)
     emph = set(emphasize)
     hues = s.colors_for(names)
-    wraps = s.wrap_of(names)
+    marks, dashes = s.marker_names(names), s.line_names(names)
     out: dict[Any, dict[str, Any]] = {}
     for n in names:
         if n in out:
@@ -130,11 +130,10 @@ def style_map(names: Sequence[Any], emphasize: Iterable[Any] = (), style: Option
         i = len(out)
         primary = n in emph
         lw, ms = s.weights(primary)
-        wrap = wraps[n]
         out[n] = dict(
             color=hues[n],
-            linestyle=LINESTYLES[wrap % len(LINESTYLES)],
-            marker=MARKERS[wrap % len(MARKERS)],
+            linestyle=plotstyle.LINE_CHOICES[dashes[n]][1],
+            marker=plotstyle.MARKER_CHOICES[marks[n]][1],
             fill=hues[n],
             hatch=BAR_HATCHES[i % len(BAR_HATCHES)],
             linewidth=lw,
@@ -320,7 +319,7 @@ def sweep_figure(
             if mark_best and best is not None and best in dict(series):
                 bx = best if numeric else str(best)
                 # ring the chosen value: larger hollow marker in the series colour over the filled point
-                ax.plot([bx], [dict(series)[best].mean], marker=st["marker"], markersize=st["markersize"] + 4.5,
+                ax.plot([bx], [dict(series)[best].mean], marker=st["marker"] or "o", markersize=st["markersize"] + 4.5,
                         markerfacecolor="none", markeredgecolor=st["color"], markeredgewidth=1.2, linestyle="none", zorder=6)
                 if len(groups) == 1:
                     ax.axvline(bx, color=GUIDE_COLOR, linestyle=":", linewidth=1.0, zorder=0)
@@ -376,7 +375,7 @@ def curves_figure(
                 ax.fill_between(xs, [m - s for m, s in zip(cs.mean, cs.std)], [m + s for m, s in zip(cs.mean, cs.std)],
                                 color=st["color"], alpha=0.15, linewidth=0)
             ax.plot(xs, cs.mean, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"], zorder=st["zorder"],
-                    marker="o" if len(xs) <= 25 else None, markersize=st["markersize"], label=name)
+                    marker=st["marker"] if len(xs) <= 25 else None, markersize=st["markersize"], label=name)
         if guide is not None:
             ax.axhline(guide, color=GUIDE_COLOR, linestyle=":", linewidth=1.0, zorder=0)
         if log_y:
@@ -435,7 +434,7 @@ def tradeoff_figure(
                         yerr=[p.y.std for p in pts] if any(p.y.std > 0 for p in pts) else None,
                         color=st["color"], ecolor=st["color"], elinewidth=0.6, capsize=1.5, capthick=0.6,
                         linestyle="none" if (open_marker or len(pts) == 1) else st["linestyle"], linewidth=st["linewidth"],
-                        marker="o", markersize=st["markersize"] + 1, markerfacecolor="none" if open_marker else st["color"],
+                        marker=st["marker"] or ("o" if (open_marker or len(pts) == 1) else ""), markersize=st["markersize"] + 1, markerfacecolor="none" if open_marker else st["color"],
                         markeredgecolor=st["color"], markeredgewidth=1.0, zorder=st["zorder"], label=(labels or {}).get(name, str(name)))
             if annotate and len(pts) > 1:
                 for p in pts:

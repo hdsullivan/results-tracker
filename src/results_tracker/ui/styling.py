@@ -150,6 +150,7 @@ def chart_controls(
     orders: Sequence[tuple[str, Sequence[Any]]] = (),
     colors: bool = True,
     legend: bool = True,
+    lines: bool = False,
     x_name: Optional[str] = "x",
     y_name: Optional[str] = "y",
     log_x: bool = False,
@@ -162,10 +163,11 @@ def chart_controls(
     `(key, values)` pairs for the other axes whose label order this chart decides (a categorical x axis, a
     heat map's two parameters). Ranges are per view; order and colours are saved on the project. Pass
     `colors=False` for a chart whose hues are not per series (the ablation bars are coloured by polarity) and
-    `legend=False` for one that draws no legend, so there is nothing to word, move or resize.
+    `legend=False` for one that draws no legend, so there is nothing to word, move or resize. `lines=True`
+    for a chart of lines or connected points, which adds a marker and a line style per series.
     """
     legend_spec: Optional[dict[str, Any]] = None
-    with st.expander("Axes, label order, colours and legend", expanded=False):
+    with st.expander("Axes, label order, colours, line styles and legend", expanded=False):
         xlim = ylim = None
         wanted = [(name, axis, log) for name, axis, log in ((x_name, "xlim", log_x), (y_name, "ylim", log_y)) if name]
         if wanted:
@@ -186,6 +188,8 @@ def chart_controls(
                                label=f"Order of {order_key} along the axis")
         if series and colors:
             _colour_control(project, style, series, series_labels, prefix=key)
+        if lines and series:
+            _look_control(project, style, series, series_labels, prefix=key)
         if legend and series and len(set(series)) > 1:
             legend_spec = _legend_control(style, series, series_labels, prefix=key)
     n = len(list(dict.fromkeys(series)))
@@ -269,3 +273,32 @@ def _legend_control(style: PlotStyle, series: Sequence[Any], labels: Optional[Ma
     if size:
         spec["size"] = float(size)
     return spec or None
+
+
+def _look_control(project: Optional[str], style: PlotStyle, series: Sequence[Any],
+                  labels: Optional[Mapping[Any, str]], *, prefix: str) -> None:
+    """A marker and a line style per series, independently. Stored on the project beside the colour; a choice
+    equal to the series' default is stored as no override, so the series keeps following the palette wrap."""
+    names = list(dict.fromkeys(series))
+    cur_m, cur_l = style.marker_names(names), style.line_names(names)
+    def_m, def_l = style.default_looks(names)
+    st.caption("Marker and line per series. *none* hides it (a series always keeps one of the two).")
+    head = st.columns([2, 1, 1])
+    head[1].caption("Marker")
+    head[2].caption("Line")
+    for name in names:
+        skey = plotstyle.series_key(name)
+        text = str((labels or {}).get(name, skey)) or "all runs"
+        cols = st.columns([2, 1, 1])
+        cols[0].markdown(f"<div style='padding-top:0.5rem'>{text[:30]}</div>", unsafe_allow_html=True)
+        for col, kind, cur, default, choices in ((cols[1], "markers", cur_m, def_m, plotstyle.MARKER_CHOICES),
+                                                 (cols[2], "lines", cur_l, def_l, plotstyle.LINE_CHOICES)):
+            key = f"{prefix}_{kind[:-1]}_{skey}"
+
+            def apply(name=name, kind=kind, key=key, default=default) -> None:
+                got = st.session_state.get(key)
+                save_plot_style(project, style.with_look(kind, name, None if got == default[name] else got))
+
+            with col:
+                _synced(st.selectbox, f"{kind[:-1]} of {text}", key, cur[name], apply,
+                        options=list(choices), label_visibility="collapsed")
