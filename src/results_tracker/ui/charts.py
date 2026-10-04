@@ -81,6 +81,34 @@ def apply_limits(fig: go.Figure, xlim: Optional[Sequence[float]] = None, ylim: O
     return fig
 
 
+def _place_legend(fig: go.Figure, s: PlotStyle, legend_top: bool) -> None:
+    """Word and place the legend as the style's per-view overlay says (`PlotStyle.with_legend`; `s` is the
+    on-screen style). The default is the one-row legend above the axes that `base_layout` already set."""
+    for tr in fig.data:
+        if tr.name and str(tr.name) in s.legend_names:
+            tr.name = s.legend_label(tr.name)
+    place = s.legend_loc
+    if not place or place == "top":
+        return
+    if place == "hidden":
+        fig.update_layout(showlegend=False)
+        return
+    names = [len(str(t.name)) for t in fig.data if t.name and t.showlegend is not False]
+    if place == "bottom":
+        rows = 2 if len(names) > 3 else 1
+        fig.update_layout(margin=dict(b=60 + rows * (s.legend * 1.7 + 6) + 10, t=60 if fig.layout.title.text else 25),
+                          legend=dict(orientation="h", yref="container", y=0, yanchor="bottom", xanchor="center", x=0.5))
+    elif place == "right":
+        width = (max(names) if names else 8) * s.legend * 0.55 + 60
+        fig.update_layout(margin=dict(r=25 + width, t=60 if fig.layout.title.text else 25),
+                          legend=dict(orientation="v", xref="container", x=1, xanchor="right", y=0.5, yanchor="middle"))
+    else:  # inside the axes, in a corner
+        vert, horiz = place.split()
+        fig.update_layout(margin=dict(t=60 if fig.layout.title.text else 25),
+                          legend=dict(orientation="v", x=0.98 if horiz == "right" else 0.02, xanchor=horiz,
+                                      y=0.98 if vert == "upper" else 0.02, yanchor="top" if vert == "upper" else "bottom"))
+
+
 def base_layout(fig: go.Figure, title: str = "", ytitle: str = "", xtitle: str = "", legend_top: bool = True,
                 style: Optional[PlotStyle] = None) -> go.Figure:
     """Apply the paper look. Axis titles that are pure LaTeX math get a larger size (lab rule)."""
@@ -103,6 +131,7 @@ def base_layout(fig: go.Figure, title: str = "", ytitle: str = "", xtitle: str =
     )
     if title:
         fig.update_layout(title=dict(text=title, x=0.5, font=dict(size=s.axis_label)))
+    _place_legend(fig, s, legend_top)
     axis = dict(
         showline=True, linecolor="black", linewidth=1.2, mirror="ticks",
         ticks="inside", ticklen=6, tickwidth=1.1, tickcolor="black",

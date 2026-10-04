@@ -1396,3 +1396,32 @@ def test_the_export_page_composes_pinned_figures_into_one(demo_db):
     assert at.image  # the composed preview
     assert any("Download PDF" in b.label for b in at.download_button)
     assert any("each panel is the pinned asset" in c.value.lower() for c in at.caption)
+
+
+def test_legend_controls_rename_move_and_resize_one_chart(demo_db):
+    """A chart's legend names, position and size are per view: they redraw the chart at once, and are not
+    written to the project's style."""
+    from results_tracker.api import get_plot_style
+    from results_tracker.db import get_engine
+    from results_tracker.plotstyle import SCREEN_FONT_SCALE
+
+    at = _run("comparison")  # the bar chart draws no legend, so it offers none
+    assert not [k for k in at.session_state.filtered_state if "_leg_" in str(k)]
+
+    at = _run("tradeoff")  # one point per method: a multi-series chart
+    keys = [str(k) for k in at.session_state.filtered_state]
+    loc = [k for k in keys if k.startswith("to_scatter:") and k.endswith("_leg_loc")]
+    assert loc, "a multi-series chart offers legend controls"
+    prefix = loc[0][: -len("_leg_loc")]
+    name_key = [k for k in keys if k.startswith(prefix + "_leg_name_")][0]
+    shown = name_key[len(prefix + "_leg_name_"):]
+    at.text_input(key=name_key).set_value("Renamed").run()
+    at.selectbox(key=loc[0]).set_value("right").run()
+    at.number_input(key=prefix + "_leg_size").set_value(15.0).run()
+    assert not at.exception
+    chart = _chart(at)
+    assert "Renamed" in [t.get("name") for t in chart["data"]] and shown not in [t.get("name") for t in chart["data"]]
+    assert chart["layout"]["legend"]["orientation"] == "v"
+    assert chart["layout"]["legend"]["font"]["size"] == pytest.approx(15.0 * SCREEN_FONT_SCALE)
+    project = [sb for sb in at.sidebar.selectbox if sb.label == "Project"][0].value
+    assert get_plot_style(project, engine=get_engine(demo_db)).is_default  # the view's, not the project's

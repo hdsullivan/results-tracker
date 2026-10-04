@@ -55,6 +55,9 @@ def limits(field: str) -> tuple[float, float]:
 VARIANT_KEY = "variant"      # the ablation chart's bars (one per config variant)
 PSEUDO_KEYS = (VARIANT_KEY,)
 
+#: Where a legend can go. "top" is the lab's default (one row above the axes); "hidden" draws none.
+LEGEND_LOCS = ("top", "bottom", "right", "upper right", "upper left", "lower right", "lower left", "hidden")
+
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
@@ -94,6 +97,37 @@ class PlotStyle:
     #: grouping key (`method`, `dataset`, `config.K`, `derived.kernel_type`) -> the order its values are
     #: drawn in, as text. Values not listed follow, in their natural order.
     order: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: Per-view legend overlay, set by `with_legend` and never stored on the project (like an axis range, it
+    #: describes one chart): displayed label -> replacement text, and a position from `LEGEND_LOCS`.
+    #: The legend's size is not here: `with_legend` writes it into `legend`.
+    legend_names: Mapping[str, str] = field(default_factory=dict)
+    legend_loc: Optional[str] = None
+
+    # ----------------------------------------------------------------- legend (per view)
+
+    def with_legend(self, spec: Optional[Mapping[str, Any]]) -> "PlotStyle":
+        """This style with one chart's legend options applied: `{"names": {...}, "loc": ..., "size": pt}`.
+        Anything absent or invalid leaves the project's value; never raises (a pinned asset's options are
+        hand-editable)."""
+        if not isinstance(spec, Mapping):
+            return self
+        out = self
+        names = spec.get("names")
+        if isinstance(names, Mapping):
+            out = replace(out, legend_names={str(k): str(v) for k, v in names.items() if str(v).strip()})
+        if spec.get("loc") in LEGEND_LOCS:
+            out = replace(out, legend_loc=spec["loc"])
+        try:
+            size = float(spec["size"]) if spec.get("size") not in (None, "") else None
+        except (TypeError, ValueError):
+            size = None
+        if size is not None:
+            out = replace(out, legend=_clamp(size, *SIZE_LIMITS))
+        return out
+
+    def legend_label(self, text: Any) -> str:
+        """What a legend prints for the series shown as `text`."""
+        return self.legend_names.get(str(text)) or str(text)
 
     # ----------------------------------------------------------------- sizes
 

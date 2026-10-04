@@ -85,7 +85,7 @@ def render() -> None:
     hib_m = hib.get(metric, True)
     effects = agg.ablation_effects(rows, metric, hib_m)
     if variants and base_row is not None:
-        ctl = chart_controls(project, style, key=f"abl_deltas:{experiment}", series_key=VARIANT_KEY, colors=False,
+        ctl = chart_controls(project, style, key=f"abl_deltas:{experiment}", series_key=VARIANT_KEY, colors=False, legend=False,
                              series=[r.label for r in variants], x_name=f"Δ {metric}", y_name=None)
         fig = ablation_deltas(
             [r.label for r in variants],
