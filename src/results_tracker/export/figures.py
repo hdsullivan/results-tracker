@@ -27,6 +27,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 import matplotlib
 import matplotlib.ticker
 from matplotlib.figure import Figure
+from matplotlib.transforms import ScaledTranslation
 
 from .. import aggregate as agg
 from .. import plotstyle
@@ -213,15 +214,36 @@ def set_axis_labels(ax, xlabel: Optional[str] = None, ylabel: Optional[str] = No
         ax.set_ylabel(ylabel, fontsize=s.label_size(ylabel))
 
 
-def top_legend(ax, ncol: Optional[int] = None):
-    """Bordered legend in one row above the axes (lab's add_top_legend), so it never covers data."""
+def draw_legend(ax, style: Optional[PlotStyle] = None, ncol: Optional[int] = None, loc: str = "top"):
+    """The figure's legend, placed and worded as the style's per-view overlay says (`PlotStyle.with_legend`):
+    `loc` is the figure's own default when the overlay does not choose. "top" is the lab's bordered one-row
+    legend above the axes, so it never covers data; any other `LEGEND_LOCS` entry or matplotlib loc also works."""
+    s = plotstyle.resolve(style)
+    place = s.legend_loc or ("top" if loc == "above" else loc)
     handles, labels = ax.get_legend_handles_labels()
-    if not handles:
+    if not handles or place == "hidden":
         return None
-    leg = ax.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=ncol or len(handles),
-                    borderaxespad=0.0, handlelength=2.0, columnspacing=1.2)
+    labels = [s.legend_label(t) for t in labels]
+    if place == "top":
+        leg = ax.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=ncol or len(handles),
+                        borderaxespad=0.0, handlelength=2.0, columnspacing=1.2)
+    elif place == "bottom":
+        # clear the tick labels and the x-axis title, whatever their sizes
+        drop = (s.tick + s.axis_label) * 1.5 + 8
+        leg = ax.legend(handles, labels, loc="upper center", ncol=ncol or len(handles), borderaxespad=0.0,
+                        bbox_to_anchor=(0.5, 0), handlelength=2.0, columnspacing=1.2,
+                        bbox_transform=ax.transAxes + ScaledTranslation(0, -drop / 72, ax.figure.dpi_scale_trans))
+    elif place == "right":
+        leg = ax.legend(handles, labels, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+    else:
+        leg = ax.legend(handles, labels, loc=place)
     _thin_legend(leg)
     return leg
+
+
+def top_legend(ax, ncol: Optional[int] = None, style: Optional[PlotStyle] = None):
+    """Bordered legend in one row above the axes (lab's add_top_legend), so it never covers data."""
+    return draw_legend(ax, style, ncol=ncol, loc="top")
 
 
 def _tight_ylim(ax, los: Sequence[float], his: Sequence[float], zero_based: bool = False) -> None:
@@ -310,10 +332,7 @@ def sweep_figure(
         set_axis_labels(ax, xlabel or param, ylabel or metric, style=style)
         _apply_limits(ax, xlim, ylim)
         if len(groups) > 1:
-            if legend_loc == "top":
-                top_legend(ax)
-            else:
-                _thin_legend(ax.legend(loc=legend_loc))
+            draw_legend(ax, style, loc=legend_loc)
         if caption:
             panel_label(ax, caption, style=style)
         return fig
@@ -366,7 +385,7 @@ def curves_figure(
         set_axis_labels(ax, xlabel, ylabel or curve, style=style)
         _apply_limits(ax, xlim, ylim)
         if len(groups) > 1:
-            top_legend(ax, ncol=min(len(groups), 4))
+            draw_legend(ax, style, ncol=min(len(groups), 4))
         if caption:
             panel_label(ax, caption, style=style)
         return fig
@@ -427,7 +446,7 @@ def tradeoff_figure(
         set_axis_labels(ax, xlabel or x_metric, ylabel or y_metric, style=style)
         _apply_limits(ax, xlim, ylim)
         if len(names) > 1:
-            top_legend(ax, ncol=min(len(names), 4))
+            draw_legend(ax, style, ncol=min(len(names), 4))
         if caption:
             panel_label(ax, caption, style=style)
         return fig
@@ -606,10 +625,7 @@ def comparison_figure(
             ax.set_ylim(float(ylim[0]), float(ylim[1]))
         else:
             _tight_ylim(ax, los, his, zero_based)
-        if legend_loc in ("above", "top"):
-            top_legend(ax, ncol=n if n <= 4 else (n + 1) // 2)
-        else:
-            _thin_legend(ax.legend(loc=legend_loc, ncol=min(n, 3)))
+        draw_legend(ax, style, ncol=n if n <= 4 else (n + 1) // 2, loc=legend_loc)
         if caption:
             panel_label(ax, caption, style=style)
         return fig

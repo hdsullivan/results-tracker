@@ -381,7 +381,7 @@ def render() -> None:
             st.warning("No run matches the base config; nothing to plot. Tag a run `base`.")
             return
         d = defs.get(metric, {})
-        ctl = chart_controls(project, style, key=f"exp_abl:{experiment}", series_key=VARIANT_KEY, colors=False,
+        ctl = chart_controls(project, style, key=f"exp_abl:{experiment}", series_key=VARIANT_KEY, colors=False, legend=False,
                              series=[r.label for r in rows if not r.is_base], x_name=f"Δ {metric}", y_name=None)
         fig = ablation_figure(rows, metric, higher_is_better=d.get("higher_is_better", True), fmt=d.get("fmt", ".2f"),
                               xlabel=xlabel, width=width, caption=cap or None, style=ctl.style, xlim=ctl.xlim)
