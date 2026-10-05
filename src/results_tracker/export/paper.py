@@ -30,7 +30,7 @@ from .csv import runs_csv
 from .figures import (ablation_figure, comparison_figure, curves_figure, distribution_figure, figure_bytes, figure_tex,
                       ieee_preamble, panel_figure, sweep_figure, tradeoff_figure)
 from .latex import ablation_latex, comparison_latex, provenance_note, selection_latex, sweep_latex, width_hint
-from .visual import make_visual
+from .visual import make_visual, view_options
 
 Record = dict[str, Any]
 
@@ -297,7 +297,8 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
                              methods=o.get("methods") or None, metrics=o.get("metrics") or ("psnr", "ssim"), mode=o.get("mode", "image"),
                              zoom=o.get("zoom", True), zoom_fraction=o.get("zoom_fraction", 0.3), zoom_center=(float(zc[0]), float(zc[1])),
                              crop_box=tuple(int(v) for v in crop) if crop else None, rows=o.get("rows"), width=width,
-                             auto_roles=o.get("image") is None, data_range=o.get("data_range"), style=style)
+                             auto_roles=o.get("image") is None, data_range=o.get("data_range"), style=style,
+                             **view_options(o))
             out.files.append((f"figures/{slug}.pdf", figure_bytes(vr.fig, "pdf")))
             out.files.append((f"figures/{slug}.tex", figure_tex(f"figures/{slug}.pdf", caption=caption or vr.spec.caption_stub(),
                                                                 label=label, width=width).encode()))

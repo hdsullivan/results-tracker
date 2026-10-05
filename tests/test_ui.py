@@ -1486,3 +1486,12 @@ def test_marker_and_line_controls_save_per_series_on_the_project(demo_db):
     assert "star" in [t["marker"]["symbol"] for t in _chart(at)["data"]]
     at.selectbox(key=marker[0]).set_value("circle").run()  # back to the default: no override kept
     assert get_plot_style(project, engine=get_engine(demo_db)).markers == {}
+
+
+def test_visual_page_title_and_grid_controls(demo_db):
+    at = _run("visual")
+    [t for t in at.text_input if t.label == "Figure title"][0].set_value("Motion blur").run()
+    [n for n in at.number_input if n.label == "Panel columns"][0].set_value(2).run()
+    assert not at.exception and not at.error
+    body = "\n".join(m.value for m in at.markdown) + "\n".join(c.value for c in at.caption)
+    assert "Row by row, left to right" in body and "rows × 2 columns" in body

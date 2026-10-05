@@ -336,3 +336,56 @@ def test_panel_audit_scores_the_recorded_convention_on_raw_arrays(art, tmp_path)
     # the tracker default would disagree with those numbers (different channels, window, and the clipped PNG)
     _, rows_default, warns_default = panel_metrics_rows(recs, panels, ref, DEFS, metrics=["psnr", "ssim"], convention=MetricConvention(border=4))
     assert warns_default
+
+
+def _six(art):
+    p1, ref, _ = _panels(art)
+    methods = [p for p in p1 if p.kind == "method"]
+    meas = next(p for p in p1 if p.kind == "measurement")
+    more = [Panel(f"M{i}", methods[0].image, "1.00 dB", kind="method") for i in range(4)]
+    return methods + more, ref, meas
+
+
+def test_method_panels_wrap_into_a_grid(art):
+    methods, ref, meas = _six(art)
+    kernel = Panel("Kernel", np.eye(5, dtype=np.float32), kind="kernel")
+    fig, spec = reconstruction_figure(methods, reference=ref, measurement=meas, kernel=kernel, cols=2)
+    assert spec.grid == [3, 2]
+    axes = [a for a in fig.axes]
+    assert len(axes) == 2 + 6  # the left block (reference, measurement) + six method panels
+    assert sorted({round(a.get_position().y0, 3) for a in axes[2:]}) and len({round(a.get_position().y0, 3) for a in axes[2:]}) == 3
+    assert [a.get_title() for a in axes[2:]] == [p.title for p in methods]  # every grid row is titled
+    assert "Row by row" in spec.caption_stub()
+
+
+def test_reference_and_measurement_can_join_the_grid(art):
+    methods, ref, meas = _six(art)
+    fig, spec = reconstruction_figure(methods[:4], reference=ref, measurement=meas, cols=3, ref_in_grid=True)
+    assert spec.grid == [2, 3] and len(fig.axes) == 6
+    assert [a.get_title() for a in fig.axes][:2] == ["Reference", "Measurement"]
+    with pytest.raises(ValueError):
+        reconstruction_figure(methods, cols=-1)
+
+
+def test_titles_sizes_and_renamed_panels(art):
+    methods, ref, meas = _six(art)
+    fig, spec = reconstruction_figure(methods[:2], reference=ref, measurement=meas, title="Blur $\\sigma=2$", title_size=14,
+                                      panel_size=9, stamp_size=6, panel_titles={"Measurement": "Blurred input"})
+    assert fig._suptitle.get_text() == "Blur $\\sigma=2$" and fig._suptitle.get_fontsize() == 14
+    titles = {a.get_title(): a.title.get_fontsize() for a in fig.axes if a.get_title()}
+    assert "Blurred input" in titles and set(titles.values()) == {9}
+    assert spec.title == "Blur $\\sigma=2$" and any(p["title"] == "Blurred input" for p in spec.panels)
+    texts = [t for a in fig.axes for t in a.texts]
+    assert texts and all(t.get_fontsize() == 6 for t in texts)
+
+
+def test_kernel_thumbnail_corner_and_view_options():
+    from results_tracker.export.visual import kernel_bounds, view_options
+    x, y, w, h = kernel_bounds("upper right", 0.2)
+    assert x + w <= 1 and y + h <= 1 and x > 0.5 and y > 0.5
+    assert kernel_bounds("lower left", 0.2)[:2] == (0.02, 0.02)
+    with pytest.raises(ValueError):
+        kernel_bounds("middle")
+    assert view_options({"title": " ", "cols": 0, "title_size": 0.0, "panel_titles": {"a": ""}, "kernel_corner": "nope"}) == {}
+    assert view_options({"title": "T", "cols": "2", "panel_size": "9", "ref_in_grid": True, "panel_titles": {"a": "b"}}) == \
+        {"title": "T", "cols": 2, "panel_size": 9.0, "ref_in_grid": True, "panel_titles": {"a": "b"}}

@@ -17,7 +17,10 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..export.figures import figure_bytes, figure_tex, to_grayscale_png
+from ..aggregate import plain_label
 from ..export.visual import (
+    KERNEL_CORNERS,
+    KERNEL_INSET_SIZE,
     ZOOM_FRACTION,
     build_panels,
     convention_for,
@@ -25,6 +28,7 @@ from ..export.visual import (
     list_image_files,
     make_visual,
     panel_metrics_rows,
+    view_options,
 )
 from .common import (active_where, completed_or_explain, load_metric_defs, load_records, pin_to_paper, select_project_experiment,
                      sidebar_db, sidebar_filter)
@@ -101,6 +105,55 @@ def render() -> None:
             st.divider()
 
 
+def _view_controls(key: str, pool_sel, methods, reference, measurement, kernel, row_key) -> dict[str, Any]:
+    """Title, font sizes, panel titles, grid layout and kernel placement of one figure. Returns the raw widget values
+    (`view_options` drops the ones left at their defaults, so an untouched figure is exactly the old one)."""
+    chosen = agg.select_runs(pool_sel, methods=methods or None)
+    shown = ([("Reference", "Reference")] if reference else []) + ([("Measurement", "Measurement")] if measurement else []) + \
+            [(t, t) for t in dict.fromkeys(plain_label(r.get("method_label")) or str(r.get("method")) for r in chosen)]
+    with st.expander("Titles, fonts and layout", expanded=False):
+        title = st.text_input("Figure title", key=key + "title", help="Printed above the whole figure. Empty = none.")
+        f1, f2, f3 = st.columns(3)
+        title_size = f1.number_input("Title size (pt)", 0.0, 72.0, 0.0, 0.5, key=key + "tsize",
+                                     help="0 = two points above the panel titles.")
+        panel_size = f2.number_input("Panel title size (pt)", 0.0, 72.0, 0.0, 0.5, key=key + "psize",
+                                     help="Panel titles and row labels. 0 = the project's base size (sidebar, Plot style).")
+        stamp_size = f3.number_input("Metric stamp size (pt)", 0.0, 72.0, 0.0, 0.5, key=key + "ssize",
+                                     help="The PSNR / SSIM numbers on the panels. 0 = the project's base size.")
+        names: dict[str, str] = {}
+        if shown:
+            st.caption("Panel titles (leave as is to keep the name)")
+            cols = st.columns(min(3, len(shown)))
+            for n, (orig, default) in enumerate(shown):
+                new = cols[n % len(cols)].text_input(orig, value=default, key=f"{key}name_{orig}")
+                if new.strip() and new != orig:
+                    names[orig] = new
+        n_panels = len(chosen) + (2 if reference and measurement else 1 if reference or measurement else 0)
+        grid_cols = 0
+        ref_in_grid = False
+        if not row_key:
+            g1, g2 = st.columns(2)
+            grid_cols = int(g1.number_input("Panel columns", 0, max(n_panels, 1), 0, 1, key=key + "cols",
+                                            help="0 = one row of panels. 2 with six panels = three rows by two columns."))
+            ref_in_grid = g2.checkbox("Reference and measurement in the grid", value=False, key=key + "refgrid", disabled=not grid_cols,
+                                      help="Off: they stay as a block on the left. On: they are the first cells of the grid.")
+            if grid_cols:
+                cells = n_panels if ref_in_grid else len(chosen)
+                st.caption(f"{-(-cells // grid_cols)} rows × {grid_cols} columns")
+        else:
+            st.caption("Rows are one per value of the row key; the grid layout is for figures without rows.")
+        corner, ksize = "upper right", KERNEL_INSET_SIZE
+        if kernel and measurement:
+            k1, k2 = st.columns(2)
+            corner = k1.selectbox("Kernel thumbnail corner", list(KERNEL_CORNERS), key=key + "kcorner",
+                                  help="Where the kernel sits on the Measurement panel.")
+            ksize = k2.slider("Kernel thumbnail size", 0.1, 0.5, KERNEL_INSET_SIZE, 0.05, key=key + "ksize")
+        elif kernel:
+            st.caption("The kernel thumbnail is drawn on the Measurement panel; pick a measurement image to see it.")
+    return dict(title=title, title_size=title_size, panel_size=panel_size, stamp_size=stamp_size, panel_titles=names,
+                cols=grid_cols, ref_in_grid=ref_in_grid, kernel_corner=corner, kernel_size=ksize)
+
+
 def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image, reference, measurement, kernel, metrics,
                 data_range) -> None:
     """One figure with its own methods / instance / seed / mode / zoom; widget keys are suffixed with `i`."""
@@ -143,13 +196,14 @@ def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image
                 zoom_center = (k2.slider("Centre x", 0.0, 1.0, 0.5, 0.05, key=key + "zx"),
                                k3.slider("Centre y", 0.0, 1.0, 0.5, 0.05, key=key + "zy"))
 
+    view = _view_controls(key, pool_sel, methods, reference, measurement, kernel, row_key)
     try:
         vr = make_visual(
             recs, defs, experiment=experiment, dataset=dataset, seed=seed, instance=instance, image=image,
             reference=reference, measurement=measurement, kernel=kernel, methods=methods or None, metrics=metrics,
             mode="error" if mode == "Error maps" else "image", zoom=zoom, zoom_fraction=zoom_fraction,
             zoom_center=zoom_center, crop_box=crop_box, rows=row_key, width=width, auto_roles=False, data_range=data_range,
-            style=plot_style(project),
+            style=plot_style(project), **view_options(view),
         )
     except ValueError as e:
         st.error(str(e))
@@ -179,7 +233,7 @@ def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image
                                     "measurement": measurement, "kernel": kernel, "methods": methods or None, "metrics": list(metrics),
                                     "mode": "error" if mode == "Error maps" else "image", "zoom": zoom, "zoom_fraction": zoom_fraction,
                                     "zoom_center": list(zoom_center), "crop_box": list(crop_box) if crop_box else None, "rows": row_key,
-                                    "width": width, "data_range": data_range}},
+                                    "width": width, "data_range": data_range, **view_options(view)}},
                  records=recs, key=key + "pin", suggested_label=f"fig:{stem.replace('-visual', '')}"[:60], caption=None)
 
     # --- panel metrics: logged vs recomputed from the shown image (single-row figures)
