@@ -207,6 +207,29 @@ results-tracker import old_results.csv -e main-comparison --dry-run   # show the
 
 Re-importing the same file is safe: identical runs are skipped.
 
+## Bringing in runs from another machine
+
+Runs usually happen somewhere else — a cluster, a colleague's box — while the paper is written here.
+Copying that machine's database file over yours takes its runs and destroys everything you built around
+them: pinned assets, notes, value maps, plot style, metric formats, method labels, experiment stages, the
+tags you added, and the local paths you repointed `artifacts_dir` to. Merge instead.
+
+```bash
+rsync -a cluster:/path/results.db incoming.db        # a side file, never straight onto your own database
+results-tracker merge incoming.db --db paper.db
+results-tracker merge incoming.db --db paper.db --dry-run             # what would change
+results-tracker merge incoming.db --db paper.db -e window-ablation    # just one experiment
+```
+
+Runs are matched by *setting* — project, experiment, method, dataset, instance, seed and config — not by
+`id`, which means nothing outside its own file. A setting you already have keeps its local tags, notes and
+`artifacts_dir` and takes the source's metrics and status, so a run that was `running` at the last merge
+lands as `completed`. A setting you do not have is inserted whole. Merging the same source twice changes
+nothing, which makes it safe to merge a study that is still being written.
+
+`project`, `experiment`, `method`, `dataset` and `metric` rows are created when missing and never
+modified; `asset`, `note` and `valuemap` are never touched.
+
 ## Logging from your own code
 
 ```python

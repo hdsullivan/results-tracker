@@ -463,31 +463,35 @@ def ablation(
     experiment: str = typer.Option(..., "--experiment", "-e"),
     project: Optional[str] = typer.Option(None, "--project", "-p"),
     metrics: list[str] = typer.Option([], "--metric"),
+    by: list[str] = typer.Option(["method"], "--by",
+                                 help="A table per value of this field. Default `method`: two methods are two "
+                                      "ablations, each with its own full model. `--by ''` pools them into one table."),
     db: Optional[Path] = DbOpt,
 ):
-    """Ablation table: each config variant vs the base, with deltas."""
+    """Ablation table: each config variant vs the base, with deltas. One table per method by default."""
     engine = get_engine(db)
     recs = run_records(get_runs(experiment=experiment, project=project, engine=engine), engine=engine)
     defs = get_metric_defs(engine=engine)
     try:
-        rows = agg.ablation_table(recs, metrics=metrics or None)
+        tables = agg.ablation_tables(recs, by=[b for b in by if b], metrics=metrics or None)
     except agg.AmbiguousBaseError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(code=1)
-    names = rows[0].stats.keys() if rows else []
-    t = Table("variant", *[f"{m} (Δ)" for m in names], "n")
-    for r in rows:
-        cells = []
-        for m in names:
-            st = r.stats[m]
-            fmt = defs[m].fmt if m in defs else ".2f"
-            if st is None:
-                cells.append("—"); continue
-            d = r.delta[m]
-            ds = "" if r.is_base or d is None else f" ({d:+{fmt}})"
-            cells.append(st.format(fmt) + ds)
-        t.add_row(f"[bold]{r.label}[/]" if r.is_base else r.label, *cells, str(r.n))
-    console.print(t)
+    for group, rows in tables.items():
+        names = rows[0].stats.keys() if rows else []
+        t = Table("variant", *[f"{m} (Δ)" for m in names], "n", title=agg.group_heading(group, recs) or None)
+        for r in rows:
+            cells = []
+            for m in names:
+                st = r.stats[m]
+                fmt = defs[m].fmt if m in defs else ".2f"
+                if st is None:
+                    cells.append("—"); continue
+                d = r.delta[m]
+                ds = "" if r.is_base or d is None else f" ({d:+{fmt}})"
+                cells.append(st.format(fmt) + ds)
+            t.add_row(f"[bold]{r.label}[/]" if r.is_base else r.label, *cells, str(r.n))
+        console.print(t)
 
 
 @app.command()
@@ -512,6 +516,35 @@ def demo(
     if artifacts:
         console.print(f"artifacts written under {artifacts}")
     console.print("try:  results-tracker ui --db " + str(db or path))
+
+
+@app.command("merge")
+def merge_cmd(
+    source: Path = typer.Argument(..., help="The database to take runs from (e.g. one just fetched from a cluster)."),
+    project: list[str] = typer.Option([], "--project", "-p", help="Only these projects (repeatable). Default: all."),
+    experiment: list[str] = typer.Option([], "--experiment", "-e", help="Only these experiments (repeatable)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would change, write nothing."),
+    db: Optional[Path] = DbOpt,
+):
+    """Merge another database's runs into this one, keeping local pins, notes and tags.
+
+    Copying a database file over the top replaces the runs *and* everything curated around them --
+    pinned paper assets, notes, value maps, plot style, metric formats, method labels, experiment
+    stages, and the local artifacts_dir each run was repointed to. This copies runs instead. Runs are
+    matched by setting (project, experiment, method, dataset, instance, seed, config), never by id, so
+    merging the same source twice is a no-op and a study can be merged while it is still running.
+    """
+    from .merge import merge_database
+
+    try:
+        report = merge_database(source, db=db, projects=project or None, experiments=experiment or None,
+                                dry_run=dry_run)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+    console.print(report.summary())
+    if dry_run:
+        console.print("[yellow]dry run: nothing written[/]")
 
 
 @app.command("import")
