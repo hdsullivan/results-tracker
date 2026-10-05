@@ -298,7 +298,8 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
                              zoom=o.get("zoom", True), zoom_fraction=o.get("zoom_fraction", 0.3), zoom_center=(float(zc[0]), float(zc[1])),
                              crop_box=tuple(int(v) for v in crop) if crop else None, rows=o.get("rows"), width=width,
                              auto_roles=o.get("image") is None, data_range=o.get("data_range"), style=style,
-                             **view_options(o))
+                             iter_template=o.get("iter_template"), iteration=o.get("iteration"), iterations=o.get("iterations") or None,
+                             final_row=bool(o.get("final_row")), **view_options(o))
             out.files.append((f"figures/{slug}.pdf", figure_bytes(vr.fig, "pdf")))
             out.files.append((f"figures/{slug}.tex", figure_tex(f"figures/{slug}.pdf", caption=caption or vr.spec.caption_stub(),
                                                                 label=label, width=width).encode()))

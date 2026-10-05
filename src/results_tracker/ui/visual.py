@@ -24,7 +24,9 @@ from ..export.visual import (
     ZOOM_FRACTION,
     build_panels,
     convention_for,
+    describe_series,
     guess_roles,
+    iteration_series,
     list_image_files,
     make_visual,
     panel_metrics_rows,
@@ -82,6 +84,14 @@ def render() -> None:
         reference = st.selectbox("Ground truth", [NONE] + files, index=_opt(files, roles["reference"]))
         measurement = st.selectbox("Measurement / input", [NONE] + files, index=_opt(files, roles["measurement"]))
         kernel = st.selectbox("Kernel / PSF thumbnail", [NONE] + files, index=_opt(files, roles["kernel"]))
+        series = iteration_series(files)
+        iter_template = None
+        if series:
+            iter_template = st.selectbox("Intermediate iterations", [NONE] + list(series),
+                                         format_func=lambda t: t if t == NONE else describe_series(t, series[t]),
+                                         help="Numbered image files saved during the run (iter_0010.png, iter_0050.png, ...). "
+                                              "Each comparison can show one iteration, or several as rows.")
+            iter_template = None if iter_template == NONE else iter_template
         metrics_all = agg.metric_names(pool)
         metrics = st.multiselect("Metrics stamped on panels", metrics_all, default=[m for m in metrics_all if m in ("psnr", "ssim")][:2])
         dr = st.number_input("Data range for float images", min_value=0.0, value=0.0, step=1.0,
@@ -96,7 +106,8 @@ def render() -> None:
     sidebar_plot_style(project)  # the panel titles and metric stamps of the figure below follow the same style
     shared = dict(recs=recs, defs=defs, project=project, experiment=experiment, dataset=dataset, pool=pool, image=image,
                   reference=None if reference == NONE else reference, measurement=None if measurement == NONE else measurement,
-                  kernel=None if kernel == NONE else kernel, metrics=metrics, data_range=data_range)
+                  kernel=None if kernel == NONE else kernel, metrics=metrics, data_range=data_range,
+                  iter_template=iter_template, iter_values=series.get(iter_template, []) if iter_template else [])
     for i in range(1, n_comparisons + 1):
         if n_comparisons > 1:
             st.header(f"Comparison {i}")
@@ -155,14 +166,27 @@ def _view_controls(key: str, pool_sel, methods, reference, measurement, kernel, 
 
 
 def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image, reference, measurement, kernel, metrics,
-                data_range) -> None:
+                data_range, iter_template, iter_values) -> None:
     """One figure with its own methods / instance / seed / mode / zoom; widget keys are suffixed with `i`."""
     key = f"vis{i}_"
+    iteration, iterations, final_row = None, [], False
+    if iter_template:
+        shows = st.radio("Reconstruction shown", ["Final", "One iteration", "Several iterations (rows)"], horizontal=True,
+                         key=key + "ishow", help="The final reconstruction is the file chosen in the sidebar. Iterations come from "
+                                                 "the numbered files; their PSNR / SSIM are computed from the images.")
+        if shows == "One iteration":
+            iteration = st.select_slider("Iteration k", options=iter_values, key=key + "iter")
+        elif shows == "Several iterations (rows)":
+            spread = sorted({iter_values[round(j * (len(iter_values) - 1) / 3)] for j in range(4)})
+            iterations = st.multiselect("Iterations (one row each)", iter_values, default=spread, key=key + "iters")
+            final_row = st.checkbox("Add the final reconstruction as the last row", value=True, key=key + "ifinal")
+    rows_by_iteration = bool(iterations)
     s1, s2, s3 = st.columns(3)
     row_opts = [NONE] + [k for k in ("seed", "instance") if len({r.get(k) for r in pool}) > 1] + \
                [f"config.{k}" for k in agg.varying_config_keys(pool)]
-    row_key = s1.selectbox("Rows (one per value)", row_opts, key=key + "rows", help="e.g. seed, or a config key like K")
-    row_key = None if row_key == NONE else row_key
+    row_key = s1.selectbox("Rows (one per value)", row_opts, key=key + "rows", help="e.g. seed, or a config key like K",
+                           disabled=rows_by_iteration)
+    row_key = None if (row_key == NONE or rows_by_iteration) else row_key
     instances = sorted({r["instance"] for r in pool if r.get("instance") is not None}, key=str)
     instance = s2.selectbox("Instance", instances, key=key + "instance") if instances and row_key != "instance" else None
     pool_i = [r for r in pool if instance is None or r.get("instance") == instance]
@@ -203,7 +227,8 @@ def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image
             reference=reference, measurement=measurement, kernel=kernel, methods=methods or None, metrics=metrics,
             mode="error" if mode == "Error maps" else "image", zoom=zoom, zoom_fraction=zoom_fraction,
             zoom_center=zoom_center, crop_box=crop_box, rows=row_key, width=width, auto_roles=False, data_range=data_range,
-            style=plot_style(project), **view_options(view),
+            style=plot_style(project), iter_template=iter_template, iteration=iteration, iterations=iterations or None,
+            final_row=final_row, **view_options(view),
         )
     except ValueError as e:
         st.error(str(e))
@@ -221,7 +246,7 @@ def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image
                + (" and error scale" if mode == "Error maps" else ""))
 
     stem = f"{experiment}-{dataset or 'all'}" + (f"-{instance}" if instance is not None else "") + \
-           (f"-seed{seed}" if seed is not None else "") + ("-error" if mode == "Error maps" else ("-zoom" if zoom else "")) + \
+           (f"-seed{seed}" if seed is not None else "") + (f"-k{iteration}" if iteration is not None else "") + ("-iterations" if iterations else "") + ("-error" if mode == "Error maps" else ("-zoom" if zoom else "")) + \
            (f"-{i}" if i > 1 else "") + "-visual"
     stem = stem.replace(" ", "_")
     d1, d2, d3 = st.columns(3)
@@ -233,11 +258,16 @@ def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image
                                     "measurement": measurement, "kernel": kernel, "methods": methods or None, "metrics": list(metrics),
                                     "mode": "error" if mode == "Error maps" else "image", "zoom": zoom, "zoom_fraction": zoom_fraction,
                                     "zoom_center": list(zoom_center), "crop_box": list(crop_box) if crop_box else None, "rows": row_key,
-                                    "width": width, "data_range": data_range, **view_options(view)}},
+                                    "width": width, "data_range": data_range, "iter_template": iter_template if (iteration is not None or iterations) else None,
+                                    "iteration": iteration, "iterations": iterations or None, "final_row": final_row,
+                                    **view_options(view)}},
                  records=recs, key=key + "pin", suggested_label=f"fig:{stem.replace('-visual', '')}"[:60], caption=None)
 
     # --- panel metrics: logged vs recomputed from the shown image (single-row figures)
-    if not row_key:
+    if iteration is not None or iterations:
+        st.caption("Panel numbers are computed from the shown iterates against the ground truth; the logged metrics describe "
+                   "the final estimate, so there is nothing logged to cross-check them with.")
+    elif not row_key:
         chosen = agg.select_runs(pool_sel, methods=methods or None)
         panels, ref_panel, _ = build_panels(chosen, image, defs, metrics=metrics, reference=reference, data_range=data_range)
         conv = convention_for(chosen)

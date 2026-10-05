@@ -138,7 +138,8 @@ def test_run_toy_demo_logs_resumes_and_feeds_the_analysis(tmp_path, engine):
     from pathlib import Path
     run_dir = Path(r["artifacts_dir"])
     assert run_dir.is_relative_to(tmp_path / "art")
-    assert {p.name for p in run_dir.iterdir()} == {"reconstruction.png", "ground_truth.png", "measurement.png", "diagnostics.json"}
+    assert {p.name for p in run_dir.iterdir()} == {"reconstruction.png", "ground_truth.png", "measurement.png", "diagnostics.json",
+                                                   *(f"iter_{k:04d}.png" for k in (0, 2, 5, 10, 30))}
     assert len(json.loads((run_dir / "diagnostics.json").read_text())["step_sizes"]) == 30  # ... it lives here
     assert r["method_is_baseline"] is False and next(x for x in recs if x["method"] == "wiener")["method_is_baseline"]
     # the proposed method wins the toy comparison, as a demo should
@@ -457,3 +458,27 @@ def test_declarations_plan_without_the_real_classes(tmp_path):
     assert r.exit_code == 0 and json.loads((tmp_path / "k2.json").read_text())["version"] == 1
     r = runner.invoke(app, ["recipe", "knobs", "adaptive-gd", "-i", "results_tracker.recipe.toy", "--json"])
     assert r.exit_code == 0 and json.loads(r.output)["knobs"][0]["name"]
+
+
+def test_snapshots_save_only_the_requested_iterates_and_the_final_matches(tmp_path, engine):
+    import numpy as np
+    from results_tracker.export.visual import iteration_series, list_image_files, load_image
+
+    study = Study(name="snap", kind="comparison", problem=ToyDeblurring.key, methods=[Arm("adaptive-gd"), Arm("wiener")],
+                  project=PROJECT, imports=["results_tracker.recipe.toy"], artifacts_dir=str(tmp_path / "art"),
+                  snapshots=[0, 3, 30, 99])  # 99 is past the end of a 30-iteration run: simply absent
+    run_study(study, engine=engine, log=None)
+    recs = {r["method"]: r for r in run_records(get_runs(experiment="snap", project=PROJECT, engine=engine), engine=engine)}
+    files = list_image_files([recs["adaptive-gd"]["artifacts_dir"]])
+    assert iteration_series(files) == {"iter_{:04d}.png": [0, 3, 30]}
+    assert iteration_series(list_image_files([recs["wiener"]["artifacts_dir"]])) == {}  # a one-shot method has no iterates
+    d = recs["adaptive-gd"]["artifacts_dir"]
+    # iteration 30 is the last one: the same estimate as the final reconstruction
+    assert np.abs(load_image(f"{d}/iter_0030.png") - load_image(f"{d}/reconstruction.png")).max() < 1e-6
+    assert Study.from_dict(study.to_dict()).snapshots == [0, 3, 30, 99]
+    # no snapshots asked for -> none saved
+    plain = Study(name="plain", kind="comparison", problem=ToyDeblurring.key, methods=[Arm("adaptive-gd")], project=PROJECT,
+                  imports=["results_tracker.recipe.toy"], artifacts_dir=str(tmp_path / "art2"))
+    run_study(plain, engine=engine, log=None)
+    r = run_records(get_runs(experiment="plain", project=PROJECT, engine=engine), engine=engine)[0]
+    assert iteration_series(list_image_files([r["artifacts_dir"]])) == {}

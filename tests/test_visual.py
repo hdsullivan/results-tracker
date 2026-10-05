@@ -389,3 +389,80 @@ def test_kernel_thumbnail_corner_and_view_options():
     assert view_options({"title": " ", "cols": 0, "title_size": 0.0, "panel_titles": {"a": ""}, "kernel_corner": "nope"}) == {}
     assert view_options({"title": "T", "cols": "2", "panel_size": "9", "ref_in_grid": True, "panel_titles": {"a": "b"}}) == \
         {"title": "T", "cols": 2, "panel_size": 9.0, "ref_in_grid": True, "panel_titles": {"a": "b"}}
+
+
+def test_iteration_series_detection():
+    from results_tracker.export.visual import iteration_series
+    files = ["iter_0010.png", "iter_0050.png", "iter_0200.png", "seed3.png", "x/step_1.png", "x/step_20.png", "x/step_3.png",
+             "reconstruction.png"]
+    out = iteration_series(files)
+    assert out == {"iter_{:04d}.png": [10, 50, 200], "x/step_{:d}.png": [1, 3, 20]}  # a lone seed3.png is no series
+    assert "iter_{:04d}.png".format(50) == "iter_0050.png"
+
+
+@pytest.fixture
+def iterates(art):
+    """The art runs, each with a blurrier estimate at k=1 and a closer one at k=5 (and the final reconstruction)."""
+    gt, recs = art
+    from pathlib import Path
+    for r in recs[:2]:
+        d = Path(r["artifacts_dir"])
+        final = load_image(d / "reconstruction.png")
+        _png(d / "iter_01.png", 0.5 * final + 0.25)
+        _png(d / "iter_05.png", 0.85 * final + 0.075)
+    return gt, recs
+
+
+def test_one_iteration_replaces_the_final_image_and_is_scored_here(iterates):
+    from results_tracker.export.visual import make_visual
+    _, recs = iterates
+    final = make_visual(recs, DEFS, image="reconstruction.png", reference="ground_truth.png", auto_roles=False)
+    k1 = make_visual(recs, DEFS, image="reconstruction.png", reference="ground_truth.png", auto_roles=False,
+                     iter_template="iter_{:02d}.png", iteration=1)
+    assert k1.spec.iteration == 1 and k1.spec.image == "iter_01.png" and k1.spec.recomputed
+    assert "Estimate after 1 iterations" in k1.spec.caption_stub() and "computed from the shown image" in k1.spec.caption_stub()
+    stamps = lambda v: [t.get_text() for a in v.fig.axes for t in a.texts]
+    # the logged 30 / 34 dB belong to the final image; the early iterate is scored from its own pixels
+    assert [t.split(" /")[0] for t in stamps(final)] == ["30.00 dB", "34.00 dB"]
+    assert all("dB" in t and t.split(" /")[0] not in ("30.00 dB", "34.00 dB") for t in stamps(k1))
+
+
+def test_iteration_rows_with_a_final_row(iterates):
+    from results_tracker.export.visual import make_visual
+    gt, recs = iterates
+    vr = make_visual(recs, DEFS, image="reconstruction.png", reference="ground_truth.png", auto_roles=False, final_row=True,
+                     iter_template="iter_{:02d}.png", iterations=[5, 1], mode="image")
+    assert vr.spec.iterations == [1, 5] and vr.spec.rows == ["$k = 1$", "$k = 5$", "final"]
+    assert len([a for a in vr.fig.axes if a.get_title()]) >= 2 and "k = 1, 5 iterations, then the final" in vr.spec.caption_stub()
+    # rows are ordered by iteration, so the PSNR climbs down the figure for a method that converges
+    psnrs = [float(t.get_text().split()[0]) for a in vr.fig.axes for t in a.texts]
+    ours = psnrs[1::2]
+    assert ours == sorted(ours)
+    err = make_visual(recs, DEFS, image="reconstruction.png", reference="ground_truth.png", auto_roles=False,
+                      iter_template="iter_{:02d}.png", iterations=[1, 5], mode="error")
+    assert err.spec.error_vmax is not None
+    with pytest.raises(ValueError, match="iter_template"):
+        make_visual(recs, DEFS, image="reconstruction.png", auto_roles=False, iterations=[1])
+    with pytest.raises(ValueError, match="row key"):
+        make_visual(recs, DEFS, image="reconstruction.png", auto_roles=False, iter_template="iter_{:02d}.png", iterations=[1], rows="seed")
+    missing = make_visual(recs, DEFS, image="reconstruction.png", reference="ground_truth.png", auto_roles=False,
+                          iter_template="iter_{:02d}.png", iterations=[1, 9])
+    assert any("k = 9" in p and "missing" in p for p in missing.problems)
+
+
+def test_methods_without_iterates_are_left_out_of_iteration_rows(iterates):
+    from results_tracker.export.visual import make_visual
+    _, recs = iterates
+    import shutil
+    from pathlib import Path
+    for f in Path(recs[0]["artifacts_dir"]).glob("iter_*.png"):
+        f.unlink()  # TV is "one-shot": no iterates at all
+    vr = make_visual(recs, DEFS, image="reconstruction.png", reference="ground_truth.png", auto_roles=False, final_row=True,
+                     iter_template="iter_{:02d}.png", iterations=[1, 5])
+    titles = [a.get_title() for a in vr.fig.axes if a.get_title()]
+    assert "Ours" in titles and not any(t.startswith("TV") for t in titles)
+    assert any("TV" in p and "no iterates" in p for p in vr.problems)
+    assert len(vr.fig.axes) == 1 + 3  # the reference, then one Ours panel per row (k=1, k=5, final)
+    with pytest.raises(ValueError, match="no selected run"):
+        make_visual(recs, DEFS, image="reconstruction.png", auto_roles=False, iter_template="iter_{:02d}.png", iterations=[7],
+                    methods=["TV"])

@@ -160,9 +160,12 @@ class TikhonovGD(Method):
     def reconstruct(self, instance: Instance, config: Mapping[str, Any], state: Any) -> Estimate:
         op, y = instance.forward, instance.measurement
         x = y.copy()
-        for _ in range(config["iters"]):
+        iterates = {0: x.clip(0, 1)} if 0 in self.snapshots else {}
+        for k in range(1, config["iters"] + 1):
             x = x - config["step"] * (op.adjoint(op(x) - y) + config["reg"] * x)
-        return Estimate(x.clip(0, 1), {"iterations": config["iters"]})
+            if k in self.snapshots:
+                iterates[k] = x.clip(0, 1)
+        return Estimate(x.clip(0, 1), {"iterations": config["iters"]}, iterates=iterates)
 
 
 @registry.method
@@ -189,7 +192,8 @@ class AdaptiveGD(Method):
         grad = lambda z: op.adjoint(op(z) - y) + reg * prior_grad(z)
         x = op.wiener(y, 0.01) if config["warm_start"] else y.copy()
         g, step, steps = grad(x), 1.0 / lipschitz, []
-        for _ in range(config["iters"]):
+        iterates = {0: x.clip(0, 1)} if 0 in self.snapshots else {}
+        for k in range(1, config["iters"] + 1):
             x_new = x - step * g
             g_new = grad(x_new)
             if config["adaptive"]:
@@ -197,7 +201,9 @@ class AdaptiveGD(Method):
                 step = float(np.clip((s * s).sum() / max((s * d).sum(), 1e-12), 0.05, 50.0))
             x, g = x_new, g_new
             steps.append(step)
-        return Estimate(x.clip(0, 1), {"iterations": config["iters"], "final_step": step, "step_sizes": steps})
+            if k in self.snapshots:
+                iterates[k] = x.clip(0, 1)
+        return Estimate(x.clip(0, 1), {"iterations": config["iters"], "final_step": step, "step_sizes": steps}, iterates=iterates)
 
 
 # --------------------------------------------------------------------------- the demo paper
@@ -207,7 +213,7 @@ def toy_studies(artifacts_dir: Optional[str] = None) -> list[Study]:
     return [
         Study(name="main-comparison", kind="comparison", methods=[Arm("wiener"), Arm("gd"), Arm("adaptive-gd")],
               conditions={"blur": [1.0, 2.0], "noise": [0.01, 0.05]}, n_instances=4, seeds=[0, 1],
-              artifacts_dir=artifacts_dir,
+              artifacts_dir=artifacts_dir, snapshots=[0, 2, 5, 10, 30],
               description="Three methods on the 2×2 blur × noise grid, four phantoms, two noise seeds.", **common),
         Study(name="reg-sweep", kind="sweep", methods=[Arm("adaptive-gd")],
               sweep=Sweep("reg", [0.0003, 0.001, 0.003, 0.01, 0.03]), conditions={"blur": [1.5], "noise": [0.05]},

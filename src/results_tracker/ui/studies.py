@@ -385,6 +385,7 @@ def _prefill_form(p: Planned, clone: bool) -> None:
         "new_imports": ", ".join(study.imports), "new_name": f"{study.name}-copy" if clone else study.name, "new_kind": study.kind,
         "new_project": study.project, "new_problem": study.problem, "new_split": study.split, "new_n": int(study.n_instances),
         "new_seeds": ", ".join(map(str, study.seeds)), "new_desc": study.description, "new_feeds": ", ".join(study.feeds),
+        "new_snaps": ", ".join(map(str, study.snapshots)),
         "new_arms": len(study.methods), "new_filename": "" if clone else p.path.name, "new_overwrite": not clone,
     }
     for k, values in study.conditions.items():
@@ -482,6 +483,11 @@ def _new_study_form(studies_dir: Path, planned: list[Planned], project: Optional
                        placeholder="tab:main, fig:beta", help="Assets of this project: " + (", ".join(asset_labels) or "none pinned yet")
                        + ". The Paper page shows each asset's readiness from the studies that feed it.")
     feeds = [f.strip() for f in str(feeds_text).split(",") if f.strip()]
+    snaps_text = keyed(st.text_input, "Save the estimate at iterations (comma-separated)", "new_snaps", "", placeholder="0, 10, 50, 200",
+                       help="Iterative methods that report their iterates (Estimate.iterates) get them saved as iter_<k>.png, so the "
+                            "Visual page can show an intermediate iteration. Needs an artifacts folder. Settings already run are "
+                            "skipped on a resume, so ask for these before the first run.")
+    snapshots = sorted({int(t) for t in str(snaps_text).replace(" ", "").split(",") if t.strip().isdigit()})
 
     st.markdown("**Conditions** (one value or a comma-separated list per knob; the grid is their product)")
     conditions: dict[str, list] = {}
@@ -557,7 +563,7 @@ def _new_study_form(studies_dir: Path, planned: list[Planned], project: Optional
 
     study = Study(name=name or "unnamed", kind=kind, problem=problem_key, methods=arms, project=study_project or "default",
                   conditions=conditions, split=split, n_instances=n_instances, seeds=seeds or [0], sweep=sweep,
-                  ablation=ablation, description=description, imports=imports, feeds=feeds)
+                  ablation=ablation, description=description, imports=imports, feeds=feeds, snapshots=snapshots)
     try:
         problem_cls_, methods = load_study_classes(study, reg, import_modules=False)
         jobs = expand(study, problem_cls_, methods)

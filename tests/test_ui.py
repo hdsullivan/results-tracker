@@ -1495,3 +1495,29 @@ def test_visual_page_title_and_grid_controls(demo_db):
     assert not at.exception and not at.error
     body = "\n".join(m.value for m in at.markdown) + "\n".join(c.value for c in at.caption)
     assert "Row by row, left to right" in body and "rows × 2 columns" in body
+
+
+def test_visual_page_iteration_controls(demo_db, tmp_path):
+    import numpy as np
+    from PIL import Image
+    from results_tracker.api import get_runs
+    # give the demo's runs a numbered series next to their reconstruction
+    for r in get_runs(experiment="main-comparison"):
+        if not r.artifacts_dir:
+            continue
+        d = Path(r.artifacts_dir)
+        final = np.asarray(Image.open(d / "reconstruction.png")).astype(float) / 255
+        for k in (1, 5, 20):
+            Image.fromarray((np.clip(final * (0.6 + 0.4 * k / 20), 0, 1) * 255).astype("uint8")).save(d / f"iter_{k:03d}.png")
+    at = _run("visual")
+    assert not at.exception
+    sel = [s for s in at.sidebar.selectbox if s.label == "Intermediate iterations"][0]
+    sel.set_value("iter_{:03d}.png").run()
+    [r for r in at.radio if r.label == "Reconstruction shown"][0].set_value("One iteration").run()
+    [s for s in at.select_slider if s.label == "Iteration k"][0].set_value(5).run()
+    assert not at.exception and not at.error
+    body = "\n".join(m.value for m in at.markdown)
+    assert "Estimate after 5 iterations" in body
+    [r for r in at.radio if r.label == "Reconstruction shown"][0].set_value("Several iterations (rows)").run()
+    assert not at.exception and not at.error
+    assert "Rows: estimate after k = 1, 5, 20 iterations" in "\n".join(m.value for m in at.markdown)

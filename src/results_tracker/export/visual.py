@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Union
@@ -90,6 +91,31 @@ def list_image_files(dirs: Iterable[Optional[str]]) -> list[str]:
     return sorted(out)
 
 
+_NUMBERED = re.compile(r"^(?P<pre>.*?)(?P<num>\d+)(?P<ext>\.[A-Za-z0-9]+)$")
+
+
+def iteration_series(files: Iterable[str]) -> dict[str, list[int]]:
+    """Numbered image files that form a series -> {template: sorted numbers}.
+
+    `iter_0010.png`, `iter_0050.png` give `{"iter_{:04d}.png": [10, 50]}`; `template.format(k)` is the file of
+    iteration k. Zero-padded numbers keep their width, so a series is recognised however it is named. Only a
+    pattern with at least two numbers counts: a lone `seed3.png` is not an iteration."""
+    found: dict[str, set[int]] = {}
+    for f in files:
+        m = _NUMBERED.match(f)
+        if not m:
+            continue
+        num = m["num"]
+        pad = f"0{len(num)}" if num.startswith("0") and len(num) > 1 else ""
+        template = m["pre"].replace("{", "{{").replace("}", "}}") + "{:" + pad + "d}" + m["ext"].replace("{", "{{").replace("}", "}}")
+        found.setdefault(template, set()).add(int(num))
+    return {t: sorted(v) for t, v in sorted(found.items()) if len(v) >= 2}
+
+
+def describe_series(template: str, ks: Sequence[int]) -> str:
+    return f"{template.format(ks[0])} … {template.format(ks[-1])} ({len(ks)} iterations)"
+
+
 ROLE_KEYS = {
     "reconstruction": ("recon", "restored", "output", "estimate", "x_hat", "xhat"),
     "reference": ("ground_truth", "gt", "reference", "clean", "target"),
@@ -144,6 +170,9 @@ class VisualSpec:
     mode: str = "image"
     kernel: Optional[str] = None
     rows: list[str] = field(default_factory=list)
+    iteration: Optional[int] = None  # the estimate shown is the iterate after this many iterations
+    iterations: list[int] = field(default_factory=list)  # one row per iteration (and a final row when `final_row`)
+    recomputed: bool = False  # panel stamps are scored from the shown images, not read from the logged metrics
     grid: list[int] = field(default_factory=list)  # [rows, cols] when the method panels are wrapped into a grid
     title: Optional[str] = None
     panels: list[dict[str, Any]] = field(default_factory=list)  # title, path, kind[, row]
@@ -160,7 +189,12 @@ class VisualSpec:
         if self.mode == "error" and self.error_vmax is not None:
             parts.append(f"Error maps show |luminance(x) − luminance(x_ref)| on a shared scale [0, {self.error_vmax:.3g}] "
                          f"(99th percentile of all method panels).")
-        if self.rows:
+        if self.iterations:
+            parts.append("Rows: estimate after k = " + ", ".join(map(str, self.iterations))
+                         + (" iterations, then the final reconstruction." if "final" in self.rows else " iterations."))
+        elif self.iteration is not None:
+            parts.append(f"Estimate after {self.iteration} iterations.")
+        elif self.rows:
             parts.append("Rows: " + ", ".join(self.rows) + ".")
         names = [p["title"] for p in self.panels if not p.get("row")] + \
                 list(dict.fromkeys(p["title"] for p in self.panels if p.get("row")))
@@ -168,7 +202,8 @@ class VisualSpec:
             names = [p["title"] for p in self.panels]
         parts.append(("Row by row, left to right: " if self.grid else "Left to right: ") + ", ".join(names) + ".")
         if any(p.get("kind") == "method" for p in self.panels):
-            parts.append("Numbers on panels are the shown image's own PSNR / SSIM as logged.")
+            parts.append("Numbers on panels are PSNR / SSIM computed from the shown image against the ground truth."
+                         if self.recomputed else "Numbers on panels are the shown image's own PSNR / SSIM as logged.")
         return " ".join(parts)
 
 
@@ -184,6 +219,18 @@ def metric_subtitle(metrics: Mapping[str, Any], defs: Mapping[str, Mapping[str, 
     return " / ".join(parts)
 
 
+def _scored_subtitle(img: np.ndarray, ref: Optional[Panel], defs: Mapping[str, Mapping[str, Any]], names: Sequence[str],
+                     convention: Optional["MetricConvention"]) -> str:
+    """The stamp of an image scored here: PSNR and SSIM against the reference, for the names asked for."""
+    if ref is None or not ({"psnr", "ssim"} & set(names)):
+        return ""
+    try:
+        p, s = score(img, ref.image, convention or MetricConvention())
+    except ValueError:
+        return ""
+    return metric_subtitle({"psnr": p, "ssim": s}, defs, names)
+
+
 def build_panels(
     records: Sequence[Mapping[str, Any]],
     image: str,
@@ -195,9 +242,13 @@ def build_panels(
     kernel: Optional[str] = None,
     titles: Optional[Mapping[str, str]] = None,
     data_range: Optional[float] = None,
+    recompute: bool = False,
+    convention: Optional["MetricConvention"] = None,
 ) -> tuple[list[Panel], Optional[Panel], list[str]]:
     """One panel per record (in the given order) plus optional reference/measurement panels found
-    in the first record directory that has them. The measurement panel is inserted first with
+    in the first record directory that has them. With `recompute` the metric stamps are scored from each shown image
+    against the reference (under `convention`) instead of read from the run's logged metrics: the logged numbers
+    describe the final estimate, so they would be wrong on an intermediate iterate. The measurement panel is inserted first with
     kind="measurement"; an optional kernel/PSF thumbnail is appended with kind="kernel".
     Returns (panels, reference_panel, problems)."""
     problems: list[str] = []
@@ -236,8 +287,12 @@ def build_panels(
         if p is None or not p.is_file():
             problems.append(f"{title}: {image!r} missing" + (f" in {d}" if d else " (no artifacts_dir)"))
             continue
-        panels.append(Panel(title, load_image(p, data_range), metric_subtitle(r.get("metrics", {}), defs, metrics), str(p),
-                            run_id=r.get("run_id"), seed=r.get("seed"), instance=r.get("instance")))
+        img = load_image(p, data_range)
+        if recompute:
+            sub = _scored_subtitle(img, ref_panel, defs, metrics, convention)
+        else:
+            sub = metric_subtitle(r.get("metrics", {}), defs, metrics)
+        panels.append(Panel(title, img, sub, str(p), run_id=r.get("run_id"), seed=r.get("seed"), instance=r.get("instance")))
     if meas_panel is not None:
         panels.insert(0, meas_panel)
     shapes = {p.image.shape[:2] for p in panels} | ({ref_panel.image.shape[:2]} if ref_panel else set())
@@ -678,11 +733,20 @@ def make_visual(
     auto_roles: bool = True,
     data_range: Optional[float] = None,
     style: Optional["plotstyle.PlotStyle"] = None,
+    iter_template: Optional[str] = None,
+    iteration: Optional[int] = None,
+    iterations: Optional[Sequence[int]] = None,
+    final_row: bool = False,
+    recompute: bool = False,
     **view: Any,
 ) -> VisualResult:
     """Everything from records to a finished lab-style figure. File roles are guessed from the artifact
     folders when not given (`auto_roles`). Raises ValueError when nothing can be drawn. `view` carries the layout and
-    text options of `reconstruction_figure` (see `VIEW_KEYS`): title, font sizes, panel titles, grid, kernel corner."""
+    text options of `reconstruction_figure` (see `VIEW_KEYS`): title, font sizes, panel titles, grid, kernel corner.
+
+    Intermediate iterations: `iter_template` (from `iteration_series`, e.g. `iter_{:04d}.png`) with `iteration=k`
+    shows the estimate after k iterations in place of `image`; `iterations=[10, 50, 200]` makes one row per
+    iteration (`final_row` appends the final `image`). Their stamps are scored from the images (`recompute`)."""
     from .. import aggregate as agg
 
     pool = agg.completed(records)
@@ -701,6 +765,14 @@ def make_visual(
         reference = reference if reference is not None else roles["reference"]
         measurement = measurement if measurement is not None else roles["measurement"]
         kernel = kernel if kernel is not None else roles["kernel"]
+    if (iteration is not None or iterations) and not iter_template:
+        raise ValueError("an iteration needs `iter_template`, the numbered file pattern")
+    if iterations and rows:
+        raise ValueError("iteration rows replace the row key; use one or the other")
+    if iteration is not None and iter_template:
+        image, recompute = iter_template.format(int(iteration)), True
+    if iterations:
+        recompute = True
     if image is None:
         raise ValueError("no image files found in the artifact folders")
     if mode == "error" and reference is None:
@@ -719,7 +791,30 @@ def make_visual(
         insts = {r.get("instance") for r in chosen if r.get("instance") is not None}
         if len(insts) == 1:
             instance = insts.pop()
-    if rows:
+    conv = convention_for(chosen) if recompute else None
+    ks = sorted({int(k) for k in iterations}) if iterations else []
+    if ks:
+        # a one-shot method saved no iterates: leave it out of every row (and say so) rather than show it in one only
+        def has_iterates(r: Mapping[str, Any]) -> bool:
+            d = r.get("artifacts_dir")
+            return bool(d) and any((Path(d).expanduser() / iter_template.format(k)).is_file() for k in ks)
+
+        chosen_all, chosen = chosen, [r for r in chosen if has_iterates(r)]
+        if not chosen:
+            raise ValueError("no selected run saved any of the requested iterations (" + iter_template + ")")
+        dropped = list(dict.fromkeys(plain_label(r.get("method_label")) or str(r.get("method")) for r in chosen_all if r not in chosen))
+        aux, ref_panel, problems = build_panels(chosen, image, defs, metrics=metrics, reference=reference,
+                                                measurement=measurement, kernel=kernel, data_range=data_range)
+        problems = [pr for pr in problems if pr.startswith(("reference", "measurement", "kernel"))]
+        problems += [f"{m}: no iterates saved, left out of the iteration rows" for m in dropped]
+        row_specs = []
+        for label, f in [(f"$k = {k}$", iter_template.format(k)) for k in ks] + ([("final", image)] if final_row else []):
+            panels, rp, probs = build_panels(chosen, f, defs, metrics=metrics, reference=reference, data_range=data_range,
+                                             recompute=True, convention=conv)
+            problems += [f"{label}: {pr}" for pr in probs if not pr.startswith(("reference", "measurement", "kernel", "image sizes"))]
+            row_specs.append(PanelRow([p for p in panels if p.kind == "method"], label, reference=rp))
+        panel_arg = row_specs
+    elif rows:
         aux, ref_panel, problems = build_panels(shown[:1], image, defs, reference=reference, measurement=measurement, kernel=kernel,
                                                 data_range=data_range)
         problems = [pr for pr in problems if pr.startswith(("reference", "measurement", "kernel"))]
@@ -729,17 +824,19 @@ def make_visual(
         panel_arg: Any = row_specs
     else:
         aux, ref_panel, problems = build_panels(chosen, image, defs, metrics=metrics, reference=reference,
-                                                measurement=measurement, kernel=kernel, data_range=data_range)
+                                                measurement=measurement, kernel=kernel, data_range=data_range,
+                                                recompute=recompute, convention=conv)
         panel_arg = [p for p in aux if p.kind == "method"]
     problems += fairness
     meas_panel = next((p for p in aux if p.kind == "measurement"), None)
     ker_panel = next((p for p in aux if p.kind == "kernel"), None)
-    if not panel_arg or (rows and not any(r.panels for r in panel_arg)):
+    if not panel_arg or ((rows or ks) and not any(r.panels for r in panel_arg)):
         raise ValueError("no method panels could be built: " + "; ".join(problems))
     fig, spec = reconstruction_figure(panel_arg, reference=ref_panel, measurement=meas_panel, kernel=ker_panel, mode=mode,
                                       zoom=zoom, zoom_fraction=zoom_fraction, zoom_center=zoom_center, crop_box=crop_box,
                                       width=width, style=style, **view)
     spec.experiment, spec.dataset, spec.instance, spec.seed, spec.image = experiment, dataset, instance, seed, image
+    spec.iteration, spec.iterations, spec.recomputed = (int(iteration) if iteration is not None else None), ks, recompute
     return VisualResult(fig, spec, problems, omitted)
 
 

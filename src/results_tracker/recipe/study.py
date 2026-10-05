@@ -82,6 +82,7 @@ class Study:
     description: str = ""
     imports: list[str] = field(default_factory=list)  # modules to import first (they register their classes)
     feeds: list[str] = field(default_factory=list)  # paper asset labels this study produces the data for (tab:main, fig:beta)
+    snapshots: list[int] = field(default_factory=list)  # iterations whose estimate is saved as iter_<k>.png (needs artifacts_dir)
 
     # ------------------------------------------------------------------ (de)serialisation
 
@@ -386,6 +387,8 @@ def run_study(
 
     methods: dict[str, Method] = {cls.key: cls() for cls in method_classes.values()}
     for m in methods.values():
+        m.snapshots = tuple(sorted({int(k) for k in study.snapshots}))
+    for m in methods.values():
         if not m.supports(problem):
             raise ValueError(f"method {m.key!r} does not support problem {problem.key!r}")
     dataset = problem.dataset_name(study.split)
@@ -447,7 +450,9 @@ def run_study(
                 run_dir = root / study.name / job.method / arm_dir / _slug(job.condition) / f"seed{job.seed}" / inst.name
                 run_dir.mkdir(parents=True, exist_ok=True)
                 if est.ok and with_images:
-                    problem.save_artifacts(run_dir, inst, est)
+                    wanted = set(m for m in methods[job.method].snapshots)
+                    est_iter = {k: v for k, v in est.iterates.items() if int(k) in wanted}
+                    problem.save_artifacts(run_dir, inst, replace(est, iterates=est_iter))
                 (run_dir / "diagnostics.json").write_text(json.dumps(
                     {"method": job.method, "arm": job.arm, "config": _to_plain(full_config), "ok": est.ok,
                      "message": est.message,

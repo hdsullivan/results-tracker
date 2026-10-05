@@ -40,12 +40,17 @@ class Estimate:
     """What a method returns: the estimate on the reference grid plus free-form diagnostics.
 
     Numeric scalars in `diagnostics` (iterations, a final step size) become metrics of the run; anything
-    else (curves, arrays) is written to the run's artifacts folder as `diagnostics.json` and never parsed."""
+    else (curves, arrays) is written to the run's artifacts folder as `diagnostics.json` and never parsed.
+
+    `iterates` maps an iteration number to the estimate after that many iterations (0 = the starting point).
+    A method fills in the ones in `Method.snapshots` -- the iterations the study asked to keep -- and the
+    runner saves them as `iter_<k>.png` next to `reconstruction.png`, where the Visual page finds them."""
 
     x: Any = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
     ok: bool = True
     message: str = ""
+    iterates: dict[int, Any] = field(default_factory=dict)
 
     @classmethod
     def failed(cls, message: str) -> "Estimate":
@@ -64,6 +69,9 @@ class Method(ABC):
     citation: ClassVar[str] = ""  # BibTeX key; rendered as label~\cite{key} in LaTeX tables
     is_baseline: ClassVar[bool] = False
     knobs: ClassVar[Sequence[Knob]] = ()
+    #: Iterations whose estimate the study wants saved (`Study.snapshots`); the runner sets it before `reconstruct`.
+    #: An iterative method puts `x_k` into `Estimate.iterates[k]` for each k in it that it reaches.
+    snapshots: Sequence[int] = ()
 
     @classmethod
     def space(cls) -> KnobSpace:
@@ -150,19 +158,36 @@ class Problem(ABC):
             warnings.warn("matplotlib is not installed; recipe artifacts are not written", stacklevel=2)
             return
         run_dir.mkdir(parents=True, exist_ok=True)
-        lo, hi = self.display_range if self.display_range else (None, None)
         for name, arr in (("reconstruction", estimate.x), ("ground_truth", instance.reference),
                           ("measurement", instance.measurement)):
-            img = self.view(arr) if arr is not None else None
-            if img is None:
-                continue
-            if getattr(img, "ndim", 2) == 3:
-                if lo is not None:
-                    img = (img - lo) / (hi - lo)
-                img = img.clip(0, 1)
-                mpimg.imsave(str(run_dir / f"{name}.png"), img)
-            else:
-                mpimg.imsave(str(run_dir / f"{name}.png"), img, cmap="gray", vmin=lo, vmax=hi)
+            self.save_image(run_dir / f"{name}.png", arr)
+        self.save_iterates(run_dir, estimate.iterates)
+
+    def save_image(self, path: Path, arr: Any) -> None:
+        """One array as a PNG through `view` and the shared display range (a no-op when `view` has nothing to show)."""
+        from matplotlib import image as mpimg
+
+        img = self.view(arr) if arr is not None else None
+        if img is None:
+            return
+        lo, hi = self.display_range if self.display_range else (None, None)
+        if getattr(img, "ndim", 2) == 3:
+            if lo is not None:
+                img = (img - lo) / (hi - lo)
+            img = img.clip(0, 1)
+            mpimg.imsave(str(path), img)
+        else:
+            mpimg.imsave(str(path), img, cmap="gray", vmin=lo, vmax=hi)
+
+    def save_iterates(self, run_dir: Path, iterates: Mapping[int, Any]) -> None:
+        """`iter_<k>.png` per saved iterate, zero-padded to the widest k so the files sort and the Visual page can
+        recognise the series."""
+        if not iterates:
+            return
+        width = max(4, len(str(max(iterates))))
+        run_dir.mkdir(parents=True, exist_ok=True)
+        for k, arr in iterates.items():
+            self.save_image(run_dir / f"iter_{int(k):0{width}d}.png", arr)
 
 
 # --------------------------------------------------------------------------- registry

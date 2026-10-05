@@ -64,6 +64,14 @@ Rules:
   with the message in `notes`, and the grid carries on.
 - Numeric scalars in `diagnostics` become metrics of the run (`iterations`, `sigma_hat`). Anything
   else (curves, arrays) is written to the run's `diagnostics.json` and never parsed.
+- An iterative method can expose its intermediate estimates. The study lists the iterations it wants
+  (`"snapshots": [0, 10, 50, 200]`, needs an artifacts folder); the runner sets `self.snapshots` before
+  `reconstruct`, and the method puts `x_k` into `Estimate(..., iterates={k: x_k})` for each k in it that it
+  reaches (0 is the starting point). They are saved as `iter_0010.png` etc. beside `reconstruction.png`, and
+  the Visual page's "Intermediate iterations" selector shows one of them, or several as rows. A method that
+  never iterates simply leaves `iterates` empty. Snapshots are saved when a setting runs: a setting already
+  logged is skipped on a resume, so ask for them before the first run. A problem that overrides
+  `save_artifacts` should call `self.save_iterates(run_dir, estimate.iterates)`.
 - `supports(problem)` lets a method decline a problem (a 2-D denoiser given a volume).
 
 ## 2. Implementing a problem
