@@ -236,3 +236,100 @@ def test_a_pinned_figure_keeps_its_axis_range_and_the_project_style(engine):
     ax = fig.axes[0]
     assert ax.get_xlim() == (1.0, 12.0) and ax.get_ylim() == (28.0, 29.5)
     assert ax.lines[0].get_color() == "#00aa00" and ax.get_yticklabels()[0].get_fontsize() == 21
+
+
+# --------------------------------------------------------------------------- per-view legend
+
+def test_legend_overlay_is_per_view_and_never_stored_on_the_project():
+    base = PlotStyle(legend=9)
+    s = base.with_legend({"names": {"A": "Ours", "B": " "}, "loc": "right", "size": 14})
+    assert s.legend_label("A") == "Ours" and s.legend_label("B") == "B"  # a blank name keeps the original
+    assert s.legend == 14 and s.legend_loc == "right"
+    assert s.to_dict() == {"legend": 14.0}  # the size travels as the style's own field, names and loc never
+    assert "legend_loc" not in s.to_dict() and "legend_names" not in s.to_dict()
+    assert base.with_legend({"loc": "nowhere", "size": "big"}) == base  # invalid options are ignored
+    assert base.with_legend(None) is base
+    assert s.screen().legend_names == s.legend_names  # survives the scaling to screen units
+
+
+def test_legend_overlay_words_and_places_both_renderers():
+    pytest.importorskip("plotly")
+    from results_tracker.export.figures import sweep_figure
+    from results_tracker.ui import charts
+
+    series = {("A",): [(1, stat(1.0)), (2, stat(2.0))], ("B",): [(1, stat(3.0)), (2, stat(2.5))]}
+    kw = dict(band=False, by=["method"])
+
+    def texts(style):
+        leg = sweep_figure(series, "k", "psnr", style=style, **kw).axes[0].get_legend()
+        return None if leg is None else [t.get_text() for t in leg.get_texts()], leg
+
+    names, leg = texts(PlotStyle().with_legend({"names": {"A": "Ours"}, "size": 15}))
+    assert names == ["Ours", "B"] and leg.get_texts()[0].get_fontsize() == 15
+    assert texts(PlotStyle().with_legend({"loc": "hidden"}))[0] is None
+    for loc in ps.LEGEND_LOCS[1:-1]:  # every placement draws; right/bottom stay outside the axes
+        names, leg = texts(PlotStyle().with_legend({"loc": loc}))
+        assert names == ["A", "B"], loc
+    fig = sweep_figure(series, "k", "psnr", style=PlotStyle().with_legend({"loc": "right"}), **kw)
+    fig.canvas.draw()
+    ax = fig.axes[0]
+    assert ax.get_legend().get_window_extent().x0 >= ax.get_window_extent().x1  # outside, to the right
+
+    style = PlotStyle().with_legend({"names": {"A": "Ours"}, "loc": "upper left", "size": 15})
+    web = charts.sweep_lines(series, "k", "psnr", style=style, by=["method"])
+    assert [t.name for t in web.data if t.mode == "lines+markers"] == ["Ours", "B"]
+    assert web.layout.legend.orientation == "v" and web.layout.legend.xanchor == "left"
+    assert web.layout.legend.font.size == pytest.approx(15 * ps.SCREEN_FONT_SCALE)
+    assert charts.sweep_lines(series, "k", "psnr", style=PlotStyle().with_legend({"loc": "hidden"}),
+                              by=["method"]).layout.showlegend is False
+    right = charts.sweep_lines(series, "k", "psnr", style=PlotStyle().with_legend({"loc": "right"}), by=["method"])
+    assert right.layout.legend.xref == "container" and right.layout.margin.r > 25
+    bottom = charts.sweep_lines(series, "k", "psnr", style=PlotStyle().with_legend({"loc": "bottom"}), by=["method"])
+    assert bottom.layout.legend.yref == "container" and bottom.layout.margin.b > 60
+
+
+def test_a_pinned_figure_keeps_its_legend(engine):
+    from results_tracker.export.paper import figure_drawer
+
+    for k in (2, 5):
+        for method in ("ours", "base"):
+            log_run("sweep-k", project="p", experiment_type="sweep", method=method, dataset="Set12", seed=0,
+                    config={"K": k}, metrics={"psnr": 28 + k * 0.1}, engine=engine, git_commit=None)
+    spec = {"kind": "sweep-figure", "experiment": "sweep-k",
+            "options": {"param": "K", "metric": "psnr", "by": ["method"],
+                        "legend": {"names": {"ours": "Proposed"}, "loc": "lower left", "size": 13}}}
+    from results_tracker.api import query_runs, run_records
+    recs = run_records(query_runs(project="p", engine=engine)[0], engine=engine)
+    fig = figure_drawer(spec, recs, {"psnr": {"higher_is_better": True}}, style=None)()
+    leg = fig.axes[0].get_legend()
+    assert sorted(t.get_text() for t in leg.get_texts()) == ["Proposed", "base"]
+    assert leg.get_texts()[0].get_fontsize() == 13
+
+
+# --------------------------------------------------------------------------- marker and line per series
+
+def test_each_series_can_have_its_own_marker_and_line():
+    pytest.importorskip("plotly")
+    from results_tracker.export.figures import sweep_figure
+    from results_tracker.ui import charts
+
+    style = PlotStyle().with_look("markers", "B", "star").with_look("lines", "B", "dotted").with_look("lines", "A", "none")
+    assert style.to_dict() == {"markers": {"B": "star"}, "lines": {"B": "dotted", "A": "none"}}
+    assert ps.from_dict(style.to_dict()) == style
+    assert ps.from_dict({"markers": {"B": "heart"}, "lines": "x"}).markers == {}  # unknown names are dropped
+    assert style.with_look("markers", "B", None).markers == {}
+    # neither marker nor line would draw nothing: the line stays
+    assert PlotStyle().with_look("markers", "A", "none").with_look("lines", "A", "none").line_names(["A"])["A"] == "solid"
+    # the ninth series still wraps to a new shape unless it is overridden
+    many = [f"m{i}" for i in range(9)]
+    assert PlotStyle().marker_names(many)["m8"] != PlotStyle().marker_names(many)["m0"]
+
+    series = {("A",): [(1, stat(1.0)), (2, stat(2.0))], ("B",): [(1, stat(3.0)), (2, stat(2.5))]}
+    ax = sweep_figure(series, "k", "psnr", style=style, by=["method"]).axes[0]
+    by_label = {ln.get_label(): ln for ln in ax.lines}
+    a, b = by_label["A"], by_label["B"]
+    assert (a.get_linestyle(), a.get_marker()) == ("None", "o")
+    assert (b.get_linestyle(), b.get_marker()) == (":", "*")
+    web = {t.name: t for t in charts.sweep_lines(series, "k", "psnr", style=style, by=["method"]).data if t.name}
+    assert web["A"].mode == "markers" and web["A"].marker.symbol == "circle"
+    assert web["B"].mode == "lines+markers" and web["B"].line.dash == "dot" and web["B"].marker.symbol == "star"

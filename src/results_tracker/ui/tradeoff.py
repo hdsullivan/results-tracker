@@ -90,7 +90,7 @@ def render() -> None:
                + f" · {y_metric} against {x_metric}, one series per {series_key}" + (f", points along {path_key}" if path_key else "")
                + (f" · hollow: {', '.join(map(str, sorted(hollow)))}" if hollow else ""))
     ctl = chart_controls(project, style, key=f"to_scatter:{experiment}", series=list(pts), series_key=series_key,
-                         series_labels=labels, x_name=x_metric, y_name=y_metric, log_x=log_x)
+                         series_labels=labels, lines=True, x_name=x_metric, y_name=y_metric, log_x=log_x)
     st.plotly_chart(tradeoff_scatter(pts, x_metric, y_metric, x_fmt=fmt_for(defs, x_metric), y_fmt=fmt_for(defs, y_metric),
                                      xlabel=xlabel_default, ylabel=ylabel_default, log_x=log_x, hollow=hollow, labels=labels,
                                      style=ctl.style, series_key=series_key, xlim=ctl.xlim, ylim=ctl.ylim),

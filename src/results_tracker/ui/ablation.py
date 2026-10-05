@@ -130,7 +130,7 @@ def _section(project, experiment, group, rows, recs, all_recs, metrics, metric, 
     effects = agg.ablation_effects(rows, metric, hib_m)
     ctl = None
     if variants and base_row is not None:
-        ctl = chart_controls(project, style, key=f"abl_deltas:{experiment}:{slug}", series_key=VARIANT_KEY, colors=False,
+        ctl = chart_controls(project, style, key="abl_deltas:{experiment}:{slug}", series_key=VARIANT_KEY, colors=False, legend=False,
                              series=[r.label for r in variants], x_name=f"Δ {metric}", y_name=None)
         fig = ablation_deltas(
             [r.label for r in variants],

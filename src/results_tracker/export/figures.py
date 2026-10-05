@@ -27,6 +27,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 import matplotlib
 import matplotlib.ticker
 from matplotlib.figure import Figure
+from matplotlib.transforms import ScaledTranslation
 
 from .. import aggregate as agg
 from .. import plotstyle
@@ -121,7 +122,7 @@ def style_map(names: Sequence[Any], emphasize: Iterable[Any] = (), style: Option
     s = plotstyle.resolve(style)
     emph = set(emphasize)
     hues = s.colors_for(names)
-    wraps = s.wrap_of(names)
+    marks, dashes = s.marker_names(names), s.line_names(names)
     out: dict[Any, dict[str, Any]] = {}
     for n in names:
         if n in out:
@@ -129,11 +130,10 @@ def style_map(names: Sequence[Any], emphasize: Iterable[Any] = (), style: Option
         i = len(out)
         primary = n in emph
         lw, ms = s.weights(primary)
-        wrap = wraps[n]
         out[n] = dict(
             color=hues[n],
-            linestyle=LINESTYLES[wrap % len(LINESTYLES)],
-            marker=MARKERS[wrap % len(MARKERS)],
+            linestyle=plotstyle.LINE_CHOICES[dashes[n]][1],
+            marker=plotstyle.MARKER_CHOICES[marks[n]][1],
             fill=hues[n],
             hatch=BAR_HATCHES[i % len(BAR_HATCHES)],
             linewidth=lw,
@@ -213,15 +213,36 @@ def set_axis_labels(ax, xlabel: Optional[str] = None, ylabel: Optional[str] = No
         ax.set_ylabel(ylabel, fontsize=s.label_size(ylabel))
 
 
-def top_legend(ax, ncol: Optional[int] = None):
-    """Bordered legend in one row above the axes (lab's add_top_legend), so it never covers data."""
+def draw_legend(ax, style: Optional[PlotStyle] = None, ncol: Optional[int] = None, loc: str = "top"):
+    """The figure's legend, placed and worded as the style's per-view overlay says (`PlotStyle.with_legend`):
+    `loc` is the figure's own default when the overlay does not choose. "top" is the lab's bordered one-row
+    legend above the axes, so it never covers data; any other `LEGEND_LOCS` entry or matplotlib loc also works."""
+    s = plotstyle.resolve(style)
+    place = s.legend_loc or ("top" if loc == "above" else loc)
     handles, labels = ax.get_legend_handles_labels()
-    if not handles:
+    if not handles or place == "hidden":
         return None
-    leg = ax.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=ncol or len(handles),
-                    borderaxespad=0.0, handlelength=2.0, columnspacing=1.2)
+    labels = [s.legend_label(t) for t in labels]
+    if place == "top":
+        leg = ax.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=ncol or len(handles),
+                        borderaxespad=0.0, handlelength=2.0, columnspacing=1.2)
+    elif place == "bottom":
+        # clear the tick labels and the x-axis title, whatever their sizes
+        drop = (s.tick + s.axis_label) * 1.5 + 8
+        leg = ax.legend(handles, labels, loc="upper center", ncol=ncol or len(handles), borderaxespad=0.0,
+                        bbox_to_anchor=(0.5, 0), handlelength=2.0, columnspacing=1.2,
+                        bbox_transform=ax.transAxes + ScaledTranslation(0, -drop / 72, ax.figure.dpi_scale_trans))
+    elif place == "right":
+        leg = ax.legend(handles, labels, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+    else:
+        leg = ax.legend(handles, labels, loc=place)
     _thin_legend(leg)
     return leg
+
+
+def top_legend(ax, ncol: Optional[int] = None, style: Optional[PlotStyle] = None):
+    """Bordered legend in one row above the axes (lab's add_top_legend), so it never covers data."""
+    return draw_legend(ax, style, ncol=ncol, loc="top")
 
 
 def _tight_ylim(ax, los: Sequence[float], his: Sequence[float], zero_based: bool = False) -> None:
@@ -298,7 +319,7 @@ def sweep_figure(
             if mark_best and best is not None and best in dict(series):
                 bx = best if numeric else str(best)
                 # ring the chosen value: larger hollow marker in the series colour over the filled point
-                ax.plot([bx], [dict(series)[best].mean], marker=st["marker"], markersize=st["markersize"] + 4.5,
+                ax.plot([bx], [dict(series)[best].mean], marker=st["marker"] or "o", markersize=st["markersize"] + 4.5,
                         markerfacecolor="none", markeredgecolor=st["color"], markeredgewidth=1.2, linestyle="none", zorder=6)
                 if len(groups) == 1:
                     ax.axvline(bx, color=GUIDE_COLOR, linestyle=":", linewidth=1.0, zorder=0)
@@ -310,10 +331,7 @@ def sweep_figure(
         set_axis_labels(ax, xlabel or param, ylabel or metric, style=style)
         _apply_limits(ax, xlim, ylim)
         if len(groups) > 1:
-            if legend_loc == "top":
-                top_legend(ax)
-            else:
-                _thin_legend(ax.legend(loc=legend_loc))
+            draw_legend(ax, style, loc=legend_loc)
         if caption:
             panel_label(ax, caption, style=style)
         return fig
@@ -357,7 +375,7 @@ def curves_figure(
                 ax.fill_between(xs, [m - s for m, s in zip(cs.mean, cs.std)], [m + s for m, s in zip(cs.mean, cs.std)],
                                 color=st["color"], alpha=0.15, linewidth=0)
             ax.plot(xs, cs.mean, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"], zorder=st["zorder"],
-                    marker="o" if len(xs) <= 25 else None, markersize=st["markersize"], label=name)
+                    marker=st["marker"] if len(xs) <= 25 else None, markersize=st["markersize"], label=name)
         if guide is not None:
             ax.axhline(guide, color=GUIDE_COLOR, linestyle=":", linewidth=1.0, zorder=0)
         if log_y:
@@ -366,7 +384,7 @@ def curves_figure(
         set_axis_labels(ax, xlabel, ylabel or curve, style=style)
         _apply_limits(ax, xlim, ylim)
         if len(groups) > 1:
-            top_legend(ax, ncol=min(len(groups), 4))
+            draw_legend(ax, style, ncol=min(len(groups), 4))
         if caption:
             panel_label(ax, caption, style=style)
         return fig
@@ -416,7 +434,7 @@ def tradeoff_figure(
                         yerr=[p.y.std for p in pts] if any(p.y.std > 0 for p in pts) else None,
                         color=st["color"], ecolor=st["color"], elinewidth=0.6, capsize=1.5, capthick=0.6,
                         linestyle="none" if (open_marker or len(pts) == 1) else st["linestyle"], linewidth=st["linewidth"],
-                        marker="o", markersize=st["markersize"] + 1, markerfacecolor="none" if open_marker else st["color"],
+                        marker=st["marker"] or ("o" if (open_marker or len(pts) == 1) else ""), markersize=st["markersize"] + 1, markerfacecolor="none" if open_marker else st["color"],
                         markeredgecolor=st["color"], markeredgewidth=1.0, zorder=st["zorder"], label=(labels or {}).get(name, str(name)))
             if annotate and len(pts) > 1:
                 for p in pts:
@@ -427,7 +445,7 @@ def tradeoff_figure(
         set_axis_labels(ax, xlabel or x_metric, ylabel or y_metric, style=style)
         _apply_limits(ax, xlim, ylim)
         if len(names) > 1:
-            top_legend(ax, ncol=min(len(names), 4))
+            draw_legend(ax, style, ncol=min(len(names), 4))
         if caption:
             panel_label(ax, caption, style=style)
         return fig
@@ -606,10 +624,7 @@ def comparison_figure(
             ax.set_ylim(float(ylim[0]), float(ylim[1]))
         else:
             _tight_ylim(ax, los, his, zero_based)
-        if legend_loc in ("above", "top"):
-            top_legend(ax, ncol=n if n <= 4 else (n + 1) // 2)
-        else:
-            _thin_legend(ax.legend(loc=legend_loc, ncol=min(n, 3)))
+        draw_legend(ax, style, ncol=n if n <= 4 else (n + 1) // 2, loc=legend_loc)
         if caption:
             panel_label(ax, caption, style=style)
         return fig

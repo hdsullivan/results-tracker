@@ -150,7 +150,7 @@ def render() -> None:
     numeric_x = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in xs_all)
     ctl = chart_controls(project, style, key=f"sweep_lines:{experiment}", series=list(series), series_key=" / ".join(group_by),
                          orders=() if numeric_x else [(param_x, xs_all)],
-                         x_name=param_x if numeric_x else None, y_name=metric, log_x=log_x)
+                         lines=True, x_name=param_x if numeric_x else None, y_name=metric, log_x=log_x)
     st.plotly_chart(sweep_lines(series, param_x, metric, fmt, unit, log_x=log_x, band=show_band, best_by_group=best,
                                 style=ctl.style, by=group_by, xlim=ctl.xlim, ylim=ctl.ylim),
                     theme=None, width="stretch")

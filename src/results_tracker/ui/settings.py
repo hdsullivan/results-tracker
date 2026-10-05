@@ -317,7 +317,7 @@ def _plots(project: str) -> None:
 
     if style.order:
         st.markdown("**Label order**")
-        st.caption("Set on a chart's *Axes, label order and colours* expander; this is what is stored.")
+        st.caption("Set on a chart's *Axes, label order, colours, line styles and legend* expander; this is what is stored.")
         rows = [[key, ", ".join(values)] for key, values in sorted(style.order.items())]
         st.markdown(generic_html(["grouping key", "order its values are drawn in"], rows, left_cols=2,
                                  caption="Values not listed follow at the end, in their natural order."),

@@ -27,6 +27,18 @@ PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "#7
 MARKERS = ("circle", "square", "diamond", "triangle-up")          # plotly names
 MPL_MARKERS = ("o", "s", "D", "^")                                 # the same shapes for matplotlib
 MPL_LINESTYLES = ("-", "--", ":", "-.")
+LINE_NAMES = ("solid", "dashed", "dotted", "dash-dot")             # the same dashes, by name
+
+#: Every marker / line a series can be given by name: name -> (plotly, matplotlib); None / "" draws nothing.
+MARKER_CHOICES = {
+    "circle": ("circle", "o"), "square": ("square", "s"), "diamond": ("diamond", "D"),
+    "triangle-up": ("triangle-up", "^"), "triangle-down": ("triangle-down", "v"), "cross": ("cross", "P"),
+    "x": ("x", "X"), "star": ("star", "*"), "none": (None, ""),
+}
+LINE_CHOICES = {
+    "solid": ("solid", "-"), "dashed": ("dash", "--"), "dotted": ("dot", ":"), "dash-dot": ("dashdot", "-."),
+    "none": (None, "none"),
+}
 
 # Print points -> on-screen sizes. Fonts read at browser distance; lines and markers are drawn in CSS
 # pixels rather than points, so they need their own factors (marker_size 3.5 pt -> 7 px).
@@ -54,6 +66,9 @@ def limits(field: str) -> tuple[float, float]:
 #: `derived.kernel_type`), or by one of these pseudo-keys for an axis that is not a record field.
 VARIANT_KEY = "variant"      # the ablation chart's bars (one per config variant)
 PSEUDO_KEYS = (VARIANT_KEY,)
+
+#: Where a legend can go. "top" is the lab's default (one row above the axes); "hidden" draws none.
+LEGEND_LOCS = ("top", "bottom", "right", "upper right", "upper left", "lower right", "lower left", "hidden")
 
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -94,6 +109,41 @@ class PlotStyle:
     #: grouping key (`method`, `dataset`, `config.K`, `derived.kernel_type`) -> the order its values are
     #: drawn in, as text. Values not listed follow, in their natural order.
     order: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: Per-view legend overlay, set by `with_legend` and never stored on the project (like an axis range, it
+    #: describes one chart): displayed label -> replacement text, and a position from `LEGEND_LOCS`.
+    #: The legend's size is not here: `with_legend` writes it into `legend`.
+    #: series name (`series_key`) -> a name from `MARKER_CHOICES` / `LINE_CHOICES`; anything not listed keeps the
+    #: default for its palette wrap (circles, solid for the first eight series)
+    markers: Mapping[str, str] = field(default_factory=dict)
+    lines: Mapping[str, str] = field(default_factory=dict)
+    legend_names: Mapping[str, str] = field(default_factory=dict)
+    legend_loc: Optional[str] = None
+
+    # ----------------------------------------------------------------- legend (per view)
+
+    def with_legend(self, spec: Optional[Mapping[str, Any]]) -> "PlotStyle":
+        """This style with one chart's legend options applied: `{"names": {...}, "loc": ..., "size": pt}`.
+        Anything absent or invalid leaves the project's value; never raises (a pinned asset's options are
+        hand-editable)."""
+        if not isinstance(spec, Mapping):
+            return self
+        out = self
+        names = spec.get("names")
+        if isinstance(names, Mapping):
+            out = replace(out, legend_names={str(k): str(v) for k, v in names.items() if str(v).strip()})
+        if spec.get("loc") in LEGEND_LOCS:
+            out = replace(out, legend_loc=spec["loc"])
+        try:
+            size = float(spec["size"]) if spec.get("size") not in (None, "") else None
+        except (TypeError, ValueError):
+            size = None
+        if size is not None:
+            out = replace(out, legend=_clamp(size, *SIZE_LIMITS))
+        return out
+
+    def legend_label(self, text: Any) -> str:
+        """What a legend prints for the series shown as `text`."""
+        return self.legend_names.get(str(text)) or str(text)
 
     # ----------------------------------------------------------------- sizes
 
@@ -157,6 +207,41 @@ class PlotStyle:
                 merged.pop(key, None)
         return replace(self, colors=merged)
 
+    # ----------------------------------------------------------------- markers and lines
+
+    def marker_names(self, names: Iterable[Any]) -> dict[Any, str]:
+        """Marker per series: its override, else the shape its palette wrap gets."""
+        names = list(names)
+        wraps = self.wrap_of(names)
+        return {n: (self.markers.get(series_key(n)) if self.markers.get(series_key(n)) in MARKER_CHOICES
+                    else MARKERS[w % len(MARKERS)]) for n, w in wraps.items()}
+
+    def line_names(self, names: Iterable[Any]) -> dict[Any, str]:
+        """Line per series: its override, else the dash its palette wrap gets. A series with neither marker nor
+        line would vanish, so it is drawn solid."""
+        names = list(names)
+        wraps, marks = self.wrap_of(names), self.marker_names(names)
+        out = {}
+        for n, w in wraps.items():
+            got = self.lines.get(series_key(n))
+            got = got if got in LINE_CHOICES else LINE_NAMES[w % len(LINE_NAMES)]
+            out[n] = "solid" if got == "none" and marks[n] == "none" else got
+        return out
+
+    def default_looks(self, names: Iterable[Any]) -> tuple[dict[Any, str], dict[Any, str]]:
+        """(markers, lines) these series get with no override -- what "reset" restores."""
+        bare = replace(self, markers={}, lines={})
+        return bare.marker_names(names), bare.line_names(names)
+
+    def with_look(self, kind: str, name: Any, value: Optional[str]) -> "PlotStyle":
+        """This style with one series' marker (`kind="markers"`) or line (`"lines"`) set, or cleared for None."""
+        merged = dict(getattr(self, kind))
+        if value:
+            merged[series_key(name)] = value
+        else:
+            merged.pop(series_key(name), None)
+        return replace(self, **{kind: merged})
+
     # ----------------------------------------------------------------- order
 
     def ordered(self, key: Optional[str], values: Sequence[Any]) -> list[Any]:
@@ -185,6 +270,10 @@ class PlotStyle:
         out: dict[str, Any] = {f: getattr(self, f) for f in NUMERIC_FIELDS if getattr(self, f) != getattr(d, f)}
         if self.colors:
             out["colors"] = dict(self.colors)
+        if self.markers:
+            out["markers"] = dict(self.markers)
+        if self.lines:
+            out["lines"] = dict(self.lines)
         if self.order:
             out["order"] = {k: list(v) for k, v in self.order.items()}
         return out
@@ -219,6 +308,10 @@ def from_dict(data: Optional[Mapping[str, Any]]) -> PlotStyle:
     colors = data.get("colors")
     if isinstance(colors, Mapping):
         kw["colors"] = {str(k): str(v).lower() for k, v in colors.items() if _HEX.match(str(v))}
+    for kind, choices in (("markers", MARKER_CHOICES), ("lines", LINE_CHOICES)):
+        got = data.get(kind)
+        if isinstance(got, Mapping):
+            kw[kind] = {str(k): str(v) for k, v in got.items() if str(v) in choices}
     order = data.get("order")
     if isinstance(order, Mapping):
         kw["order"] = {str(k): [str(x) for x in v] for k, v in order.items() if isinstance(v, (list, tuple)) and v}

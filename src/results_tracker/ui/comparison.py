@@ -121,7 +121,7 @@ def render() -> None:
                          series=[r[0] for r in ct.rows], series_key=group_by[0],
                          series_labels=agg.method_labels(pool) if group_by[0] == "method" else None,
                          orders=[(" / ".join(group_by[1:]), [" / ".join(map(str, r[1:])) for r in ct.rows])] if len(group_by) > 1 else (),
-                         x_name=None, y_name=metric)
+                         legend=False, x_name=None, y_name=metric)
     fig = comparison_bars(ct, metric, fmt=fmt_for(defs, metric), unit=defs.get(metric, {}).get("unit", ""),
                           style=ctl.style, ylim=ctl.ylim)
     st.plotly_chart(fig, theme=None, width="stretch")
@@ -226,7 +226,7 @@ def _per_instance(pool: list[dict], recs: list[dict], defs: dict, metrics: list[
     fmt = fmt_for(defs, metric)
     unit = defs.get(metric, {}).get("unit", "")
     dist = chart_controls(project, style, key=f"cmp_dist:{experiment}", series=shown, series_key="method",
-                          series_labels=labels, x_name=None, y_name=metric)
+                          series_labels=labels, legend=False, x_name=None, y_name=metric)
     st.plotly_chart(distribution_box({m: table.values(m) for m in shown}, metric, ylabel=f"{metric} ({unit})" if unit else metric,
                                      labels=labels, style=dist.style, ylim=dist.ylim),
                     theme=None, width="stretch")

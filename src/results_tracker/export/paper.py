@@ -127,6 +127,7 @@ def figure_drawer(spec: Mapping[str, Any], records: Sequence[Record], defs: Mapp
     default_ylabel = (f"{metric} ({unit})" if unit else metric) if metric else ""
     width = _width(o.get("width", "single"))
     xlim, ylim = plotstyle.parse_limits(o.get("xlim")), plotstyle.parse_limits(o.get("ylim"))
+    style = plotstyle.resolve(style).with_legend(o.get("legend"))
     common = dict(width=width, height=o.get("height"), style=style, caption=o.get("panel_label") or None)
 
     if kind == "sweep-figure":
@@ -237,6 +238,7 @@ def render_asset(spec: Mapping[str, Any], records: Sequence[Record], defs: Mappi
     default_ylabel = (f"{metric} ({unit})" if unit else metric) if metric else ""
     width = _width(o.get("width", "double" if kind == "visual-figure" else "single"))
     xlim, ylim = plotstyle.parse_limits(o.get("xlim")), plotstyle.parse_limits(o.get("ylim"))
+    style = plotstyle.resolve(style).with_legend(o.get("legend"))
     env = o.get("env", "table")
     env = None if env in (None, "none", "tabular") else env
 
