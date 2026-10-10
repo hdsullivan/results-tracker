@@ -22,7 +22,8 @@ from ..export.visual import ZOOM_FRACTION, guess_roles, list_image_files, make_v
 from ..plotstyle import VARIANT_KEY
 from .common import (
     active_where, completed_or_explain, db_path, engine_for, hib_map, keyed, keyed_multiselect, keyed_radio, keyed_selectbox, load_catalog,
-    load_metric_defs, load_records, load_records_union, pin_to_paper, reset_on_experiment_change, select_extra_experiments,
+    load_metric_defs, load_records, load_records_union, opened_asset_caption, pin_to_paper, reset_on_experiment_change,
+    select_extra_experiments,
     select_project_experiment, sidebar_db, sidebar_filter, where_cli, where_text,
 )
 from .styling import chart_controls, sidebar_plot_style
@@ -211,10 +212,7 @@ def render() -> None:
     if extra:
         st.caption(f"Pooling **{experiment}** with {', '.join(f'**{e}**' for e in extra)} ({len(recs_all)} runs); "
                    "use `experiment` or a distinguishing config key as a row or column key.")
-    opened = st.session_state.get("opened_asset")
-    if opened and opened[1] == experiment:
-        st.caption(f"Asset **`{opened[0]}`** opened from the Paper page: the options below are the ones it was pinned with. "
-                   "Change them and pin again to update it.")
+    opened_asset_caption()
     if active_where():
         st.caption(f"Filtered to {len(recs_all)} runs: {where_text()} · on the command line add `{where_cli()}`; "
                    "the filter is recorded in the provenance comment of every table.")

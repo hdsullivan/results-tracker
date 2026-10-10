@@ -394,8 +394,10 @@ results-tracker recipe run studies/deblurring-ema-beta-pending.json --db paper/r
 <h3>6.2 The Paper page</h3>
 <p>Assets in manuscript order with kind, status (planned / draft / final / dropped), experiments, filter, <strong>Data</strong>
   (completed / planned runs of the studies that feed it) and <strong>State</strong>: never exported, current, or <em>stale</em> when
-  runs were added or replaced since the export. Edit status, order, label, caption and notes; <em>Open in …</em> restores the view
-  on the page that configures it; <em>Write to directory</em> or a zip renders everything.</p>
+  runs were added or replaced since the export. Edit status, order, label, caption and notes; <em>Open in …</em> reopens the asset on
+  the page that made it (Comparison, Sweep, Ablation, Visual, Curves, Trade-off) with every control as pinned, so you continue editing
+  there and pin again to update it; a second link opens the LaTeX and figure-file options on the Export page, which a re-pin from the
+  analysis page keeps; <em>Write to directory</em> or a zip renders everything.</p>
 <pre><code>results-tracker export paper -p adaptive-pnp -o paper/assets      # tables/, figures/, data/, preamble.tex, MANIFEST.json
 results-tracker asset list -p adaptive-pnp                         # which assets are stale
 results-tracker asset set fig:beta -p adaptive-pnp --status final</code></pre>

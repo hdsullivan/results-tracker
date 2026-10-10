@@ -14,10 +14,10 @@ from ..export.figures import figure_bytes, figure_tex, to_grayscale_png, tradeof
 from .charts import tradeoff_scatter
 from .common import (
     active_where, completed_or_explain, excluded_note, fmt_for, keyed, keyed_multiselect, keyed_selectbox, load_metric_defs,
-    load_records_union, pin_to_paper, reset_on_experiment_change, select_extra_experiments, select_project_experiment,
+    load_records_union, opened_asset_caption, pin_to_paper, reset_on_experiment_change, select_extra_experiments, select_project_experiment,
     sidebar_db, sidebar_filter, where_text,
 )
-from .styling import chart_controls, sidebar_plot_style
+from .styling import chart_controls, chart_prefill, sidebar_plot_style
 from .tables import figure_caption_html, generic_html
 
 NONE = "— none —"
@@ -32,9 +32,7 @@ def prefill_from_asset(a) -> dict[str, Any]:
                      ("to_xlabel", "xlabel"), ("to_ylabel", "ylabel")):
         if opt in o and o[opt] is not None:
             pre[key] = o[opt]
-    for axis in ("xlim", "ylim"):
-        if o.get(axis):
-            pre[f"to_scatter:{a.experiment}_{axis}"] = ",".join(str(v) for v in o[axis])
+    pre.update(chart_prefill(f"to_scatter:{a.experiment}", o))
     pre["to_path"] = o.get("path") or NONE
     return pre
 
@@ -45,6 +43,7 @@ def render() -> None:
     project, experiment = select_project_experiment()
     if experiment is None:
         return
+    opened_asset_caption()
     reset_on_experiment_change("to_", experiment)
     extra = select_extra_experiments(project, experiment)
     recs = load_records_union(project, [experiment, *extra])

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import streamlit as st
 
@@ -32,7 +32,8 @@ from ..export.visual import (
     panel_metrics_rows,
     view_options,
 )
-from .common import (active_where, completed_or_explain, load_metric_defs, load_records, pin_to_paper, select_project_experiment,
+from .common import (active_where, completed_or_explain, keyed, keyed_choice, keyed_multiselect, keyed_selectbox, load_metric_defs,
+                     load_records, opened_asset_caption, pin_to_paper, reset_on_experiment_change, select_project_experiment,
                      sidebar_db, sidebar_filter)
 from .styling import plot_style, sidebar_plot_style
 from .tables import figure_caption_html, generic_html
@@ -41,8 +42,59 @@ NONE = "— none —"
 MAX_COMPARISONS = 6
 
 
-def _opt(files: list[str], role_file: Optional[str]) -> int:
-    return ([NONE] + files).index(role_file) if role_file in files else 0
+def prefill_from_asset(a) -> dict[str, Any]:
+    """Widget states for a `visual-figure` asset: the sidebar's sample, files and metrics, and the controls of
+    comparison 1 (a pinned figure is one comparison). Defaults are spelled out where the asset stores none, so a
+    figure pinned without a title or grid comes back without one."""
+    o = dict(a.options or {})
+    pre: dict[str, Any] = {"vis_n": 1}
+    for key, opt in (("vis_dataset", "dataset"), ("vis_image", "image"), ("vis_metrics", "metrics")):
+        if o.get(opt) is not None:
+            pre[key] = o[opt]
+    for key, opt in (("vis_ref", "reference"), ("vis_meas", "measurement"), ("vis_kernel", "kernel"), ("vis_iter", "iter_template")):
+        pre[key] = o.get(opt) or NONE
+    pre["vis_dr"] = float(o["data_range"]) if o.get("data_range") else 0.0
+    k = "vis1_"
+    iterations = list(o.get("iterations") or [])
+    pre[k + "ishow"] = "One iteration" if o.get("iteration") is not None else "Several iterations (rows)" if iterations else "Final"
+    if o.get("iteration") is not None:
+        pre[k + "iter"] = o["iteration"]
+    if iterations:
+        pre[k + "iters"] = iterations
+        pre[k + "ifinal"] = bool(o.get("final_row"))
+    pre[k + "rows"] = o.get("rows") or NONE
+    for key, opt in (("instance", "instance"), ("seed", "seed"), ("methods", "methods"), ("width", "width")):
+        if o.get(opt) is not None:
+            pre[k + key] = o[opt]
+    pre[k + "mode"] = "Error maps" if o.get("mode") == "error" else "Reconstruction"
+    pre[k + "zoom"] = bool(o.get("zoom", True))
+    box = o.get("crop_box")
+    pre[k + "explicit"] = bool(box)
+    if box:
+        for key, v in zip(("cx", "cy", "cw", "ch"), box):
+            pre[k + key] = int(v)
+    if o.get("zoom_fraction"):
+        pre[k + "zf"] = float(o["zoom_fraction"])
+    if o.get("zoom_center"):
+        pre[k + "zx"], pre[k + "zy"] = (float(v) for v in o["zoom_center"])
+    # titles, fonts and layout: `view_options` stores only what was set, 0 and blank are the defaults
+    pre[k + "title"] = str(o.get("title") or "")
+    for key, opt in (("tsize", "title_size"), ("psize", "panel_size"), ("ssize", "stamp_size")):
+        pre[k + key] = float(o.get(opt) or 0.0)
+    for orig, new in (o.get("panel_titles") or {}).items():
+        pre[f"{k}name_{orig}"] = str(new)
+    pre[k + "cols"] = int(o.get("cols") or 0)
+    pre[k + "refgrid"] = bool(o.get("ref_in_grid"))
+    pre[k + "kcorner"] = o.get("kernel_corner") or KERNEL_CORNERS[0]
+    pre[k + "ksize"] = float(o.get("kernel_size") or KERNEL_INSET_SIZE)
+    return pre
+
+
+def _clamp(key: str, upper: int) -> None:
+    """Keep a remembered or restored count within the widget's range (fewer panels than when it was pinned)."""
+    for d in (st.session_state, st.session_state.get("_prefill") or {}):
+        if key in d and int(d[key] or 0) > upper:
+            d[key] = upper
 
 
 def render() -> None:
@@ -51,6 +103,7 @@ def render() -> None:
     project, experiment = select_project_experiment(prefer="comparison")
     if experiment is None:
         return
+    opened_asset_caption()
     recs = load_records(project, experiment)
     defs = load_metric_defs()
     if not recs:
@@ -69,10 +122,11 @@ def render() -> None:
         return
 
     # --- shared across every comparison on the page: the sample set and the image files/roles
+    reset_on_experiment_change("vis", experiment)  # `vis_*` sidebar and `vis<i>_*` comparison controls restart
     with st.sidebar:
         st.markdown("**Sample**")
         datasets = list(dict.fromkeys(r["dataset"] for r in with_art if r.get("dataset") is not None))
-        dataset = st.selectbox("Dataset", datasets) if datasets else None
+        dataset = keyed_selectbox("Dataset", datasets, "vis_dataset", datasets[0]) if datasets else None
         pool = [r for r in with_art if dataset is None or r.get("dataset") == dataset]
         files = list_image_files(r["artifacts_dir"] for r in pool)
         if not files:
@@ -80,28 +134,28 @@ def render() -> None:
             return
         st.markdown("**Images**")
         roles = guess_roles(files)
-        image = st.selectbox("Reconstruction file", files, index=files.index(roles["reconstruction"]) if roles["reconstruction"] in files else 0)
-        reference = st.selectbox("Ground truth", [NONE] + files, index=_opt(files, roles["reference"]))
-        measurement = st.selectbox("Measurement / input", [NONE] + files, index=_opt(files, roles["measurement"]))
-        kernel = st.selectbox("Kernel / PSF thumbnail", [NONE] + files, index=_opt(files, roles["kernel"]))
+        image = keyed_selectbox("Reconstruction file", files, "vis_image", roles["reconstruction"] or files[0])
+        reference = keyed_selectbox("Ground truth", [NONE] + files, "vis_ref", roles["reference"] or NONE)
+        measurement = keyed_selectbox("Measurement / input", [NONE] + files, "vis_meas", roles["measurement"] or NONE)
+        kernel = keyed_selectbox("Kernel / PSF thumbnail", [NONE] + files, "vis_kernel", roles["kernel"] or NONE)
         series = iteration_series(files)
         iter_template = None
         if series:
-            iter_template = st.selectbox("Intermediate iterations", [NONE] + list(series),
-                                         format_func=lambda t: t if t == NONE else describe_series(t, series[t]),
-                                         help="Numbered image files saved during the run (iter_0010.png, iter_0050.png, ...). "
-                                              "Each comparison can show one iteration, or several as rows.")
+            iter_template = keyed_selectbox("Intermediate iterations", [NONE] + list(series), "vis_iter", NONE,
+                                            format_func=lambda t: t if t == NONE else describe_series(t, series[t]),
+                                            help="Numbered image files saved during the run (iter_0010.png, iter_0050.png, ...). "
+                                                 "Each comparison can show one iteration, or several as rows.")
             iter_template = None if iter_template == NONE else iter_template
         metrics_all = agg.metric_names(pool)
-        metrics = st.multiselect("Metrics stamped on panels", metrics_all, default=[m for m in metrics_all if m in ("psnr", "ssim")][:2])
-        dr = st.number_input("Data range for float images", min_value=0.0, value=0.0, step=1.0,
-                             help="Divisor applied to float/32-bit images, the same for every panel. 0 = images are already in [0, 1]. "
-                                  "8-/16-bit images are scaled by their dtype range automatically.")
+        metrics = keyed_multiselect("Metrics stamped on panels", metrics_all, "vis_metrics", [m for m in metrics_all if m in ("psnr", "ssim")][:2])
+        dr = keyed(st.number_input, "Data range for float images", "vis_dr", 0.0, min_value=0.0, step=1.0,
+                   help="Divisor applied to float/32-bit images, the same for every panel. 0 = images are already in [0, 1]. "
+                        "8-/16-bit images are scaled by their dtype range automatically.")
         data_range = dr if dr > 0 else None
         st.markdown("**Page**")
-        n_comparisons = int(st.number_input("Comparisons stacked on this page", min_value=1, max_value=MAX_COMPARISONS, value=1, step=1,
-                                            help="Each comparison picks its own methods, instance, seed, mode and zoom; "
-                                                 "they share the dataset, image files and metrics above."))
+        n_comparisons = int(keyed(st.number_input, "Comparisons stacked on this page", "vis_n", 1, min_value=1, max_value=MAX_COMPARISONS,
+                                  step=1, help="Each comparison picks its own methods, instance, seed, mode and zoom; "
+                                               "they share the dataset, image files and metrics above."))
 
     sidebar_plot_style(project)  # the panel titles and metric stamps of the figure below follow the same style
     shared = dict(recs=recs, defs=defs, project=project, experiment=experiment, dataset=dataset, pool=pool, image=image,
@@ -123,20 +177,21 @@ def _view_controls(key: str, pool_sel, methods, reference, measurement, kernel, 
     shown = ([("Reference", "Reference")] if reference else []) + ([("Measurement", "Measurement")] if measurement else []) + \
             [(t, t) for t in dict.fromkeys(plain_label(r.get("method_label")) or str(r.get("method")) for r in chosen)]
     with st.expander("Titles, fonts and layout", expanded=False):
-        title = st.text_input("Figure title", key=key + "title", help="Printed above the whole figure. Empty = none.")
+        title = keyed(st.text_input, "Figure title", key + "title", "", help="Printed above the whole figure. Empty = none.")
         f1, f2, f3 = st.columns(3)
-        title_size = f1.number_input("Title size (pt)", 0.0, 72.0, 0.0, 0.5, key=key + "tsize",
-                                     help="0 = two points above the panel titles.")
-        panel_size = f2.number_input("Panel title size (pt)", 0.0, 72.0, 0.0, 0.5, key=key + "psize",
-                                     help="Panel titles and row labels. 0 = the project's base size (sidebar, Plot style).")
-        stamp_size = f3.number_input("Metric stamp size (pt)", 0.0, 72.0, 0.0, 0.5, key=key + "ssize",
-                                     help="The PSNR / SSIM numbers on the panels. 0 = the project's base size.")
+        size_kw = dict(min_value=0.0, max_value=72.0, step=0.5)
+        title_size = keyed(f1.number_input, "Title size (pt)", key + "tsize", 0.0, **size_kw,
+                           help="0 = two points above the panel titles.")
+        panel_size = keyed(f2.number_input, "Panel title size (pt)", key + "psize", 0.0, **size_kw,
+                           help="Panel titles and row labels. 0 = the project's base size (sidebar, Plot style).")
+        stamp_size = keyed(f3.number_input, "Metric stamp size (pt)", key + "ssize", 0.0, **size_kw,
+                           help="The PSNR / SSIM numbers on the panels. 0 = the project's base size.")
         names: dict[str, str] = {}
         if shown:
             st.caption("Panel titles (leave as is to keep the name)")
             cols = st.columns(min(3, len(shown)))
             for n, (orig, default) in enumerate(shown):
-                new = cols[n % len(cols)].text_input(orig, value=default, key=f"{key}name_{orig}")
+                new = keyed(cols[n % len(cols)].text_input, orig, f"{key}name_{orig}", default)
                 if new.strip() and new != orig:
                     names[orig] = new
         n_panels = len(chosen) + (2 if reference and measurement else 1 if reference or measurement else 0)
@@ -144,10 +199,11 @@ def _view_controls(key: str, pool_sel, methods, reference, measurement, kernel, 
         ref_in_grid = False
         if not row_key:
             g1, g2 = st.columns(2)
-            grid_cols = int(g1.number_input("Panel columns", 0, max(n_panels, 1), 0, 1, key=key + "cols",
-                                            help="0 = one row of panels. 2 with six panels = three rows by two columns."))
-            ref_in_grid = g2.checkbox("Reference and measurement in the grid", value=False, key=key + "refgrid", disabled=not grid_cols,
-                                      help="Off: they stay as a block on the left. On: they are the first cells of the grid.")
+            _clamp(key + "cols", max(n_panels, 1))
+            grid_cols = int(keyed(g1.number_input, "Panel columns", key + "cols", 0, min_value=0, max_value=max(n_panels, 1), step=1,
+                                  help="0 = one row of panels. 2 with six panels = three rows by two columns."))
+            ref_in_grid = keyed(g2.checkbox, "Reference and measurement in the grid", key + "refgrid", False, disabled=not grid_cols,
+                                help="Off: they stay as a block on the left. On: they are the first cells of the grid.")
             if grid_cols:
                 cells = n_panels if ref_in_grid else len(chosen)
                 st.caption(f"{-(-cells // grid_cols)} rows × {grid_cols} columns")
@@ -156,9 +212,9 @@ def _view_controls(key: str, pool_sel, methods, reference, measurement, kernel, 
         corner, ksize = "upper right", KERNEL_INSET_SIZE
         if kernel and measurement:
             k1, k2 = st.columns(2)
-            corner = k1.selectbox("Kernel thumbnail corner", list(KERNEL_CORNERS), key=key + "kcorner",
+            corner = keyed_choice(k1.selectbox, "Kernel thumbnail corner", list(KERNEL_CORNERS), key + "kcorner", KERNEL_CORNERS[0],
                                   help="Where the kernel sits on the Measurement panel.")
-            ksize = k2.slider("Kernel thumbnail size", 0.1, 0.5, KERNEL_INSET_SIZE, 0.05, key=key + "ksize")
+            ksize = keyed(k2.slider, "Kernel thumbnail size", key + "ksize", KERNEL_INSET_SIZE, min_value=0.1, max_value=0.5, step=0.05)
         elif kernel:
             st.caption("The kernel thumbnail is drawn on the Measurement panel; pick a measurement image to see it.")
     return dict(title=title, title_size=title_size, panel_size=panel_size, stamp_size=stamp_size, panel_titles=names,
@@ -171,54 +227,55 @@ def _comparison(i: int, *, recs, defs, project, experiment, dataset, pool, image
     key = f"vis{i}_"
     iteration, iterations, final_row = None, [], False
     if iter_template:
-        shows = st.radio("Reconstruction shown", ["Final", "One iteration", "Several iterations (rows)"], horizontal=True,
-                         key=key + "ishow", help="The final reconstruction is the file chosen in the sidebar. Iterations come from "
-                                                 "the numbered files; their PSNR / SSIM are computed from the images.")
+        shows = keyed_choice(st.radio, "Reconstruction shown", ["Final", "One iteration", "Several iterations (rows)"], key + "ishow", "Final",
+                             horizontal=True, help="The final reconstruction is the file chosen in the sidebar. Iterations come from "
+                                                   "the numbered files; their PSNR / SSIM are computed from the images.")
         if shows == "One iteration":
-            iteration = st.select_slider("Iteration k", options=iter_values, key=key + "iter")
+            iteration = keyed_choice(st.select_slider, "Iteration k", iter_values, key + "iter", iter_values[0])
         elif shows == "Several iterations (rows)":
             spread = sorted({iter_values[round(j * (len(iter_values) - 1) / 3)] for j in range(4)})
-            iterations = st.multiselect("Iterations (one row each)", iter_values, default=spread, key=key + "iters")
-            final_row = st.checkbox("Add the final reconstruction as the last row", value=True, key=key + "ifinal")
+            iterations = keyed_multiselect("Iterations (one row each)", iter_values, key + "iters", spread)
+            final_row = keyed(st.checkbox, "Add the final reconstruction as the last row", key + "ifinal", True)
     rows_by_iteration = bool(iterations)
     s1, s2, s3 = st.columns(3)
     row_opts = [NONE] + [k for k in ("seed", "instance") if len({r.get(k) for r in pool}) > 1] + \
                [f"config.{k}" for k in agg.varying_config_keys(pool)]
-    row_key = s1.selectbox("Rows (one per value)", row_opts, key=key + "rows", help="e.g. seed, or a config key like K",
+    row_key = keyed_choice(s1.selectbox, "Rows (one per value)", row_opts, key + "rows", NONE, help="e.g. seed, or a config key like K",
                            disabled=rows_by_iteration)
     row_key = None if (row_key == NONE or rows_by_iteration) else row_key
     instances = sorted({r["instance"] for r in pool if r.get("instance") is not None}, key=str)
-    instance = s2.selectbox("Instance", instances, key=key + "instance") if instances and row_key != "instance" else None
+    instance = keyed_choice(s2.selectbox, "Instance", instances, key + "instance", instances[0]) if instances and row_key != "instance" else None
     pool_i = [r for r in pool if instance is None or r.get("instance") == instance]
     seeds = sorted({r["seed"] for r in pool_i if r.get("seed") is not None})
-    seed = s3.selectbox("Seed", seeds, key=key + "seed") if seeds and row_key != "seed" else None
+    seed = keyed_choice(s3.selectbox, "Seed", seeds, key + "seed", seeds[0]) if seeds and row_key != "seed" else None
     pool_sel = [r for r in pool_i if seed is None or r.get("seed") == seed]
 
     method_names = list(dict.fromkeys(r["method"] for r in agg.select_runs(pool_sel)))
-    methods = st.multiselect("Methods (baselines first, proposed last)", method_names, default=method_names, key=key + "methods")
+    methods = keyed_multiselect("Methods (baselines first, proposed last)", method_names, key + "methods", method_names)
 
     c1, c2, c3, c4 = st.columns(4)
-    mode = c1.radio("Mode", ["Reconstruction", "Error maps"], horizontal=True, disabled=reference is None, key=key + "mode")
-    zoom = c2.checkbox("Zoom inset", value=True, disabled=mode == "Error maps", key=key + "zoom")
-    width = c3.selectbox("Width", ["double", "single"], help="double = IEEE text width 7.16 in", key=key + "width")
+    mode = keyed_choice(c1.radio, "Mode", ["Reconstruction", "Error maps"], key + "mode", "Reconstruction", horizontal=True,
+                        disabled=reference is None)
+    zoom = keyed(c2.checkbox, "Zoom inset", key + "zoom", True, disabled=mode == "Error maps")
+    width = keyed_choice(c3.selectbox, "Width", ["double", "single"], key + "width", "double", help="double = IEEE text width 7.16 in")
     gray = c4.checkbox("Grayscale preview", value=False, key=key + "gray")
 
     zoom_fraction, zoom_center, crop_box = ZOOM_FRACTION, (0.5, 0.5), None
     if zoom and mode == "Reconstruction":
         with st.expander("Zoom box (identical on every panel)", expanded=False):
-            explicit = st.checkbox("Explicit pixel box", value=False, key=key + "explicit")
+            explicit = keyed(st.checkbox, "Explicit pixel box", key + "explicit", False)
             if explicit:
                 k1, k2, k3, k4 = st.columns(4)
-                cx = k1.number_input("x", 0, 4096, 30, key=key + "cx")
-                cy = k2.number_input("y", 0, 4096, 30, key=key + "cy")
-                cw = k3.number_input("width", 2, 4096, 32, key=key + "cw")
-                ch = k4.number_input("height", 2, 4096, 32, key=key + "ch")
+                cx = keyed(k1.number_input, "x", key + "cx", 30, min_value=0, max_value=4096)
+                cy = keyed(k2.number_input, "y", key + "cy", 30, min_value=0, max_value=4096)
+                cw = keyed(k3.number_input, "width", key + "cw", 32, min_value=2, max_value=4096)
+                ch = keyed(k4.number_input, "height", key + "ch", 32, min_value=2, max_value=4096)
                 crop_box = (int(cx), int(cy), int(cw), int(ch))
             else:
                 k1, k2, k3 = st.columns(3)
-                zoom_fraction = k1.slider("Box side (fraction of short side)", 0.1, 0.6, ZOOM_FRACTION, 0.05, key=key + "zf")
-                zoom_center = (k2.slider("Centre x", 0.0, 1.0, 0.5, 0.05, key=key + "zx"),
-                               k3.slider("Centre y", 0.0, 1.0, 0.5, 0.05, key=key + "zy"))
+                zoom_fraction = keyed(k1.slider, "Box side (fraction of short side)", key + "zf", ZOOM_FRACTION, min_value=0.1, max_value=0.6, step=0.05)
+                zoom_center = (keyed(k2.slider, "Centre x", key + "zx", 0.5, min_value=0.0, max_value=1.0, step=0.05),
+                               keyed(k3.slider, "Centre y", key + "zy", 0.5, min_value=0.0, max_value=1.0, step=0.05))
 
     view = _view_controls(key, pool_sel, methods, reference, measurement, kernel, row_key)
     try:

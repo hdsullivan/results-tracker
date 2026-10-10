@@ -334,8 +334,12 @@ the full set of options (captions, labels, std style, widths).
   (`tab:main`, `fig:beta`) and a status (planned / draft / final). The **Paper**
   page lists the assets in manuscript order, says whether each export is still
   *current* or *stale* (runs were added or replaced since), lets you edit status,
-  order, caption and notes, and exports them all. *Open in Export* restores an
-  asset's view so you can change it and pin again.
+  order, caption and notes, and exports them all. *Open in Comparison / Sweep /
+  Ablation / Visual / …* reopens an asset on the page that made it, with every
+  control as pinned, so a figure in progress is edited where it was built and
+  pinning again updates it; *Open in Export* reaches the LaTeX and figure-file
+  options of the kinds that page configures, and those survive a re-pin from the
+  analysis page.
 
 ---
 

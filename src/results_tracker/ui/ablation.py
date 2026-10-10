@@ -19,9 +19,10 @@ from ..export.figures import ablation_figure, figure_bytes, figure_tex, to_grays
 from .. import aggregate as agg
 from ..plotstyle import VARIANT_KEY
 from .charts import ablation_deltas
-from .common import (active_where, completed_or_explain, excluded_note, fmt_for, hib_map, keyed_multiselect, load_metric_defs,
-                     load_records, pin_to_paper, select_project_experiment, sidebar_db, sidebar_filter, where_text)
-from .styling import chart_controls, sidebar_plot_style
+from .common import (active_where, completed_or_explain, excluded_note, fmt_for, hib_map, keyed, keyed_multiselect, keyed_selectbox,
+                     load_metric_defs, load_records, opened_asset_caption, pin_to_paper, reset_on_experiment_change,
+                     select_project_experiment, sidebar_db, sidebar_filter, where_text)
+from .styling import chart_controls, chart_prefill, sidebar_plot_style
 from .run_detail import run_label
 from .tables import ablation_html, figure_caption_html, generic_html
 
@@ -37,12 +38,31 @@ def _slug(group: agg.GroupKey) -> str:
     return re.sub(r"\W+", "_", "-".join(str(v) for v in group)) or "all"
 
 
+def prefill_from_asset(a) -> dict:
+    """Widget states for an `ablation-table` or `ablation-figure` asset. The base run is stored by id and turned into
+    the selector's label once the runs are loaded (`render`); the split value the asset was pinned from is in its
+    filter, so the page shows that one section; its chart ranges go to the first section drawn (`_section`)."""
+    o = dict(a.options or {})
+    pre: dict = {}
+    if o.get("base_run_id") is not None:
+        pre["abl_base_run_id"] = o["base_run_id"]
+    if o.get("ignore_keys") is not None:
+        pre[f"abl_cond:{a.experiment}"] = list(o["ignore_keys"])
+    if o.get("metrics"):
+        pre["abl_metrics"] = list(o["metrics"])
+    if o.get("metric"):
+        pre["abl_metric"] = o["metric"]
+    pre.update(chart_prefill("abl_deltas", o))
+    return pre
+
+
 def render() -> None:
     st.title("Ablation")
     sidebar_db()
     project, experiment = select_project_experiment(prefer="ablation")
     if experiment is None:
         return
+    opened_asset_caption()
     recs = load_records(project, experiment)
     defs = load_metric_defs()
     if not recs:
@@ -53,6 +73,11 @@ def render() -> None:
     if not completed:
         return
     recs = completed
+    reset_on_experiment_change("abl_", experiment)  # the controls restart from the new experiment's defaults
+    pre = st.session_state.get("_prefill") or {}
+    if "abl_base_run_id" in pre:  # an opened asset names its base run by id; the selector by label
+        rid = pre.pop("abl_base_run_id")
+        pre["abl_base"] = next((run_label(r) for r in recs if r.get("run_id") == rid), AUTO)
     metrics_all = agg.metric_names(recs)
     config_keys = [k[len("config."):] for k in agg.grouping_keys(recs) if k.startswith("config.")]
     split_opts = [f for f in SPLIT_FIELDS if len({r.get(f) for r in recs}) > 1]
@@ -60,9 +85,9 @@ def render() -> None:
     with st.sidebar:
         st.markdown("**Ablation**")
         base_opts = {AUTO: None, **{run_label(r): r["run_id"] for r in recs}}
-        base_choice = st.selectbox("Full model (base)", list(base_opts),
-                                   help="Only one run is named here; every other section takes the run carrying the "
-                                        "same ablated settings, so one pick serves them all.")
+        base_choice = keyed_selectbox("Full model (base)", list(base_opts), "abl_base", AUTO,
+                                      help="Only one run is named here; every other section takes the run carrying the "
+                                           "same ablated settings, so one pick serves them all.")
         split = keyed_multiselect("Split by", split_opts, f"abl_split:{experiment}",
                                   ["method"] if "method" in split_opts else [],
                                   help="A separate ablation per value — each with its own full model. Methods are "
@@ -72,8 +97,8 @@ def render() -> None:
             help="Config keys the whole ablation was repeated on (blur kernel, noise level …) rather than settings it "
                  "varies. Every arm pools over them instead of splitting on them. Seeded automatically from whatever "
                  "differs between the runs tagged 'base'; set it by hand when nothing is tagged.")
-        metrics = st.multiselect("Metrics", metrics_all, default=metrics_all)
-        relative = st.checkbox("Show Δ as % of base", value=False)
+        metrics = keyed_multiselect("Metrics", metrics_all, "abl_metrics", metrics_all)
+        relative = keyed(st.checkbox, "Show Δ as % of base", "abl_relative", False)
     style = sidebar_plot_style(project)
 
     if not metrics:
@@ -98,7 +123,7 @@ def render() -> None:
         st.info("No conditions are set, so every config key counts as an ablated setting. If this experiment was "
                 "repeated over a grid (kernel, noise level …), name those keys under **Conditions** in the sidebar.")
 
-    metric = st.selectbox("Metric for the charts", metrics, key="abl_metric")
+    metric = keyed_selectbox("Metric for the charts", metrics, "abl_metric", metrics[0])
     hib = hib_map(defs)
     for i, (group, rows) in enumerate(tables.items()):
         if group:
@@ -130,7 +155,11 @@ def _section(project, experiment, group, rows, recs, all_recs, metrics, metric, 
     effects = agg.ablation_effects(rows, metric, hib_m)
     ctl = None
     if variants and base_row is not None:
-        ctl = chart_controls(project, style, key="abl_deltas:{experiment}:{slug}", series_key=VARIANT_KEY, colors=False, legend=False,
+        chart_key = f"abl_deltas:{experiment}:{slug}"
+        pre = st.session_state.get("_prefill") or {}
+        for k in [k for k in pre if k.startswith("abl_deltas_")]:  # an opened asset's ranges land on the first section drawn
+            pre[chart_key + k[len("abl_deltas"):]] = pre.pop(k)
+        ctl = chart_controls(project, style, key=chart_key, series_key=VARIANT_KEY, colors=False, legend=False,
                              series=[r.label for r in variants], x_name=f"Δ {metric}", y_name=None)
         fig = ablation_deltas(
             [r.label for r in variants],

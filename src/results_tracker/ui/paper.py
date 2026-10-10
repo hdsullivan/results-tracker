@@ -1,5 +1,5 @@
 """Paper page: the pinned assets of a project, in manuscript order, with their status and whether the last
-export still matches the database; edit bookkeeping, open an asset in the Export page, export the paper.
+export still matches the database; edit bookkeeping, open an asset on the page that configures it, export the paper.
 
 Nothing here renders a table or figure by hand: `export.paper.render_paper` regenerates every asset from its
 stored spec, exactly as `results-tracker export paper` does.
@@ -14,7 +14,8 @@ import streamlit as st
 
 from .. import aggregate as agg
 from ..api import delete_asset, list_assets, update_asset
-from ..export.paper import EXPORT_STATUSES, KIND_PAGE, KIND_TITLES, asset_experiments, mark_exported, render_paper, write_paper, zip_paper
+from ..export.paper import (EXPORT_STATUSES, KIND_TITLES, asset_experiments, mark_exported, pages_for_kind, render_paper, write_paper,
+                            zip_paper)
 from ..export.paper import staleness as asset_staleness
 from .common import (db_path, engine_for, fmt_timestamp as _fmt_ts, keyed, keyed_selectbox, load_records, load_records_union,
                      page_url, select_project, sidebar_db)
@@ -88,10 +89,11 @@ def _asset_detail(a, project: str, engine) -> None:
     state, detail = asset_staleness(a, load_records_union(project, asset_experiments(a)))
     st.caption(f"{KIND_TITLES.get(a.kind, a.kind)} of **{' + '.join(asset_experiments(a))}**"
                + (f" with filter {agg.where_text(a.filters)}" if a.filters else "") + f" · {state}: {detail}")
-    page = KIND_PAGE.get(a.kind, "export")
-    href = page_url(page, project=project, asset=a.label)
-    st.markdown(f'<a href="{href}" target="_self">Open in {page.capitalize()}</a> — restores this asset\'s experiment, filter and options; '
-                "pin again from there to change what it renders.", unsafe_allow_html=True)
+    pages = pages_for_kind(a.kind)
+    links = [f'<a href="{page_url(p, project=project, asset=a.label)}" target="_self">Open in {p.capitalize()}</a>' for p in pages]
+    st.markdown(" · ".join(links) + " — restores this asset's experiment, filter and options; change them there and pin again "
+                "to update it" + (" (Export holds the LaTeX and figure-file options)" if len(pages) > 1 else "") + ".",
+                unsafe_allow_html=True)
     with st.form(key=f"asset_form_{a.label}"):
         c1, c2, c3 = st.columns([1, 1, 2])
         status = c1.selectbox("Status", ["planned", "draft", "final", "dropped"], index=["planned", "draft", "final", "dropped"].index(a.status.value))

@@ -130,6 +130,23 @@ class ChartControls:
                 "legend": self.legend}
 
 
+def chart_prefill(key: str, options: Mapping[str, Any]) -> dict[str, Any]:
+    """Widget states that put a pinned asset's view settings back on the controls of the chart drawn under `key`
+    (`chart_controls(key=...)`): the axis ranges and the legend overlay, i.e. what `limit_options` stored."""
+    pre: dict[str, Any] = {}
+    for axis in ("xlim", "ylim"):
+        if options.get(axis):
+            pre[f"{key}_{axis}"] = ",".join(str(v) for v in options[axis])
+    legend = options.get("legend") or {}
+    if legend.get("loc") in LEGEND_PLACES:
+        pre[f"{key}_leg_loc"] = legend["loc"]
+    if legend.get("size"):
+        pre[f"{key}_leg_size"] = float(legend["size"])
+    for text, new in (legend.get("names") or {}).items():
+        pre[f"{key}_leg_name_{text}"] = str(new)
+    return pre
+
+
 def _range_input(container, label: str, key: str, help_: str) -> Optional[tuple[float, float]]:
     """`lo,hi` for one axis, kept per view in the session (not on the project)."""
     text = keyed(container.text_input, label, key, "", placeholder="auto", help=help_)

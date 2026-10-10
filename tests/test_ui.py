@@ -1521,3 +1521,103 @@ def test_visual_page_iteration_controls(demo_db, tmp_path):
     [r for r in at.radio if r.label == "Reconstruction shown"][0].set_value("Several iterations (rows)").run()
     assert not at.exception and not at.error
     assert "Rows: estimate after k = 1, 5, 20 iterations" in "\n".join(m.value for m in at.markdown)
+
+
+def _open(page: str, label: str, project: str = "demo-paper"):
+    """Follow the Paper page's *Open in …* link: a fresh session of `page` with `?asset=` in the URL."""
+    at = AppTest.from_string(f"from results_tracker.ui import {page}\n{page}.render()\n", default_timeout=30)
+    at.query_params["asset"] = label
+    at.query_params["project"] = project
+    at.run()
+    assert not at.exception, at.exception
+    assert "asset" not in at.query_params and any("opened from the Paper page" in c.value for c in at.caption)
+    return at
+
+
+def test_paper_page_reopens_assets_on_the_pages_that_made_them(demo_db):
+    """Every kind opens on its analysis page with the controls as pinned, so a figure or table in progress is
+    edited where it was made and pinning again updates it; the Export page stays a second home for the kinds it
+    configures (LaTeX options), whose settings survive a re-pin from the analysis page."""
+    from results_tracker import get_asset, save_asset
+
+    # --- comparison table: metrics and the std toggle come back; an Export-only option is kept on re-pin
+    at = _run("comparison")
+    exp_box = [sb for sb in at.sidebar.selectbox if sb.label == "Experiment"][0]
+    exp_box.select([o for o in exp_box.options if o.startswith("main-comparison")][0]).run()
+    at.multiselect(key="cmp_tbl_metrics").set_value(["psnr"]).run()
+    at.checkbox(key="cmp_tbl_std").uncheck().run()
+    at.text_input(key="cmp_pin_label").input("tab:cmp-rt").run()
+    at.button(key="cmp_pin_button").click().run()
+    a = get_asset("demo-paper", "tab:cmp-rt", db=demo_db)
+    assert a.options == {"rows": "method", "cols": "dataset", "metrics": ["psnr"], "std": "none"}
+    save_asset("demo-paper", "tab:cmp-rt", kind=a.kind, experiment=a.experiment, options={**a.options, "font": "small"}, db=demo_db)
+    at = _run("paper")
+    md = "\n".join(m.value for m in at.markdown)
+    assert "Open in Comparison" in md and "Open in Export" in md and "LaTeX and figure-file options" in md
+    at = _open("comparison", "tab:cmp-rt")
+    assert at.multiselect(key="cmp_tbl_rows").value == ["method", "dataset"] and at.multiselect(key="cmp_tbl_metrics").value == ["psnr"]
+    assert not at.checkbox(key="cmp_tbl_std").value and at.text_input(key="cmp_pin_label").value == "tab:cmp-rt"
+    at.checkbox(key="cmp_tbl_std").check().run()
+    assert any("updates the opened asset" in c.value for c in at.caption)
+    at.button(key="cmp_pin_button").click().run()
+    assert not at.exception
+    a = get_asset("demo-paper", "tab:cmp-rt", db=demo_db)
+    assert a.options["std"] == "pm" and a.options["font"] == "small", a.options
+
+    # --- sweep figure: the swept parameter, the lines and the band toggle, plus the chart's y range
+    at = _run("sweep")
+    at.checkbox(key="swp_band").uncheck().run()
+    at.text_input(key="sweep_lines:lambda-sweep_ylim").input("20,40").run()
+    at.button(key="sweep_pin_button").click().run()
+    assert not at.exception
+    a = get_asset("demo-paper", "fig:lambda-sweep", db=demo_db)
+    assert a.kind == "sweep-figure" and a.options["band"] is False and a.options["ylim"] == [20.0, 40.0]
+    at = _open("sweep", "fig:lambda-sweep")
+    assert at.selectbox(key="swp_param").value == a.options["param"] and at.selectbox(key="swp_metric").value == a.options["metric"]
+    assert at.multiselect(key="swp_by").value == a.options["by"] and not at.checkbox(key="swp_band").value
+    assert at.text_input(key="sweep_lines:lambda-sweep_ylim").value == "20.0,40.0"
+    assert at.text_input(key="sweep_pin_label").value == "fig:lambda-sweep"
+
+    # --- ablation figure: metrics, the chart metric, the base run (stored by id) and the section's x range
+    at = _run("ablation")
+    at.multiselect(key="abl_metrics").set_value(["psnr"]).run()
+    pin_kind = [sb for sb in at.selectbox if str(sb.key).startswith("abl_pin_") and str(sb.key).endswith("_kind")][0]
+    slug = pin_kind.key[len("abl_pin_"):-len("_kind")]
+    at.text_input(key=f"abl_deltas:ablation:{slug}_xlim").input("-3,1").run()
+    pin_kind.select("ablation-figure").run()
+    at.button(key=f"abl_pin_{slug}_button").click().run()
+    assert not at.exception
+    labels = [x.label for x in __import__("results_tracker").list_assets("demo-paper", db=demo_db) if x.kind == "ablation-figure"]
+    a = get_asset("demo-paper", labels[0], db=demo_db)
+    assert a.options["xlim"] == [-3.0, 1.0] and isinstance(a.options["base_run_id"], int)
+    assert a.filters == {} and slug == "all"  # one method only: nothing to split, so no section filter
+    at = _open("ablation", a.label)
+    assert at.selectbox(key="abl_metric").value == "psnr"  # a figure asset carries its chart metric, not the table's list
+    assert at.selectbox(key="abl_base").value != "auto (run tagged 'base', else most common config)"
+    assert at.text_input(key=f"abl_deltas:ablation:{slug}_xlim").value == "-3.0,1.0"
+    assert at.text_input(key=f"abl_pin_{slug}_label").value == a.label
+
+    # --- visual figure: sample, files, methods, zoom box and the title / grid controls
+    at = _run("visual")
+    at.multiselect(key="vis1_methods").set_value(["PnP-BM3D", "Ours"]).run()
+    at.text_input(key="vis1_title").set_value("Motion blur").run()
+    at.number_input(key="vis1_cols").set_value(2).run()
+    at.slider(key="vis1_zf").set_value(0.4).run()
+    at.text_input(key="vis1_pin_label").input("fig:vis-rt").run()
+    at.button(key="vis1_pin_button").click().run()
+    assert not at.exception
+    a = get_asset("demo-paper", "fig:vis-rt", db=demo_db)
+    assert a.kind == "visual-figure" and a.options["methods"] == ["PnP-BM3D", "Ours"] and a.options["title"] == "Motion blur"
+    assert a.options["cols"] == 2 and a.options["zoom_fraction"] == 0.4
+    at = _open("visual", "fig:vis-rt")
+    assert at.selectbox(key="vis_dataset").value == a.options["dataset"] and at.selectbox(key="vis_image").value == a.options["image"]
+    assert at.selectbox(key="vis_ref").value == a.options["reference"] and at.multiselect(key="vis_metrics").value == a.options["metrics"]
+    assert at.multiselect(key="vis1_methods").value == ["PnP-BM3D", "Ours"] and at.text_input(key="vis1_title").value == "Motion blur"
+    assert at.number_input(key="vis1_cols").value == 2 and at.slider(key="vis1_zf").value == 0.4
+    assert at.text_input(key="vis1_pin_label").value == "fig:vis-rt"
+    body = "\n".join(m.value for m in at.markdown)
+    assert "Left to right: Reference, Measurement, PnP-BM3D [2], Ours" in body or "Row by row" in body
+    at.text_input(key="vis1_title").set_value("Gaussian blur").run()
+    at.button(key="vis1_pin_button").click().run()
+    assert not at.exception
+    assert get_asset("demo-paper", "fig:vis-rt", db=demo_db).options["title"] == "Gaussian blur"

@@ -42,6 +42,18 @@ FIGURE_KINDS = ("sweep-figure", "ablation-figure", "comparison-figure", "visual-
                 "distribution-figure", "panel-figure")
 #: which GUI page configures (and restores) an asset kind; kinds not listed live on the Export page
 KIND_PAGE = {"curves-figure": "curves", "tradeoff-figure": "tradeoff", "distribution-figure": "comparison", "selection-table": "sweep"}
+#: the analysis page an asset kind opens on from the Paper page, to be edited and pinned again. Kinds in KIND_PAGE
+#: live only there; the rest are also configured on the Export page (LaTeX environment and font, axis labels, widths)
+OPEN_PAGE = {**KIND_PAGE, "comparison-table": "comparison", "sweep-figure": "sweep", "sweep-table": "sweep",
+             "ablation-table": "ablation", "ablation-figure": "ablation", "visual-figure": "visual"}
+
+
+def pages_for_kind(kind: str) -> list[str]:
+    """The GUI pages that restore an asset of `kind`: its analysis page first, then Export when it configures the kind too."""
+    pages = [OPEN_PAGE[kind]] if kind in OPEN_PAGE else []
+    if kind not in KIND_PAGE:
+        pages.append("export")
+    return pages
 EXPORT_STATUSES = ("planned", "draft", "final")  # dropped assets are kept in the database but not rendered
 
 KIND_TITLES = {

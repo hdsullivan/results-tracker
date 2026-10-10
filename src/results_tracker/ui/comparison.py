@@ -13,9 +13,9 @@ from ..export.figures import distribution_figure, figure_bytes, figure_tex, to_g
 from .charts import comparison_bars, distribution_box
 from .tables import comparison_html, figure_caption_html, flat_html, generic_html
 from .common import (active_where, completed_or_explain, excluded_note, fmt_for, hib_map, keyed, keyed_multiselect, keyed_selectbox,
-                     load_metric_defs, load_records_union, page_url, pin_to_paper, reset_on_experiment_change,
+                     load_metric_defs, load_records_union, opened_asset_caption, page_url, pin_to_paper, reset_on_experiment_change,
                      select_extra_experiments, select_project_experiment, sidebar_db, sidebar_filter, where_text)
-from .styling import chart_controls, sidebar_plot_style
+from .styling import chart_controls, chart_prefill, sidebar_plot_style
 
 BASE_KEYS = ["method", "dataset", "instance", "seed"]
 
@@ -34,15 +34,22 @@ def to_frame(ct: agg.ComparisonTable) -> pd.DataFrame:
 
 
 def prefill_from_asset(a) -> dict:
-    """Widget states for a `distribution-figure` asset (the only kind this page restores)."""
+    """Widget states for a `comparison-table` (the sidebar's table controls) or a `distribution-figure` asset."""
     o = dict(a.options or {})
-    pre = {}
+    pre: dict = {}
+    if a.kind == "comparison-table":
+        keys = ([o["rows"]] if o.get("rows") else []) + ([o["cols"]] if o.get("cols") not in (None, "none") else [])
+        if keys:
+            pre["cmp_tbl_rows"] = keys
+        if o.get("metrics"):
+            pre["cmp_tbl_metrics"] = list(o["metrics"])
+        pre["cmp_tbl_std"] = o.get("std", "pm") != "none"
+        return pre
     for key, opt in (("cmp_inst_metric", "metric"), ("cmp_dist_methods", "methods"), ("cmp_dist_points", "points"),
                      ("cmp_dist_width", "width"), ("cmp_dist_panel", "panel_label")):
         if o.get(opt) is not None:
             pre[key] = o[opt]
-    if o.get("ylim"):
-        pre[f"cmp_dist:{a.experiment}_ylim"] = ",".join(str(v) for v in o["ylim"])
+    pre.update(chart_prefill(f"cmp_dist:{a.experiment}", o))
     return pre
 
 
@@ -52,6 +59,7 @@ def render() -> None:
     project, experiment = select_project_experiment(prefer="comparison")
     if experiment is None:
         return
+    opened_asset_caption()
     reset_on_experiment_change("cmp_", experiment)
     extra = select_extra_experiments(project, experiment)
     recs = load_records_union(project, [experiment, *extra])
@@ -74,11 +82,12 @@ def render() -> None:
         n_datasets = len({r.get("dataset") for r in recs if r.get("dataset") is not None})
         wanted = ["method"] + (["experiment"] if extra else []) + (["dataset"] if n_datasets > 1 and not extra else [])
         default_keys = [o for o in wanted if o in options] or options[:1]
-        group_by = st.multiselect("Rows grouped by", options, default=default_keys,
-                                  help="With several datasets the default keeps dataset as a key: pooling over datasets a method was not run on is not a fair comparison.")
-        metrics = st.multiselect("Metrics", all_metrics, default=all_metrics)
-        show_std = st.checkbox("Show ± std", value=True)
-        show_n = st.checkbox("Show n", value=True)
+        reset_on_experiment_change("cmp_tbl_", f"{experiment}+{','.join(extra)}")  # pooling changes the natural row keys
+        group_by = keyed_multiselect("Rows grouped by", options, "cmp_tbl_rows", default_keys,
+                                     help="With several datasets the default keeps dataset as a key: pooling over datasets a method was not run on is not a fair comparison.")
+        metrics = keyed_multiselect("Metrics", all_metrics, "cmp_tbl_metrics", all_metrics)
+        show_std = keyed(st.checkbox, "Show ± std", "cmp_tbl_std", True)
+        show_n = keyed(st.checkbox, "Show n", "cmp_tbl_n", True)
     style = sidebar_plot_style(project)
 
     if not group_by or not metrics:

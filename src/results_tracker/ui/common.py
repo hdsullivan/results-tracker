@@ -170,8 +170,9 @@ def _take_query_params() -> None:
 
 
 def open_asset(label: str, project: Optional[str] = None) -> bool:
-    """Make a pinned asset the current selection: its project, experiment and filter, plus a prefill of the
-    Export page's widgets with its options (see export.prefill_from_asset). Returns False if unknown."""
+    """Make a pinned asset the current selection: its project, experiment and filter, plus a prefill of the widgets
+    of every page that restores its kind (each page's `prefill_from_asset`, keys in that page's namespace), so the
+    page that renders next shows the asset as pinned and pinning again updates it. Returns False if unknown."""
     from ..api import get_asset, list_assets
 
     engine = engine_for(db_path())
@@ -184,10 +185,11 @@ def open_asset(label: str, project: Optional[str] = None) -> bool:
         project = {p.id: p.name for p in list_projects(engine=engine)}[a.project_id]
     import importlib
 
-    from ..export.paper import KIND_PAGE
+    from ..export.paper import pages_for_kind
 
-    page = KIND_PAGE.get(a.kind, "export")
-    prefill_from_asset = importlib.import_module(f"results_tracker.ui.{page}").prefill_from_asset
+    pre: dict[str, Any] = {}
+    for page in pages_for_kind(a.kind):  # whichever page renders consumes its own keys; the others wait in `_prefill`
+        pre.update(importlib.import_module(f"results_tracker.ui.{page}").prefill_from_asset(a))
 
     ss = st.session_state
     ss[KEY_PROJECT], ss[KEY_EXPERIMENT] = project, a.experiment
@@ -195,9 +197,17 @@ def open_asset(label: str, project: Optional[str] = None) -> bool:
     ss[KEY_EXTRA] = list(a.extra_experiments or [])
     for k in [k for k in ss if k in ("where_fields", "extra_widget") or str(k).startswith("where_value_")]:
         del ss[k]  # the filter and pooling widgets reseed from the stored values
-    ss["_prefill"] = prefill_from_asset(a)
+    ss["_prefill"] = pre
     ss["opened_asset"] = (a.label, a.experiment)
     return True
+
+
+def opened_asset_caption() -> None:
+    """Say when the page shows an asset opened from the Paper page: its widgets hold the options it was pinned with."""
+    opened = st.session_state.get("opened_asset")
+    if opened and opened[1] == st.session_state.get(KEY_EXPERIMENT):
+        st.caption(f"Asset **`{opened[0]}`** opened from the Paper page: the controls hold the options it was pinned with. "
+                   "Change them and pin again to update it.")
 
 
 def _sync_query_params() -> None:
@@ -484,8 +494,9 @@ def keyed_multiselect(label: str, options: list[Any], key: str, seed: Sequence[A
     return st.multiselect(label, options, key=key, **kw)
 
 
-def keyed_selectbox(label: str, options: list[Any], key: str, seed: Any = None, **kw) -> Any:
-    """A selectbox with stable identity under `key`; an invalid stored value falls back to the first option."""
+def keyed_choice(widget, label: str, options: list[Any], key: str, seed: Any = None, **kw) -> Any:
+    """A single-choice widget (`st.selectbox`, `st.radio`, `st.select_slider` or a container's) with stable identity
+    under `key`; an invalid stored value falls back to the first option."""
     ss = st.session_state
     val, forced = _take_seed(key, seed)
     current = val if (forced or key not in ss) else ss[key]
@@ -493,7 +504,12 @@ def keyed_selectbox(label: str, options: list[Any], key: str, seed: Any = None, 
         ss[key] = current if current in options else options[0]
     else:
         ss.pop(key, None)
-    return st.selectbox(label, options, key=key, **kw)
+    return widget(label, options, key=key, **kw)
+
+
+def keyed_selectbox(label: str, options: list[Any], key: str, seed: Any = None, **kw) -> Any:
+    """A selectbox with stable identity under `key`; an invalid stored value falls back to the first option."""
+    return keyed_choice(st.selectbox, label, options, key, seed, **kw)
 
 
 def keyed_radio(label: str, options: list[Any], key: str, seed: Any = None, **kw) -> Any:
@@ -658,6 +674,10 @@ def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], k
             label = keyed(st.text_input, "LaTeX label", f"{key}_label", opened_label or suggested_label or default_label(kind, experiment),
                           help="tab:… for tables, fig:… for figures; also the file name under tables/ or figures/").strip()
         existing = get_asset(project, label, engine=engine) if label else None
+        # re-pinning the opened asset keeps the options this page has no control for (the Export page's LaTeX
+        # environment, axis labels, ...); every option the page does control is in `choices` and wins
+        opened_here = existing is not None and label == opened_label and existing.kind == kind
+        options = {**dict(existing.options or {}), **choices[kind]} if opened_here else choices[kind]
         with c2:
             status = keyed_selectbox("Status", ["planned", "draft", "final"], f"{key}_status",
                                      existing.status.value if existing and existing.status.value != "dropped" else "planned")
@@ -667,11 +687,13 @@ def pin_to_paper(choices: dict[str, dict[str, Any]], *, records: list[Record], k
         where = {**active_where(), **dict(extra_filters or {})}
         st.caption(f"Renders **{experiment}**" + (f" + {', '.join(extra_experiments)}" if extra_experiments else "")
                    + (f" with filter {where_text(where)}" if where else "") + f" as {KIND_TITLES[kind]}"
-                   + (f". `{label}` exists ({existing.kind} of {existing.experiment}); pinning replaces what it renders." if existing else "."))
+                   + (". Pinning updates the opened asset; options this page has no control for are kept." if opened_here
+                      else f". `{label}` exists ({existing.kind} of {existing.experiment}); pinning replaces what it renders." if existing
+                      else "."))
         with st.expander("Options that will be saved"):
-            st.json(choices[kind])
+            st.json(options)
         if st.button("Pin", key=f"{key}_button", disabled=not label, type="primary"):
-            save_asset(project, label, kind=kind, experiment=experiment, options=choices[kind], filters=where,
+            save_asset(project, label, kind=kind, experiment=experiment, options=options, filters=where,
                        extra_experiments=list(extra_experiments), caption=caption if caption is not None else None, status=status,
                        fingerprint=records_fingerprint(records), engine=engine)
             ss["opened_asset"] = (label, experiment)

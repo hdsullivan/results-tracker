@@ -13,20 +13,25 @@ from ..export.latex import selection_latex, sweep_latex
 from .. import aggregate as agg
 from .charts import is_log_friendly, sweep_heatmap, sweep_lines
 from .tables import figure_caption_html, generic_html, sweep_html
-from .common import (active_where, completed_or_explain, excluded_note, fmt_for, load_metric_defs, load_records, pin_to_paper,
+from .common import (active_where, completed_or_explain, excluded_note, fmt_for, keyed, keyed_multiselect, keyed_selectbox,
+                     load_metric_defs, load_records, opened_asset_caption, pin_to_paper, reset_on_experiment_change,
                      select_project_experiment, sidebar_db, sidebar_filter, swept_params, where_text)
-from .styling import chart_controls, sidebar_plot_style
+from .styling import chart_controls, chart_prefill, sidebar_plot_style
 
 GROUP_KEYS = ["method", "dataset", "instance"]  # base fields; config.* and derived.* keys are added when they vary
+NONE = "— none —"
 
 
 def prefill_from_asset(a) -> dict:
-    """Widget states for a `selection-table` asset."""
+    """Widget states for a `sweep-figure` or `sweep-table` (the sidebar's sweep controls) or a `selection-table` asset."""
     o = dict(a.options or {})
-    pre = {k: o[opt] for k, opt in (("sel_by", "by"), ("sel_param_label", "param_label")) if o.get(opt) is not None}
-    for opt, axis in (("xlim", "xlim"), ("ylim", "ylim")):
-        if o.get(opt):
-            pre[f"sweep_lines:{a.experiment}_{axis}"] = ",".join(str(v) for v in o[opt])
+    if a.kind == "selection-table":
+        pre = {k: o[opt] for k, opt in (("sel_by", "by"), ("sel_param_label", "param_label")) if o.get(opt) is not None}
+    else:
+        pre = {k: o[opt] for k, opt in (("swp_param", "param"), ("swp_metric", "metric"), ("swp_by", "by"), ("swp_band", "band"),
+                                        ("swp_logx", "log_x")) if o.get(opt) is not None}
+        pre["swp_param2"] = NONE  # a sweep figure or table is along one parameter
+    pre.update(chart_prefill(f"sweep_lines:{a.experiment}", o))
     return pre
 
 
@@ -43,14 +48,14 @@ def render() -> None:
     project, experiment = select_project_experiment(prefer="sweep")
     if experiment is None:
         return
+    opened_asset_caption()
     recs = load_records(project, experiment)
     defs = load_metric_defs()
     if not recs:
         st.info("No runs in this experiment.")
         return
-    from .common import reset_on_experiment_change
-
     reset_on_experiment_change("sel_", experiment)
+    reset_on_experiment_change("swp_", experiment)  # the sweep controls restart from the new experiment's defaults
     all_recs = sidebar_filter(recs)
     completed = completed_or_explain(all_recs, of=recs)
     if not completed:
@@ -69,20 +74,19 @@ def render() -> None:
         st.markdown("**Sweep**")
         declared = [k for k in swept_params(project, experiment) if k in all_keys]  # what the study said it sweeps
         default_x = declared[0] if declared else (varying[0] if varying else all_keys[0])
-        param_x = st.selectbox("Parameter (x)", all_keys, index=all_keys.index(default_x))
-        second_opts = ["— none —"] + [k for k in all_keys if k != param_x]
+        param_x = keyed_selectbox("Parameter (x)", all_keys, "swp_param", default_x)
+        second_opts = [NONE] + [k for k in all_keys if k != param_x]
         # a heatmap only by default when nothing declares a 1-D sweep and exactly one other key varies;
         # a recipe sweep also varies its conditions (kernel, noise), which are line splits, not a second axis
         default_y = next((k for k in varying if k != param_x), None) if not declared and len(varying) == 2 else None
-        param_y = st.selectbox("Second parameter (heatmap)", second_opts,
-                               index=second_opts.index(default_y) if default_y in second_opts else 0,
-                               help="Two swept parameters: mean metric per cell. Conditions of a 1-D sweep belong in 'One line per'.")
-        metric = st.selectbox("Metric", metrics)
+        param_y = keyed_selectbox("Second parameter (heatmap)", second_opts, "swp_param2", default_y if default_y in second_opts else NONE,
+                                  help="Two swept parameters: mean metric per cell. Conditions of a 1-D sweep belong in 'One line per'.")
+        metric = keyed_selectbox("Metric", metrics, "swp_metric", metrics[0])
         group_opts = line_keys(recs, param_x)
-        group_by = st.multiselect("One line per", group_opts, default=["method"] if "method" in group_opts else [],
-                                  help="Split the pooled mean into lines: per method arm, per condition (config.noise, "
-                                       "derived.kernel_type, ...). Without a split every value pools all conditions and seeds.")
-        show_band = st.checkbox("Shaded ± std band", value=True, help="Off: error bars instead.")
+        group_by = keyed_multiselect("One line per", group_opts, "swp_by", ["method"] if "method" in group_opts else [],
+                                     help="Split the pooled mean into lines: per method arm, per condition (config.noise, "
+                                          "derived.kernel_type, ...). Without a split every value pools all conditions and seeds.")
+        show_band = keyed(st.checkbox, "Shaded ± std band", "swp_band", True, help="Off: error bars instead.")
     style = sidebar_plot_style(project)
 
     hib = defs.get(metric, {}).get("higher_is_better", True)
@@ -90,7 +94,7 @@ def render() -> None:
     unit = defs.get(metric, {}).get("unit", "")
     arrow = "↑" if hib else "↓"
 
-    if param_y != "— none —":
+    if param_y != NONE:
         grid = agg.sweep_grid(recs, param_x, param_y, metric)
         if not grid.cells:
             st.warning("No runs have both parameters set.")
@@ -135,7 +139,8 @@ def render() -> None:
     best = {g: agg.best_sweep_value(s, hib) for g, s in series.items()}
     xs_all = sorted({x for s in series.values() for x, _ in s}, key=lambda x: (isinstance(x, str), x))
     log_default = is_log_friendly(xs_all)
-    log_x = st.sidebar.checkbox("Log x axis", value=log_default, disabled=not is_log_friendly(xs_all))
+    reset_on_experiment_change("swp_logx", f"{experiment}:{param_x}")  # the default depends on the parameter's values
+    log_x = keyed(st.sidebar.checkbox, "Log x axis", "swp_logx", log_default, disabled=not log_default)
 
     pooled = [k for k in line_keys(recs, param_x) if k not in group_by and k not in ("instance", "dataset")]
     pool_note = f" · pooled over {', '.join(pooled)}" if pooled else ""
